@@ -4,9 +4,11 @@
 // No se llama `aux`: es un nombre reservado de Windows (`aux.rs` se crea pero git no lo puede agregar).
 pub mod auxiliares;
 pub mod build;
+pub mod cocinero;
 pub mod cola;
 pub mod config;
 pub mod error;
+pub mod figcache;
 pub mod figures;
 pub mod fsio;
 pub mod graph;
