@@ -215,7 +215,7 @@ latexmk -pdf (o -xelatex/-lualatex) -synctex=1 -interaction=nonstopmode -file-li
 ```
 
 - `-file-line-error` deja los errores como `./archivo.tex:123: mensaje`, mucho más fácil de parsear.
-- Ancho de línea del log: `max_print_line=10000` (variable de entorno en TeX Live; en MiKTeX la opción `-max-print-line=10000`, verificada en S4). Sin eso el log corta a 79 columnas y rompe rutas. **Se pasa con `-latexoption=-max-print-line=10000`**, no redefiniendo `$pdflatex`: eso pisaría los envoltorios del `latexmkrc` del proyecto (el del libro mide cada pasada con `pdflatex_registrado`). Verificado en F1: latexmk 4.88 lo acepta y el log llega con líneas de hasta 1176 caracteres.
+- Ancho de línea del log: `max_print_line=10000` (variable de entorno en TeX Live; en MiKTeX la opción `-max-print-line=10000`, verificada en S4). Sin eso el log corta a 79 columnas y rompe rutas. **Se pasa con `-latexoption=-max-print-line=10000`**, no redefiniendo `$pdflatex`: eso pisaría los envoltorios del `latexmkrc` del proyecto (el del libro mide cada pasada con `pdflatex_registrado`). Verificado en F1: latexmk 4.88 lo acepta y el log llega con líneas de hasta 1176 caracteres. **En TeX Live pdflatex no conoce esa opción** (avisa `unrecognized option '-max-print-line=10000'`, sigue y el log corta a 79; medido con TeX Live 2022 en la revisión previa a F6): la app pone además `max_print_line=10000` en el entorno de latexmk, que MiKTeX ignora.
 - `.lv/latexmkrc` lo genera la app y se lee **después** del `latexmkrc` del proyecto, que sigue valiendo para reglas propias (makeindex con estilo, glossaries, nomencl). Lo de la app pisa `@default_files`, `$out_dir`/`$aux_dir` y lo que haga falta, y pone `TEXINPUTS` con `.lv/drivers` (5.4) e `INDEXSTYLE` con la raíz del proyecto: **latexmk corre makeindex desde el directorio de salida**, con nombres sueltos (`makeindex -s StyleInd.ist -o "lv-completo.ind" "lv-completo.idx"`), así que un `$makeindex` del proyecto con un estilo relativo a la raíz (como el del libro) falla con "Index style file StyleInd.ist not found" y el build sale con código 12. Es el perfil `completo`, que S1 no había probado: el parcial y el rápido no llevan índice. Con `INDEXSTYLE` el completo del libro compila bien con el esquema A (F1, paso 0: 346,8 s contra 338,5 s de la línea de base, 194 páginas, 0 referencias sin resolver, biber y makeindex funcionando). Cualquier otra regla del proyecto que nombre archivos relativos a la raíz puede fallar igual: el doctor tiene que avisar. Ojo: dentro de latexmk el `PATH` queda reducido al `bin` de MiKTeX (medido con MiKTeX 26.5, ver `docs/benchmarks.md`): el rc no puede lanzar por nombre programas que no estén ahí (`powershell`, `tasklist`), y falla en silencio. Lo que haga falta fuera de TeX lo lanza la app, no el rc.
 - `-recorder` (default en latexmk) deja el `.fls`: es la lista exacta de archivos que usó cada perfil. Se usa para decidir si un guardado afecta al perfil activo.
 
@@ -245,7 +245,7 @@ Objetivo: que alternar perfiles no cueste pasadas extra ni pueda dejar un `.aux`
   5. **`INDEXSTYLE` con la raíz del proyecto**, puesto desde `.lv/latexmkrc` (ver 5.1): latexmk corre makeindex desde el directorio de salida y un `$makeindex` del proyecto con un estilo relativo a la raíz no lo encuentra. Sin esto el perfil completo del libro falla con código 12.
 - **Subcarpetas de `\include`:** la app las crea antes dentro del directorio de salida. MiKTeX las crea solo (medido), TeX Live no: se sigue creando por portabilidad.
 - **Opción B (fallback, también cumple todo en S1):** todo en la raíz del proyecto como inspo, con drivers `lv-<perfil>.tex` en la raíz y jobnames distintos, y la app **intercambia** los `.aux` de partes: al terminar un build bueno los guarda en `.lv/aux/<perfil>/` y antes del siguiente build de ese perfil los restaura. No necesita `TEXINPUTS` ni mover `.md5`, pero deja los auxiliares y los drivers en la raíz.
-- **Sin probar:** TeX Live (sólo hay MiKTeX en la máquina de desarrollo). `-output-directory` se comporta distinto ahí (escribe en el directorio de salida todo `\openout` relativo). Lo cubre un test de integración con TeX real cuando haya una máquina con TeX Live; B es el fallback.
+- **TeX Live, probado a medias** (revisión previa a F6, `docs/revision-pre-F6.md`): con TeX Live 2022 y latexmk 4.76 sobre `fixtures/tikz-figuras`, `TEXINPUTS` y mover los `.md5` funcionan igual que en MiKTeX (0 subcompilaciones al pasar al otro perfil, 1 al cambiar una figura). **Pero TeX Live no crea `.lv/build/<perfil>/<cache>/`**: sin esa carpeta el primer build que externaliza falla con `I can't write on file '<cache>/....md5'` y `Emergency stop`. La app crea esa carpeta y `<cache>/` en la raíz antes de cada build (F6). El libro entero no se probó en TeX Live (esa instalación no trae biblatex); B sigue siendo el fallback.
 
 ### 5.5 `.aux` truncado
 
@@ -343,18 +343,28 @@ Tres modos (`figureCache.mode`):
   - El sello lo calcula la app (md5 de `stampFiles`, 6 hex) y lo pasa como macro en el driver: no depende de pdftexcmds ni del engine.
 - **`off`.**
 
-**Cache compartido entre perfiles.** Los PDF de las figuras caen siempre en `figuras-cache/` (la subcompilación de pgf no lleva `-output-directory`). El `.md5`, en cambio, lo escribe el job principal en el directorio de build de su perfil: después de cada build la app lo mueve a `figuras-cache/`, o el otro perfil recocina la figura (5.4, S1).
+**Cache compartido entre perfiles.** Los PDF de las figuras caen siempre en `figuras-cache/` (la subcompilación de pgf no lleva `-output-directory`). El `.md5`, en cambio, lo escribe el job principal en el directorio de build de su perfil: después de cada build la app lo mueve a `figuras-cache/`, o el otro perfil recocina la figura (5.4, S1). Se mueve con `fs::rename` (misma unidad, atómico) y no copiando y borrando. Las dos carpetas del cache (`<cache>/` y `.lv/build/<perfil>/<cache>/`) las crea la app antes de cada build: TeX Live no las crea (5.4).
+
+**Figuras que fallan o se cortan [revisión previa a F6].** pgf escribe el `.md5` nuevo de una figura **antes** de lanzar su subcompilación (`\tikzexternal@check@uptodate@mode`, en `tikzexternalshared.code.tex`). Si la subcompilación falla, o el build se cancela mientras corre, queda el `.md5` nuevo junto al PDF viejo (o a uno cortado) y pgf da la figura por al día desde ahí. Si la figura ya tenía PDF, ni siquiera hay error: pgf encuentra un archivo con ese nombre. Reproducido en la revisión: un `\comandoQueNoExiste` dentro de una figura deja el build con código 0, sin errores en el log principal y con la imagen anterior, y el build siguiente no la reintenta. La app de F2 lo empeora: mueve los `.md5` al cache compartido después de cualquier build, cancelado o fallido. Regla:
+
+- Después de cada build y de cada cocción, la app verifica cada figura que se lanzó (las líneas `Invoking ... -jobname "<cache>/<figura>"` del stream o del log, o la lista de la cocción): que su `.log` no tenga `Fatal error` y que su PDF sea posterior al inicio y termine en `%%EOF`.
+- Una figura que no pasa: se borran su PDF y su `.md5` (del cache y del directorio del perfil). El build siguiente la reintenta y, si sigue rota, pgf da su error `did NOT result in a usable output file` en el log principal. El error de la subcompilación (su `.log`, con el parser de 5.8) va al panel de problemas con el archivo y la línea de la figura.
+- Al cancelar un build o una cocción, lo mismo con las figuras que estaban en vuelo.
+- Al cache compartido sólo pasan los `.md5` de figuras verificadas.
 
 Cocción en paralelo (ambos modos):
 
-1. Pasada de listado con el flag `figureList` (pgf en `mode=list and make`): no dibuja nada, escribe la figlist y los `.md5`.
-2. Pendiente = falta el PDF, o el `.md5` es más nuevo que el PDF.
-3. Lanza las subcompilaciones de a N (`parallelJobs`, default = núcleos) con la misma línea de comandos que usa pgf (`-jobname "<figura>"` y `\def\tikzexternalrealjob{<job>}\input{<driver>}`), ventanas ocultas.
-4. Progreso en la UI; si alguna falla, lista con su `.log` clickeable.
+1. Pasada de listado con el perfil oculto `cocina`: **todas las partes**, flags `partial`, `externalize` y `figureList` (pgf en `mode=list and make`). No dibuja nada; escribe la figlist y los `.md5` en `.lv/build/cocina/`. Siempre todas las partes: la figlist de un parcial sólo nombra las figuras de sus partes, y la limpieza contra esa lista borraría las de los demás capítulos.
+2. Pendiente = falta el PDF, o el `.md5` recién listado difiere **en contenido** del que está en el cache compartido. No por fecha: los `.md5` cambian de carpeta y una copia no siempre conserva el mtime (en Linux, `fs::copy` no lo hace).
+3. Lanza las subcompilaciones de a N (`parallelJobs`, default = núcleos; medir 8, 12 y 16) con la misma línea de comandos que usa pgf (`-jobname "<cache>/<figura>"` y `\def\tikzexternalrealjob{lv-cocina}\input{lv-cocina}`), ventanas ocultas, cwd en la raíz y sin `-output-directory`. Como no pasan por latexmk, la app les pone ella `TEXINPUTS` con `.lv/drivers` (lo que en un build hace `.lv/latexmkrc`). Al terminar, cada figura pasa por la verificación de arriba.
+4. **Prioridad:** primero las figuras del perfil activo (las que nombra el log de su último build, con el sello nuevo), después el build, después el resto. La cocción del resto cede el paso: si llega un pedido de build, deja de lanzar subcompilaciones, espera las que están en vuelo (unos segundos), corre el build y retoma. Nunca corren a la vez un build y una cocción.
+5. Progreso en la UI (`figures:progress`, "cocinando 12/158" en la barra); si alguna falla, lista con su `.log` clickeable.
 
-Disparo automático antes de un build que usa cache: si no hay ninguna figura del sello actual, o hay menos del 60 % de las del sello anterior. Es un md5 y dos listados de carpeta: gratis en un guardado normal.
+Disparo automático antes de un build que usa cache: si no hay ninguna figura del sello actual, o hay menos del 60 % de las del sello anterior. Es un md5 y dos listados de carpeta: gratis en un guardado normal. Lo decide la app antes de lanzar latexmk; el `latexmkrc` no podría (`PATH` reducido, 5.1).
 
-Limpieza: borra todo lo que no esté en la última figlist (sellos viejos, figuras huérfanas), mostrando antes cuántos MB libera.
+Limpieza: borra todo lo que no esté en la última figlist **de `cocina`** (sellos viejos, figuras huérfanas), mostrando antes cuántos MB libera. Nunca contra la figlist de otro perfil. No es automática.
+
+**El completo con cache [spike S5].** El completo tarda 338 s en la máquina de desarrollo (4 pasadas de ~82 s sin cache) y es lo más lento que queda. La fila 10 de la tabla lo deja sin cache porque la **subcompilación** de una figura tropieza con la portada y el `.toc`. Con `external/mode=graphics if exists`, pgf usa el PDF del cache si existe y, si no, dibuja la figura en línea: nunca subcompila. Se inyecta desde el driver (`\AddToHook{begindocument/before}{\tikzset{external/mode=graphics if exists}}`) con el flag `externalize` puesto, para que `\FigurasDe` nombre igual que en los otros perfiles. En ese modo pgf no mira el `.md5`, así que antes del completo corre una cocción (o se verifica que no haya pendientes). Mecanismo verificado en la revisión sobre `fixtures/tikz-figuras` (0 subcompilaciones; una figura borrada del cache se dibujó en línea). Lo que tiene que medir S5 con el libro: el completo limpio y con un cambio chico, y el diff rasterizado contra el completo sin cache (S4 midió 0,006 % de media entre externalizado y no, rayados corridos menos de un píxel). Si el diff no es cero, **preguntarle a Juan** si alcanza para el PDF de entrega o si queda un perfil `entrega` sin cache. Si S5 sale bien, revisar el `cleanBefore` del completo: limpiar siempre fuerza 4 pasadas.
 
 Panel "Figuras": figuras por archivo, estado (al día / pendiente / falló), tamaño del cache, botones Cocinar y Limpiar.
 
@@ -569,10 +579,24 @@ Aceptación: el índice del libro en menos de 1 s; cada atajo de 10.3 con evento
 
 ### F6. Cache de figuras
 
-- [ ] Modo `project` (para el libro) y modo `app` (probado en `fixtures/tikz-figuras`).
-- [ ] Sello, listado, cocción en paralelo, disparo automático, limpieza, panel Figuras.
+> **Revisión previa a F6** (`docs/revision-pre-F6.md`): se agregan la cola de trabajos, la verificación de figuras que fallan o se cortan, el listado con todas las partes, las carpetas del cache, la prioridad de la cocción y el spike S5. Lo de la sección 7 marcado como de la revisión es parte de esta fase.
+
+- [ ] **Cola de trabajos, primero.** `Session` pasa de "un build y un pendiente" (`Builder::is_running` + `pendiente: Option<String>`) a una cola de trabajos tipados (`Build`, `Bake`; en F7 se suman `Export` y `Fragment`) con un solo ejecutor y un solo "ocupado". Un guardado durante una cocción queda pendiente igual que durante un build. Los tests de cola de F2 siguen pasando.
+- [ ] Carpetas del cache creadas antes de cada build; `move_md5` con `rename`; `max_print_line` en el entorno (5.1).
+- [ ] Verificación de figuras después de cada build, cocción y cancelación (7, "Figuras que fallan o se cortan"), con los errores de las figuras en el panel de problemas.
+- [ ] Modo `project` (para el libro) y modo `app` (probado en `fixtures/tikz-figuras`, con una copia sin su externalización propia).
+- [ ] Sello, listado con `cocina`, pendientes por contenido, cocción en paralelo con prioridad, disparo automático, limpieza, panel Figuras, progreso en la barra.
+- [ ] **S5:** el completo consumiendo el cache (7). Resultado en `docs/spikes/S5.md`.
 
 Aceptación: cambio de `estilo_figuras.tex` con las ~108 figuras en ≤ 60 s en una máquina de 12 núcleos; agregar una figura arriba del capítulo 1 recocina sólo las de ese archivo; deshacer el cambio de estilo no recocina nada.
+
+Aceptación agregada en la revisión (en esta máquina):
+
+- Después de un cambio de estilo, el PDF del parcial queda a la vista en lo que tarda cocinar **sus** figuras (46 en `Desnormalización`), no las 158; el resto termina después sin frenar los guardados.
+- Una figura con un error se informa en el panel con su archivo y su línea, no queda la imagen vieja, y el build siguiente la sigue informando hasta que se arregla.
+- Cancelar a mitad de una cocción o de un build que cocina no deja figuras cortadas ni `.md5` que las den por buenas (test con un latexmk/pdflatex falso que se mata en vuelo, y uno con TeX real).
+- La limpieza, corrida con el parcial activo, no borra figuras de las partes que el parcial no incluye.
+- El smoke de F2 sigue pasando: el chequeo del sello y la verificación de figuras suman menos de 20 ms a un guardado sin figuras nuevas.
 
 > **Ajuste por la línea de base (F0).** El libro tiene hoy **158 figuras** (la figlist), no 108. El `cocinar_figuras.ps1` de inspo, de a 16 en el Ryzen 7 3700X (8 núcleos, 16 hilos), tarda **105 s** de cocción (114 s con el listado) contra los ~45 s del README. En esta máquina el criterio es **cocinar las 158 figuras en ≤ 105 s** (no ser más lenta que inspo), y los 60 s quedan para una máquina de 12 núcleos. Falta medir si el antivirus influye (riesgo de la sección 14). Deshacer el cambio de estilo ya no recocina nada en inspo (medido: 0 figuras, 4,7 s).
 
@@ -581,6 +605,7 @@ Aceptación: cambio de `estilo_figuras.tex` con las ~108 figuras en ≤ 60 s en 
 - [ ] Exportar una, varias o todas las partes con el número impreso.
 - [ ] Vista previa de fragmento.
 - [ ] Variables en el menú de compilación.
+- [ ] **Archivos cambiados afuera** (10.1, `fs:changed`; agregado en la revisión previa a F6: estaba en 3.1, 3.4 y 10.1 pero en ninguna fase). Watcher (`notify`) sobre el árbol del proyecto, sin `.lv/` ni el cache de figuras: una pestaña sin cambios se recarga sola, una con cambios avisa; el árbol de archivos y el índice se refrescan; un `.tex` que usa el perfil activo dispara la auto-compilación. Para el libro importa: los scripts de `Herramientas/` reescriben `Secciones/fig_*.tex`.
 
 ### F8. Historial, doctor y procesos
 
@@ -625,13 +650,14 @@ Se hace en el repo real del libro, en una rama, con el OK de Juan antes de borra
 
 | Riesgo | Mitigación |
 |---|---|
-| Externalización TikZ con aux en otra carpeta (S1) | Resuelto en MiKTeX con `TEXINPUTS` y mover los `.md5` (5.4). TeX Live sin probar: opción B, que cumple todo, como fallback |
+| Externalización TikZ con aux en otra carpeta (S1) | Resuelto en MiKTeX con `TEXINPUTS` y mover los `.md5` (5.4). TeX Live 2022 probado con un fixture en la revisión previa a F6: anda si la app crea las carpetas del cache. El libro entero en TeX Live, sin probar: opción B como fallback |
+| pgf da por al día una figura cuya subcompilación falló o se cortó (escribe el `.md5` antes de subcompilar) y deja la imagen vieja sin error | Verificación de cada figura lanzada (7), en F6 |
 | latexmk sin Perl en MiKTeX | El doctor lo detecta y explica cómo instalarlo |
 | `PATH` reducido dentro de latexmk (MiKTeX 26.5): lo que el `latexmkrc` lance por nombre falla en silencio | La app lanza ella lo que no sea TeX; el doctor lo detecta (`system()` desde un rc de prueba) |
 | MiKTeX a medio actualizar: lanzadores viejos junto a utilidades nuevas (`pdflatex.exe` de 2023 con `0xC0000135`, visto en esta máquina) | El doctor ejecuta `pdflatex`, `latexmk` y `synctex` y avisa si salen con código de DLL no encontrada |
 | Tiempos de compilación mayores que los del README en máquinas más lentas | Umbrales de aceptación relativos a la línea de base medida en la máquina (F2, F6) |
 | PDF.js con libros grandes en WebView2 (memoria, tiempo de render) | Medido en S3: ~0,7 GB estables con el libro de 183 a 194 páginas si el visor viejo se desarma bien (5.7); la fuga de ~33 MB por recarga aparece si no. Falta medir el pico durante el swap y el uso con zoom alto o pantalla 4K |
-| `pdfjs-dist` 6.x declara Node ≥ 22.13 y la máquina de desarrollo tiene Node 20 | El build con Vite funcionó igual; fijar la versión de Node o de `pdfjs-dist` en F1 |
+| `pdfjs-dist` 6.x declara Node ≥ 22.13 y la máquina de desarrollo tiene Node 20, que además terminó su soporte el 30/4/2026 | Pasar la máquina a Node 22 LTS y sacar `engine-strict=false` de `.npmrc`. En la revisión previa a F6, `npm ci`, los 177 tests y el typecheck pasaron con Node 22.23 |
 | SyncTeX impreciso en macros, tablas y flotantes | Refinamiento por texto y búsqueda en los archivos de la parte |
 | Hooks de LaTeX en distribuciones viejas | Versión mínima verificada por el doctor |
 | Antivirus de Windows frenando decenas de pdflatex en paralelo | Medir en F6; `parallelJobs` configurable |
