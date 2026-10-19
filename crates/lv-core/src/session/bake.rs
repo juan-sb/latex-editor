@@ -155,6 +155,18 @@ impl Session {
         figcache::necesita_cocer(&fcfg, &estado)
     }
 
+    /// La externalización que el modo `app` agrega al driver (`None` en `project` y en `off`). `lista`: el driver de la cocción.
+    pub(super) fn inyeccion_de_figuras(&self, cfg: &ProjectConfig, ix: &ProjectIndex, lista: bool) -> Result<Option<crate::build::FigureInject>> {
+        let f = FigureCfg::de(cfg);
+        if f.modo != Modo::App {
+            return Ok(None);
+        }
+        let sello = figcache::sello(&self.root, &f.stamp_files)
+            .ok_or_else(|| otro("no se pudo calcular el sello del cache de figuras: falta un archivo de `figureCache.stampFiles`"))?;
+        let slugs = figcache::slugs_app(&ix.reachable).into_iter().collect();
+        Ok(Some(crate::build::FigureInject { dir: f.dir, sello, solo_en_figure: f.only_in_figure_env, lista, slugs }))
+    }
+
     /// El `includeonly` de un perfil (el mismo criterio que `plan`): `None` si compila todo.
     fn includeonly_de(d: &Datos, perfil: &str, pc: &ProfileCfg, nombres: &[String]) -> Result<Option<Vec<String>>> {
         match pc.parts {
@@ -199,6 +211,7 @@ impl Session {
             .iter()
             .filter_map(|(n, v)| d.state.variables.get(n).or(v.default.as_ref()).map(|x| (n.clone(), x.clone())))
             .collect();
+        let figuras = self.inyeccion_de_figuras(&cfg, &ix, true)?;
         let driver = render_driver_spec(&DriverSpec {
             perfil: PERFIL_COCINA.into(),
             root_rel: rf.clone(),
@@ -207,6 +220,7 @@ impl Session {
             vars,
             includeonly,
             draft_images: false,
+            figuras,
         })?;
         let opciones = Opciones { root: self.root.clone(), engine: cfg.engine.clone(), dir: fcfg.dir.clone(), jobs: fcfg.jobs };
         Ok(PlanBake { driver, dirs: ix.include_dirs(&cfg.parts.commands), opciones, root_rel: rf })
@@ -441,7 +455,12 @@ impl Session {
         let slugs = match &rf {
             Some(rf) => {
                 let ix = ProjectIndex::build(&self.root, rf, &cfg.parts.commands);
-                figcache::slugs_por_archivo(&self.root, &ix.reachable)
+                if fcfg.modo == Modo::App {
+                    // Los slugs los puso la app (a partir del nombre de cada archivo): se invierte esa tabla.
+                    figcache::slugs_app(&ix.reachable).into_iter().map(|(archivo, slug)| (slug, archivo)).collect()
+                } else {
+                    figcache::slugs_por_archivo(&self.root, &ix.reachable)
+                }
             }
             None => Default::default(),
         };

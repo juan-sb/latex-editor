@@ -112,6 +112,76 @@ pub struct DriverSpec {
     /// Partes que entran, por `\includeonly`. `None` = no se toca.
     pub includeonly: Option<Vec<String>>,
     pub draft_images: bool,
+    /// La externalización de figuras que la app agrega en el modo `app` (7 del plan). `None` en el modo `project`: el libro la
+    /// trae en su `structure.tex`.
+    pub figuras: Option<FigureInject>,
+}
+
+/// Lo que el modo `app` agrega al driver para externalizar las figuras de un proyecto que no tiene externalización propia.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FigureInject {
+    /// La carpeta del cache, relativa a la raíz y con `/`.
+    pub dir: String,
+    /// El sello (6 hex en mayúsculas): la app lo calcula y lo pasa como macro, así no depende de pdftexcmds ni del motor.
+    pub sello: String,
+    /// Sólo las `tikzpicture` dentro de `figure` (los del template con `remember picture, overlay` desaparecerían del PDF).
+    pub solo_en_figure: bool,
+    /// pgf en `mode=list and make`: no cocina, lista (el perfil de cocción).
+    pub lista: bool,
+    /// Archivo (relativo a la raíz) y slug con el que se nombran sus figuras.
+    pub slugs: Vec<(String, String)>,
+}
+
+fn nombre_seguro_ascii(t: &str) -> bool {
+    !t.is_empty() && t.chars().all(|c| c.is_ascii() && !c.is_ascii_control() && !matches!(c, '\\' | '{' | '}' | '%' | '#' | '~' | '^' | '$' | '&' | '"' | '\''))
+}
+
+/// El bloque del modo `app`. Los hooks de LaTeX (`file/before`, `file/after`, `env/figure/begin`, `package/tikz/after`) lo hacen
+/// sin tocar el documento del usuario. El nombre de cada figura es `<sello>-<slug>-<n>`: el slug sale del archivo que se está
+/// leyendo (con una pila, para que un `\input` dentro de un capítulo no le cambie el nombre al resto del capítulo) y la `n` la
+/// lleva pgf, un contador por nombre. Agregar una figura sólo corre los números de las de su archivo.
+fn render_figuras(f: &FigureInject) -> Result<Vec<String>> {
+    let dir_ok = !f.dir.is_empty()
+        && !f.dir.starts_with('/')
+        && !f.dir.contains("..")
+        && f.dir.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '/'));
+    if !dir_ok {
+        return Err(Error::Other(format!("la carpeta del cache {:?} no se puede escribir en el driver (letras, números, - _ . /)", f.dir)));
+    }
+    if f.sello.len() != 6 || !f.sello.chars().all(|c| c.is_ascii_digit() || ('A'..='F').contains(&c)) {
+        return Err(Error::Other(format!("el sello {:?} no son 6 dígitos hexadecimales en mayúsculas", f.sello)));
+    }
+    let modo = if f.lista { ",mode=list and make" } else { "" };
+    let mut l: Vec<String> = vec![
+        "% --- cache de figuras (modo app) ---".into(),
+        format!("\\def\\lvSello{{{}}}", f.sello),
+        "\\def\\lvNombreActual{}".into(),
+        "\\newcount\\lvProfundidad".into(),
+        "\\def\\lvAplicar{\\ifdefined\\tikzsetfigurename\\ifx\\lvNombreActual\\empty\\else\\expandafter\\tikzsetfigurename\\expandafter{\\lvNombreActual}\\fi\\fi}".into(),
+        "\\def\\lvEntrar{\\global\\advance\\lvProfundidad by 1 \\expandafter\\xdef\\csname lvPila@\\the\\lvProfundidad\\endcsname{\\lvNombreActual}\\edef\\lvClave{\\ifx\\CurrentFilePath\\empty\\else\\CurrentFilePath/\\fi\\CurrentFile}\\ifcsname lvslug@\\lvClave\\endcsname\\xdef\\lvNombreActual{\\lvSello-\\csname lvslug@\\lvClave\\endcsname-}\\lvAplicar\\fi}".into(),
+        "\\def\\lvSalir{\\xdef\\lvNombreActual{\\csname lvPila@\\the\\lvProfundidad\\endcsname}\\global\\advance\\lvProfundidad by -1 \\lvAplicar}".into(),
+        "\\AddToHook{file/before}{\\lvEntrar}".into(),
+        "\\AddToHook{file/after}{\\lvSalir}".into(),
+    ];
+    let desactivar = if f.solo_en_figure { "\\tikzexternaldisable" } else { "" };
+    l.push(format!("\\AddToHook{{package/tikz/after}}{{\\usetikzlibrary{{external}}\\tikzexternalize[prefix={}/{modo}]{desactivar}\\lvAplicar}}", f.dir));
+    if f.solo_en_figure {
+        for e in ["figure", "figure*"] {
+            l.push(format!("\\AddToHook{{env/{e}/begin}}{{\\tikzexternalenable}}"));
+            l.push(format!("\\AddToHook{{env/{e}/end}}{{\\tikzexternaldisable}}"));
+        }
+    }
+    for (archivo, slug) in &f.slugs {
+        if !nombre_seguro_ascii(archivo) || slug.is_empty() || !slug.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+            continue; // un archivo con nombre no ASCII queda con el nombre por omisión de pgf (el del `\jobname`)
+        }
+        // La clave es `\CurrentFilePath/\CurrentFile` (medido con MiKTeX: `\include{Secciones/cap-b}` da `CurrentFile=cap-b.tex` y
+        // `CurrentFilePath=Secciones`; un archivo en la raíz, el path vacío). Se agrega también la variante con `./`.
+        for clave in [archivo.clone(), format!("./{archivo}")] {
+            l.push(format!("\\expandafter\\def\\csname lvslug@{clave}\\endcsname{{{slug}}}"));
+        }
+    }
+    Ok(l)
 }
 
 /// Lo que va dentro de `{...}` en una macro que genera la app. En lugar de intentar escapar, se rechaza: un valor con
@@ -152,6 +222,9 @@ pub fn render_driver_spec(s: &DriverSpec) -> Result<String> {
         }
         texto_seguro(v, &format!("el valor de {k}"))?;
         l.push(format!("\\def\\{k}{{{v}}}"));
+    }
+    if let Some(f) = &s.figuras {
+        l.extend(render_figuras(f)?);
     }
     if let Some(partes) = &s.includeonly {
         for p in partes {
@@ -689,6 +762,7 @@ mod tests {
             vars: vec![("OpcionPie".into(), "autor".into())],
             includeonly: Some(vec!["Secciones/Desnormalización".into(), "Secciones/Uno".into()]),
             draft_images: true,
+            figuras: None,
         })
         .unwrap();
         assert_eq!(

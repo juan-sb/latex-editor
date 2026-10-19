@@ -515,6 +515,8 @@ impl Session {
                 cfg.profiles.keys().filter(|p| p.as_str() != perfil).cloned().collect::<Vec<_>>(),
             )
         });
+        // En el modo `app` el driver de un perfil que externaliza lleva la externalización de figuras.
+        let figuras = if pc.externalize { self.inyeccion_de_figuras(&cfg, &ix, false)? } else { None };
         let driver = render_driver_spec(&DriverSpec {
             perfil: perfil.to_string(),
             root_rel: rf.clone(),
@@ -523,6 +525,7 @@ impl Session {
             vars,
             includeonly,
             draft_images: pc.draft_images,
+            figuras,
         })?;
         let dirs = ix.include_dirs(&cfg.parts.commands);
         d.index = Some(ix);

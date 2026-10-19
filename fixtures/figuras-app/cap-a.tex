@@ -1,0 +1,23 @@
+\section{Capítulo A}
+
+Dos figuras en un archivo que entra por \texttt{\textbackslash input}.
+
+\begin{figure}[ht]
+  \centering
+  \begin{tikzpicture}
+    \draw[miestilo,->] (0,0) -- (2,0);
+    \draw[miestilo,->] (0,0) -- (0,1.5);
+    \draw[miestilo,domain=0:2,samples=30] plot (\x,{1.5/(1+\x*\x)});
+  \end{tikzpicture}
+  \caption{Una curva.}
+\end{figure}
+
+\begin{figure}[ht]
+  \centering
+  \begin{tikzpicture}
+    \foreach \k in {0,...,4} {
+      \draw[miestilo,fill=gray!30] ({cos(72*\k)},{sin(72*\k)}) circle (0.1);
+    }
+  \end{tikzpicture}
+  \caption{Cinco puntos.}
+\end{figure}

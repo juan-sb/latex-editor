@@ -298,6 +298,42 @@ pub fn slugs_por_archivo(root: &Path, archivos: &BTreeSet<String>) -> BTreeMap<S
     m
 }
 
+/// Los slugs con los que el modo `app` nombra las figuras de cada archivo: el nombre del archivo sin extensión, en minúsculas y
+/// con `-` en lugar de lo que no sea letra ni número. Dos archivos con el mismo nombre en carpetas distintas llevan además 4
+/// hex del md5 de su ruta (se pisarían las figuras en silencio). Se genera una vez por proyecto: un archivo nuevo que no choca
+/// con otro no cambia el slug de ninguno.
+pub fn slugs_app(archivos: &BTreeSet<String>) -> BTreeMap<String, String> {
+    let base = |rel: &str| -> String {
+        let stem = rel.rsplit('/').next().unwrap_or(rel);
+        let stem = stem.rsplit_once('.').map_or(stem, |(a, _)| a);
+        let mut s = String::new();
+        for c in stem.chars() {
+            let c = if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' };
+            if c != '-' || !s.ends_with('-') {
+                s.push(c);
+            }
+        }
+        let s = s.trim_matches('-').to_string();
+        if s.is_empty() {
+            "f".into()
+        } else {
+            s
+        }
+    };
+    let mut cuenta: BTreeMap<String, usize> = BTreeMap::new();
+    for a in archivos {
+        *cuenta.entry(base(a)).or_default() += 1;
+    }
+    archivos
+        .iter()
+        .map(|a| {
+            let b = base(a);
+            let slug = if cuenta[&b] > 1 { format!("{b}-{}", &format!("{:x}", Md5::digest(a.as_bytes()))[..4]) } else { b };
+            (a.clone(), slug)
+        })
+        .collect()
+}
+
 // --- limpieza -------------------------------------------------------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
@@ -574,6 +610,25 @@ mod tests {
         let h = limpiar(r, "img/cache", "6D06AB", Some(&f)).unwrap();
         assert_eq!(h.archivos, ["img/cache/X-viejo.pdf"]);
         assert!(r.join("img/cache/X-viejo.tex").is_file() && r.join("img/cache/notas.docx").is_file());
+    }
+
+    #[test]
+    fn los_slugs_del_modo_app_salen_del_nombre_y_se_desambiguan_si_chocan() {
+        let a: BTreeSet<String> = ["main.tex", "Secciones/Cap Uno.tex", "a/intro.tex", "b/intro.tex", "ñ.tex"].iter().map(|s| s.to_string()).collect();
+        let m = slugs_app(&a);
+        assert_eq!(m["main.tex"], "main");
+        assert_eq!(m["Secciones/Cap Uno.tex"], "cap-uno");
+        assert_eq!(m["ñ.tex"], "f");
+        assert!(m["a/intro.tex"].starts_with("intro-") && m["b/intro.tex"].starts_with("intro-") && m["a/intro.tex"] != m["b/intro.tex"], "{m:?}");
+        // Un archivo nuevo que no choca no cambia el slug de los demás.
+        let mut b = a.clone();
+        b.insert("cap-nuevo.tex".into());
+        let n = slugs_app(&b);
+        assert_eq!(n["main.tex"], "main");
+        assert_eq!(n["a/intro.tex"], m["a/intro.tex"]);
+        for slug in m.values() {
+            assert!(partir_nombre(&format!("6D06AB-{slug}-0")).is_some(), "{slug} tiene que ser un nombre que el cache entienda");
+        }
     }
 
     #[test]

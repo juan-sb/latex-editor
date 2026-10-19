@@ -1,0 +1,32 @@
+\documentclass[11pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{tikz}
+\usetikzlibrary{positioning,calc}
+% El estilo de las figuras vive en su propio archivo (es el `stampFiles` del cache): cambiarlo cambia el sello.
+\input{estilo}
+
+\begin{document}
+
+\section{Principal}
+
+Una figura en el archivo raíz, dentro de \texttt{figure}.
+
+\begin{figure}[ht]
+  \centering
+  \begin{tikzpicture}
+    \draw[miestilo] (0,0) circle (1);
+  \end{tikzpicture}
+  \caption{Un círculo.}
+\end{figure}
+
+\input{cap-a}
+\include{Secciones/cap-b}
+
+Un \texttt{tikzpicture} \emph{fuera} de \texttt{figure}, con \texttt{remember picture, overlay}, como los íconos del template.
+
+\begin{tikzpicture}[remember picture,overlay]
+  \node[anchor=north east,red] at (current page.north east) {marca de agua};
+\end{tikzpicture}
+
+\end{document}

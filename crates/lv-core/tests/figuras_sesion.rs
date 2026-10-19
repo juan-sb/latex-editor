@@ -35,18 +35,23 @@ const OK: &str = "$p = $env:LV_PERFIL\n$d = \".lv/build/$p\"\nNew-Item -ItemType
 /// Un "pdflatex" falso. Con `-output-directory` es el listado: escribe la figlist con 4 figuras del sello que dice `sello.txt`
 /// (2 de `uno` y 2 de `dos`, los slugs de `\FigurasDe` de los capítulos) y el `.md5` de cada una (que cambia con `version.txt`).
 /// Si el driver tiene `\includeonly` lista sólo las de las partes que nombra. Con `-jobname=` es una subcompilación que tarda lo
-/// que diga `demora.txt` (ms) y deja el PDF y el log. Todo lo que lanza queda anotado en `lanzadas.txt`.
+/// que diga `demora.txt` (ms) y deja el PDF y el log. Todo lo que lanza queda anotado en `lanzadas/`.
 const MOTOR_FALSO: &str = r##"$job = $null; $out = $null; $driver = $null
 foreach ($a in $args) {
   if ($a -like '-jobname=*') { $job = $a.Substring(9) }
   if ($a -like '-output-directory=*') { $out = $a.Substring(18) }
   if ($a -like '*.tex') { $driver = $a }
 }
+# Un archivo por anotación (con las ticks por delante para ordenarlas): con dos procesos a la vez, `Add-Content` a un mismo archivo pierde líneas.
+function Anotar($texto) {
+  New-Item -ItemType Directory -Force 'lanzadas' | Out-Null
+  Set-Content ("lanzadas/{0}-{1}.txt" -f [DateTime]::UtcNow.Ticks, [guid]::NewGuid().ToString('N').Substring(0, 6)) $texto
+}
 $sello = (Get-Content 'sello.txt' -Raw).Trim()
 $version = if (Test-Path 'version.txt') { (Get-Content 'version.txt' -Raw).Trim() } else { '1' }
 if ($out) {
   $texto = Get-Content $driver -Raw
-  "LISTADO $driver" | Add-Content 'lanzadas.txt'
+  Anotar "LISTADO $driver"
   New-Item -ItemType Directory -Force "$out/figuras-cache" | Out-Null
   $nombres = @()
   if ($texto -notmatch 'includeonly' -or $texto -match 'Secciones/Uno') { $nombres += "figuras-cache/$sello-uno-0", "figuras-cache/$sello-uno-1" }
@@ -55,7 +60,7 @@ if ($out) {
   foreach ($n in $nombres) { Set-Content "$out/$n.md5" "$n-v$version" }
   exit 0
 }
-"FIGURA $job" | Add-Content 'lanzadas.txt'
+Anotar "FIGURA $job"
 $demora = if (Test-Path 'demora.txt') { [int](Get-Content 'demora.txt' -Raw).Trim() } else { 50 }
 Start-Sleep -Milliseconds $demora
 Set-Content "$job.pdf" "%PDF-1.5`n%%EOF"
@@ -151,8 +156,16 @@ impl Caso {
         !self.s.is_building()
     }
 
+    /// Lo que lanzó el motor falso, en orden de lanzamiento.
     fn lanzadas(&self) -> Vec<String> {
-        fs::read_to_string(self.d.path().join("lanzadas.txt")).unwrap_or_default().lines().map(|l| l.trim().to_string()).collect()
+        let mut v: Vec<(String, String)> = fs::read_dir(self.d.path().join("lanzadas"))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| (e.file_name().to_string_lossy().to_string(), fs::read_to_string(e.path()).unwrap_or_default().trim().to_string()))
+            .collect();
+        v.sort();
+        v.into_iter().map(|(_, t)| t).collect()
     }
 
     fn figura(&self, corto: &str, ext: &str) -> std::path::PathBuf {
