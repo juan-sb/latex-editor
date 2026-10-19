@@ -319,9 +319,8 @@ impl Session {
         let (fin, continuar) = match r {
             Ok(res) => {
                 let falladas = res.rotas.len() as u32;
-                if let Ok(mut g) = self.bake.rotas.lock() {
-                    *g = res.rotas.clone();
-                }
+                let intentadas: Vec<String> = res.cocidas.iter().cloned().chain(res.rotas.iter().map(|f| f.nombre.clone())).collect();
+                self.registrar_rotas(&intentadas, &res.rotas);
                 if let Ok(mut m) = self.problemas.lock() {
                     // Los errores de las figuras que no salieron se pueden ver igual que los de un build.
                     m.insert(PERFIL_COCINA.to_string(), res.rotas.iter().flat_map(|f| f.problemas.clone()).collect());
@@ -441,6 +440,15 @@ impl Session {
             _ => Figlist { sello, completa, fecha_ms: ahora_ms(), nombres: nombres.to_vec(), pendientes: pendientes.to_vec(), fallidas: fallidas.to_vec() },
         };
         let _ = figcache::guardar_figlist(&self.root, &nueva);
+    }
+
+    /// Deja registradas las figuras que no salieron (para el panel Figuras): las `intentadas` en este build o esta cocción se
+    /// reemplazan por lo que pasó ahora (las que salieron bien dejan de figurar como rotas); las demás se conservan.
+    pub(super) fn registrar_rotas(&self, intentadas: &[String], rotas: &[FiguraRota]) {
+        if let Ok(mut g) = self.bake.rotas.lock() {
+            g.retain(|r| !intentadas.contains(&r.nombre));
+            g.extend(rotas.iter().cloned());
+        }
     }
 
     // --- estado y limpieza --------------------------------------------------------------------------------------------------------------
