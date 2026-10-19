@@ -129,6 +129,108 @@ export interface SyncInverse {
   inside: boolean;
 }
 
+/** Un `\label` del proyecto. */
+export interface EtiquetaSim {
+  name: string;
+  file: string;
+  line: number;
+  /** La línea donde está, sin el `\label{...}`. */
+  context: string;
+}
+
+/** Un `ef` o una cita: el nombre al que apunta y dónde está. */
+export interface UsoSim {
+  name: string;
+  command: string;
+  file: string;
+  line: number;
+}
+
+export interface EntradaBib {
+  key: string;
+  kind: string;
+  file: string;
+  line: number;
+  author: string;
+  title: string;
+  year: string;
+}
+
+export interface SeccionSim {
+  /** 0 `\part`, 1 `\chapter`, 2 `\section`, 3 `\subsection`, 4 `\subsubsection`, 5 `\paragraph`, 6 `\subparagraph`. */
+  level: number;
+  title: string;
+  file: string;
+  line: number;
+  label: string | null;
+}
+
+export interface DefSim {
+  name: string;
+  kind: 'command' | 'operator' | 'environment' | 'theorem' | 'tcolorbox' | 'def';
+  file: string;
+  line: number;
+  args: number;
+}
+
+export interface ArchivoSim {
+  rel: string;
+  kind: 'tex' | 'bib' | 'image';
+}
+
+/** Lo que sabe el core del proyecto sin compilar: etiquetas, citas, secciones, definiciones, archivos y el lint. */
+export interface Simbolos {
+  labels: EtiquetaSim[];
+  refs: UsoSim[];
+  cites: UsoSim[];
+  bib: EntradaBib[];
+  sections: SeccionSim[];
+  defs: DefSim[];
+  files: ArchivoSim[];
+  lint: Problema[];
+  scan_ms: number;
+}
+
+export interface OpcionesBusqueda {
+  query: string;
+  regex: boolean;
+  caseSensitive: boolean;
+  wholeWord: boolean;
+  /** Todo el árbol de texto, no sólo los archivos del grafo y los `.bib`. */
+  allFiles: boolean;
+}
+
+export interface CoincidenciaBusqueda {
+  line: number;
+  /** En unidades UTF-16, como las posiciones del editor. */
+  col: number;
+  len: number;
+  text: string;
+  /** Dónde empieza `text` dentro de la línea (si se recortó). */
+  offset: number;
+  /** En una vista previa de reemplazo: lo que quedaría en lugar de la coincidencia. */
+  replaced: string | null;
+}
+
+export interface ArchivoBusqueda {
+  file: string;
+  matches: CoincidenciaBusqueda[];
+}
+
+export interface ResultadoBusqueda {
+  files: ArchivoBusqueda[];
+  total: number;
+  truncated: boolean;
+  files_scanned: number;
+  ms: number;
+}
+
+export interface InformeReemplazo {
+  changed: [string, number][];
+  skipped: [string, string][];
+  total: number;
+}
+
 export interface DirEntry {
   name: string;
   rel: string;
@@ -179,7 +281,7 @@ export interface LaunchOptions {
   root: string | null;
   smoke: boolean;
   /** Qué smoke de aceptación corre la interfaz con `LV_SMOKE`: el de F1, F2, F3 o F4. */
-  smokeMode: 'f1' | 'f2' | 'f3' | 'f4';
+  smokeMode: 'f1' | 'f2' | 'f3' | 'f4' | 'f5';
   smokeFile: string | null;
   /** Milisegundos que el smoke deja la interfaz abierta al terminar (para sacarle una captura). */
   smokePausaMs: number;
@@ -229,6 +331,15 @@ export interface Backend {
   synctexForward(rel: string, line: number): Promise<SyncForward | null>;
   /** Del PDF al código: `(page, x, y)` en bp desde arriba a la izquierda. */
   synctexInverse(profile: string, page: number, x: number, y: number): Promise<SyncInverse | null>;
+  /** Etiquetas, citas, secciones, definiciones y archivos del proyecto, con el lint. */
+  getSymbols(): Promise<Simbolos>;
+  /** Con `replacement`, cada coincidencia trae lo que quedaría (vista previa). */
+  searchProject(options: OpcionesBusqueda, replacement?: string): Promise<ResultadoBusqueda>;
+  /** Reemplaza en disco (conserva EOL y BOM). `files`: sólo esos; sin él, todos los que tengan coincidencias. */
+  replaceProject(options: OpcionesBusqueda, replacement: string, files?: string[]): Promise<InformeReemplazo>;
+  /** Un archivo de la configuración del usuario (por ejemplo `keybindings.json`); `null` si no existe. */
+  readUserConfig(name: string): Promise<string | null>;
+  writeUserConfig(name: string, text: string): Promise<string>;
   /** Copia el PDF del perfil a `publish.dir`. */
   publish(profile: string): Promise<Published>;
   /** Devuelve la función que deja de escuchar. */

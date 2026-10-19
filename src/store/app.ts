@@ -10,10 +10,14 @@ import {
   type Eol,
   type FileInfo,
   type LaunchOptions,
+  type InformeReemplazo,
+  type OpcionesBusqueda,
   type OutsideSave,
   type Problema,
   type ProfileInfo,
   type ProjectInfo,
+  type ResultadoBusqueda,
+  type Simbolos,
   type StatePatch,
 } from '../backend';
 import {
@@ -29,10 +33,12 @@ import {
   setEditListener,
   setSelectionListener,
 } from '../editor/docs';
+import { setFuenteSimbolos, setManejadorDefinicion } from '../editor/extensions';
 import { pdfApi } from '../pdf/api';
+import { describir, resolverDefinicion, resolverUsos, tokenEnCursor } from '../nav/definiciones';
 import { refinarForward, refinarInverse } from '../sync/saltos';
 import { logBuffer } from './logbuffer';
-import { FILTRO_INICIAL, siguiente, visibles, type FiltroProblemas } from './problemas';
+import { FILTRO_INICIAL, listaDeProblemas, siguiente, visibles, type FiltroProblemas } from './problemas';
 
 export interface TabMeta {
   rel: string;
@@ -89,7 +95,49 @@ export interface Notice {
 }
 
 export type ResultadoGuardado = 'guardado' | 'sin-cambios' | 'cancelado' | 'error';
-export type PanelIzquierdo = 'archivos' | 'partes';
+export type PanelIzquierdo = 'archivos' | 'partes' | 'esquema' | 'buscar';
+
+/** Un renglón de un selector rápido (abrir archivo, paleta, ir a sección...). */
+export interface QuickItem {
+  id: string;
+  titulo: string;
+  detalle?: string;
+  ejecutar: () => void | Promise<void>;
+}
+
+export interface QuickState {
+  titulo: string;
+  placeholder: string;
+  items: QuickItem[];
+}
+
+/** Un lugar de un archivo, para el historial de saltos. */
+export interface Ubicacion {
+  rel: string;
+  line: number;
+}
+
+export interface EstadoBusqueda extends OpcionesBusqueda {
+  reemplazo: string;
+  /** El campo de reemplazo está a la vista (Ctrl+Mayús+H). */
+  conReemplazo: boolean;
+  resultado: ResultadoBusqueda | null;
+  buscando: boolean;
+  error: string | null;
+}
+
+export const BUSQUEDA_INICIAL: EstadoBusqueda = {
+  query: '',
+  regex: false,
+  caseSensitive: false,
+  wholeWord: false,
+  allFiles: false,
+  reemplazo: '',
+  conReemplazo: false,
+  resultado: null,
+  buscando: false,
+  error: null,
+};
 export type PanelInferior = 'problemas' | 'log';
 
 interface AppState {
@@ -113,6 +161,13 @@ interface AppState {
   panelInferior: PanelInferior;
   /** Pedido de ir a una línea de un archivo (y, si trae `inicio` y `fin`, a seleccionar esa palabra): lo atiende el editor cuando la pestaña ya está activa. */
   irA: { rel: string; line: number; n: number; inicio?: number; fin?: number } | null;
+  /** Lo que el core sabe del proyecto sin compilar (etiquetas, citas, secciones...), con el lint. */
+  simbolos: Simbolos | null;
+  quick: QuickState | null;
+  /** Historial de saltos (Alt+←/→): los lugares por los que se pasó y cuál es el actual. */
+  historial: Ubicacion[];
+  histIdx: number;
+  busqueda: EstadoBusqueda;
   /** "Seguir al cursor": el PDF acompaña al cursor del editor (6.5 del plan). Apagado por defecto. */
   seguir: boolean;
   notice: Notice | null;
@@ -149,6 +204,25 @@ interface AppState {
   cargarProblemas(perfil: string, abrirPanel?: boolean): Promise<void>;
   setFiltro(cambios: Partial<FiltroProblemas>): void;
   irAProblema(i: number): Promise<void>;
+  cargarSimbolos(): Promise<void>;
+  programarSimbolos(): void;
+  abrirQuick(q: QuickState): void;
+  cerrarQuick(): void;
+  /** Va a un lugar de un archivo y recuerda de dónde venía (para Alt+←). */
+  irAUbicacion(rel: string, line: number, opciones?: { inicio?: number; fin?: number; registrar?: boolean }): Promise<void>;
+  registrarOrigen(): void;
+  atras(): Promise<void>;
+  adelante(): Promise<void>;
+  irADefinicion(): Promise<void>;
+  mostrarUsos(): Promise<void>;
+  abrirArchivoRapido(): Promise<void>;
+  irASeccion(ambito: 'archivo' | 'proyecto'): Promise<void>;
+  pestanaSiguiente(dir: 1 | -1): void;
+  /** Relee del disco una pestaña abierta (después de un reemplazo en el proyecto). */
+  recargarPestana(rel: string): Promise<void>;
+  setBusqueda(cambios: Partial<EstadoBusqueda>): void;
+  ejecutarBusqueda(): Promise<void>;
+  reemplazarTodo(archivos?: string[]): Promise<void>;
   irAlPdf(opciones?: { resaltar?: boolean; silencioso?: boolean }): Promise<boolean>;
   irAlCodigo(punto?: { page: number; x: number; y: number }): Promise<boolean>;
   setSeguir(valor: boolean): void;
@@ -187,6 +261,10 @@ let colaDePreguntas: Promise<unknown> = Promise.resolve();
 /** Autoguardado "al dejar de tipear": un solo temporizador para todo el proyecto. */
 let temporizadorIdle: ReturnType<typeof setTimeout> | null = null;
 let ultimoEditado: string | null = null;
+/** El índice de símbolos se rehace 500 ms después del último guardado. */
+let temporizadorSimbolos: ReturnType<typeof setTimeout> | null = null;
+/** Para que una búsqueda lenta no pise el resultado de una más nueva. */
+let contadorBusqueda = 0;
 /** "Seguir al cursor": el salto se pide 200 ms después del último movimiento del cursor. */
 let temporizadorSeguir: ReturnType<typeof setTimeout> | null = null;
 
@@ -215,6 +293,8 @@ export const useApp = create<AppState>()((set, get) => {
   setDirtyListener((rel, dirty) => actualizarTab(rel, { dirty }));
   setEditListener((rel) => get().alEditar(rel));
   setSelectionListener((rel) => get().alMoverCursor(rel));
+  setFuenteSimbolos(() => get().simbolos);
+  setManejadorDefinicion(() => void get().irADefinicion());
 
   return {
     project: null,
@@ -232,6 +312,11 @@ export const useApp = create<AppState>()((set, get) => {
     problemaIdx: -1,
     panelInferior: 'log',
     irA: null,
+    simbolos: null,
+    quick: null,
+    historial: [],
+    histIdx: -1,
+    busqueda: BUSQUEDA_INICIAL,
     seguir: false,
     notice: null,
     dialog: null,
@@ -285,6 +370,11 @@ export const useApp = create<AppState>()((set, get) => {
         problems: [],
         problemaIdx: -1,
         irA: null,
+        simbolos: null,
+        quick: null,
+        historial: [],
+        histIdx: -1,
+        busqueda: BUSQUEDA_INICIAL,
         notice: null,
       });
       aplicarProblemas([]);
@@ -307,6 +397,7 @@ export const useApp = create<AppState>()((set, get) => {
         get().avisar('No encontré ningún .tex con \\documentclass. Abrí uno y usá "Usar como raíz".');
       }
       // Si el archivo existe pero está roto ya se avisó (y es un aviso más importante que éste).
+      void get().cargarSimbolos();
       if (get().project?.configSaved === false && !info.configError && get().rootFile) {
         get().avisar('Este proyecto no tiene latexviewer.json: se usa una configuración inferida. Podés guardarla desde el menú ⋯.');
       }
@@ -339,6 +430,19 @@ export const useApp = create<AppState>()((set, get) => {
         if (r.mixed) get().avisar(`${nombreDe(rel)} mezcla tipos de salto de línea: se abre en sólo lectura.`);
       } catch (e) {
         get().avisar(`No se pudo abrir ${rel}: ${mensajeDe(e)}`, 'error');
+      }
+    },
+
+    async recargarPestana(rel) {
+      if (!getDoc(rel)) return;
+      try {
+        const r = await getBackend().readFile(rel);
+        cerrarDoc(rel);
+        const e = crearDoc(rel, r);
+        const epoch = (get().tabs.find((t) => t.rel === rel)?.epoch ?? 0) + 1;
+        actualizarTab(rel, { dirty: false, readOnly: e.readOnly, mixed: e.mixed, eol: e.eol, bom: e.bom, epoch });
+      } catch (err) {
+        get().avisar(`No se pudo releer ${rel}: ${mensajeDe(err)}`, 'error');
       }
     },
 
@@ -468,6 +572,7 @@ export const useApp = create<AppState>()((set, get) => {
      * perfil activo, se compila, se avisa o no se hace nada (5.3 del plan).
      */
     async despuesDeGuardar(rel) {
+      get().programarSimbolos();
       const s = get();
       if (!s.project?.config || !s.rootFile) return;
       let info: FileInfo;
@@ -655,7 +760,7 @@ export const useApp = create<AppState>()((set, get) => {
       try {
         const lista = await getBackend().problems(perfil);
         set({ problems: lista, problemaIdx: -1, ...(abrirPanel && lista.length > 0 ? { panelInferior: 'problemas' as const } : {}) });
-        aplicarProblemas(visibles(lista, get().filtro));
+        aplicarProblemas(visibles(listaDeProblemas(lista, get().simbolos), get().filtro));
       } catch (e) {
         get().avisar(`No se pudieron leer los problemas del build: ${mensajeDe(e)}`, 'error');
       }
@@ -664,18 +769,238 @@ export const useApp = create<AppState>()((set, get) => {
     setFiltro(cambios) {
       const filtro = { ...get().filtro, ...cambios };
       set({ filtro, problemaIdx: -1 });
-      aplicarProblemas(visibles(get().problems, filtro));
+      aplicarProblemas(visibles(listaDeProblemas(get().problems, get().simbolos), filtro));
     },
 
     async irAProblema(i) {
-      const p = visibles(get().problems, get().filtro)[i];
+      const p = visibles(listaDeProblemas(get().problems, get().simbolos), get().filtro)[i];
       if (!p) return;
       set({ problemaIdx: i });
       if (!p.file || p.line === null) {
         return get().avisar(`«${p.message}» no tiene una ubicación en un archivo del proyecto.`);
       }
-      await get().abrirArchivo(p.file);
-      if (getDoc(p.file)) set({ irA: { rel: p.file, line: p.line, n: Date.now() } });
+      await get().irAUbicacion(p.file, p.line);
+    },
+
+    // --- símbolos, navegación, selectores y búsqueda (F5) ---------------------------------------------------------------------
+
+    async cargarSimbolos() {
+      if (!get().project?.rootFile) return;
+      try {
+        const simbolos = await getBackend().getSymbols();
+        set({ simbolos });
+        // El lint entra en las marcas del gutter junto con los problemas del build.
+        aplicarProblemas(visibles(listaDeProblemas(get().problems, simbolos), get().filtro));
+      } catch {
+        // Sin raíz o con un proyecto a medio escribir el índice no es crítico: se vuelve a pedir con el próximo guardado.
+      }
+    },
+
+    programarSimbolos() {
+      if (temporizadorSimbolos) clearTimeout(temporizadorSimbolos);
+      temporizadorSimbolos = setTimeout(() => {
+        temporizadorSimbolos = null;
+        void get().cargarSimbolos();
+      }, 500);
+    },
+
+    abrirQuick(q) {
+      set({ quick: q });
+    },
+
+    cerrarQuick() {
+      set({ quick: null });
+    },
+
+    registrarOrigen() {
+      const rel = get().activeRel;
+      const doc = rel ? getDoc(rel) : undefined;
+      if (!rel || !doc) return;
+      const origen: Ubicacion = { rel, line: doc.state.doc.lineAt(doc.state.selection.main.head).number };
+      const { historial, histIdx } = get();
+      const hasta = historial.slice(0, histIdx + 1);
+      // El lugar actual reemplaza al último del historial si es el mismo archivo y línea; si no, se agrega.
+      const ultimo = hasta[hasta.length - 1];
+      if (!ultimo || ultimo.rel !== origen.rel || ultimo.line !== origen.line) hasta.push(origen);
+      set({ historial: hasta.slice(-100), histIdx: Math.min(hasta.length, 100) - 1 });
+    },
+
+    async irAUbicacion(rel, line, opciones) {
+      if (opciones?.registrar !== false) get().registrarOrigen();
+      await get().abrirArchivo(rel);
+      if (!getDoc(rel)) return;
+      set({ irA: { rel, line, n: Date.now(), inicio: opciones?.inicio, fin: opciones?.fin } });
+      if (opciones?.registrar !== false) {
+        // El destino queda como "lugar actual" del historial: se puede volver a él con Alt+→.
+        const { historial, histIdx } = get();
+        const hasta = historial.slice(0, histIdx + 1);
+        hasta.push({ rel, line });
+        set({ historial: hasta.slice(-100), histIdx: Math.min(hasta.length, 100) - 1 });
+      }
+    },
+
+    async atras() {
+      const { historial, histIdx } = get();
+      if (histIdx <= 0) return get().avisar('No hay un lugar anterior al que volver.');
+      // El lugar actual se actualiza (el cursor se movió desde que se llegó) antes de salir de él.
+      const actual = get().activeRel ? getDoc(get().activeRel!) : undefined;
+      const copia = [...historial];
+      if (actual && get().activeRel) copia[histIdx] = { rel: get().activeRel!, line: actual.state.doc.lineAt(actual.state.selection.main.head).number };
+      const destino = copia[histIdx - 1];
+      set({ historial: copia, histIdx: histIdx - 1 });
+      await get().irAUbicacion(destino.rel, destino.line, { registrar: false });
+    },
+
+    async adelante() {
+      const { historial, histIdx } = get();
+      if (histIdx >= historial.length - 1) return get().avisar('No hay un lugar siguiente.');
+      const actual = get().activeRel ? getDoc(get().activeRel!) : undefined;
+      const copia = [...historial];
+      if (actual && get().activeRel) copia[histIdx] = { rel: get().activeRel!, line: actual.state.doc.lineAt(actual.state.selection.main.head).number };
+      const destino = copia[histIdx + 1];
+      set({ historial: copia, histIdx: histIdx + 1 });
+      await get().irAUbicacion(destino.rel, destino.line, { registrar: false });
+    },
+
+    /** F12 / Ctrl+clic: a la definición de lo que hay bajo el cursor (etiqueta, clave, archivo, comando, entorno). */
+    async irADefinicion() {
+      const rel = get().activeRel;
+      const doc = rel ? getDoc(rel) : undefined;
+      if (!rel || !doc) return;
+      const linea = doc.state.doc.lineAt(doc.state.selection.main.head);
+      const token = tokenEnCursor(linea.text, doc.state.selection.main.head - linea.from);
+      if (!token) return get().avisar('No hay nada con definición bajo el cursor.');
+      if (!get().simbolos) await get().cargarSimbolos();
+      const s = get().simbolos;
+      const destino = s ? resolverDefinicion(token, s) : null;
+      if (!destino) return get().avisar(`No encontré la definición de ${describir(token)} en el proyecto.`);
+      if (destino.imagen) return get().avisar(`${describir(token)}: ${destino.rel}`);
+      await get().irAUbicacion(destino.rel, destino.line);
+    },
+
+    /** Shift+F12: dónde se usa la etiqueta o la clave bajo el cursor, en un selector. */
+    async mostrarUsos() {
+      const rel = get().activeRel;
+      const doc = rel ? getDoc(rel) : undefined;
+      if (!rel || !doc) return;
+      const linea = doc.state.doc.lineAt(doc.state.selection.main.head);
+      const token = tokenEnCursor(linea.text, doc.state.selection.main.head - linea.from);
+      if (!token) return get().avisar('Poné el cursor sobre una etiqueta o una clave de cita.');
+      if (!get().simbolos) await get().cargarSimbolos();
+      const usos = get().simbolos ? resolverUsos(token, get().simbolos!) : [];
+      if (usos.length === 0) return get().avisar(`${describir(token)} no se usa en ninguna parte del proyecto.`);
+      get().abrirQuick({
+        titulo: `Dónde se usa ${describir(token)}`,
+        placeholder: 'Filtrar por archivo…',
+        items: usos.map((u, i) => ({ id: `${i}`, titulo: `${u.file}:${u.line}`, detalle: `\\${u.comando}`, ejecutar: () => get().irAUbicacion(u.file, u.line) })),
+      });
+    },
+
+    /** Ctrl+P: abrir un archivo del proyecto por su nombre. */
+    async abrirArchivoRapido() {
+      if (!get().project) return get().avisar('Abrí una carpeta primero.');
+      if (!get().simbolos) await get().cargarSimbolos();
+      const archivos = (get().simbolos?.files ?? []).filter((f) => f.kind !== 'image');
+      const abiertos = new Set(get().tabs.map((t) => t.rel));
+      get().abrirQuick({
+        titulo: 'Abrir archivo',
+        placeholder: 'Nombre del archivo…',
+        // Los que ya están abiertos primero: es lo que más se vuelve a buscar.
+        items: [...archivos].sort((a, b) => Number(abiertos.has(b.rel)) - Number(abiertos.has(a.rel))).map((f) => ({
+          id: f.rel,
+          titulo: f.rel,
+          detalle: abiertos.has(f.rel) ? 'abierto' : f.kind,
+          ejecutar: () => get().irAUbicacion(f.rel, 1),
+        })),
+      });
+    },
+
+    /** Ctrl+Mayús+O (este archivo) y Ctrl+T (todo el proyecto): secciones y etiquetas. */
+    async irASeccion(ambito) {
+      if (!get().project) return get().avisar('Abrí una carpeta primero.');
+      if (!get().simbolos) await get().cargarSimbolos();
+      const s = get().simbolos;
+      if (!s) return;
+      const activo = get().activeRel;
+      const eligen = (f: string) => ambito === 'proyecto' || f === activo;
+      const secciones = s.sections.filter((x) => eligen(x.file)).map((x) => ({
+        id: `s:${x.file}:${x.line}`,
+        titulo: `${'  '.repeat(Math.max(0, x.level - 1))}§ ${x.title || '(sin título)'}`,
+        detalle: ambito === 'proyecto' ? `${x.file}:${x.line}` : `línea ${x.line}`,
+        ejecutar: () => get().irAUbicacion(x.file, x.line),
+      }));
+      const etiquetas = s.labels.filter((x) => eligen(x.file)).map((x) => ({
+        id: `l:${x.file}:${x.line}:${x.name}`,
+        titulo: `⚑ ${x.name}`,
+        detalle: x.context || (ambito === 'proyecto' ? `${x.file}:${x.line}` : `línea ${x.line}`),
+        ejecutar: () => get().irAUbicacion(x.file, x.line),
+      }));
+      get().abrirQuick({
+        titulo: ambito === 'proyecto' ? 'Ir a sección o etiqueta del proyecto' : 'Ir a sección o etiqueta de este archivo',
+        placeholder: 'Título o nombre de la etiqueta…',
+        items: [...secciones, ...etiquetas],
+      });
+    },
+
+    pestanaSiguiente(dir) {
+      const { tabs, activeRel } = get();
+      if (tabs.length < 2) return;
+      const i = tabs.findIndex((t) => t.rel === activeRel);
+      get().activar(tabs[(i + dir + tabs.length) % tabs.length].rel);
+    },
+
+    setBusqueda(cambios) {
+      set((x) => ({ busqueda: { ...x.busqueda, ...cambios } }));
+    },
+
+    async ejecutarBusqueda() {
+      const b = get().busqueda;
+      if (!b.query) return set((x) => ({ busqueda: { ...x.busqueda, resultado: null, error: null } }));
+      const marca = ++contadorBusqueda;
+      set((x) => ({ busqueda: { ...x.busqueda, buscando: true, error: null } }));
+      try {
+        const opciones: OpcionesBusqueda = { query: b.query, regex: b.regex, caseSensitive: b.caseSensitive, wholeWord: b.wholeWord, allFiles: b.allFiles };
+        const r = await getBackend().searchProject(opciones, b.conReemplazo && b.reemplazo !== '' ? b.reemplazo : undefined);
+        // Una búsqueda más nueva ya salió: ésta no pisa su resultado.
+        if (marca === contadorBusqueda) set((x) => ({ busqueda: { ...x.busqueda, resultado: r, buscando: false } }));
+      } catch (e) {
+        if (marca === contadorBusqueda) set((x) => ({ busqueda: { ...x.busqueda, resultado: null, buscando: false, error: mensajeDe(e) } }));
+      }
+    },
+
+    /** Reemplaza en disco. Los archivos abiertos con cambios sin guardar se guardan antes (o se cancela), y los abiertos se releen después. */
+    async reemplazarTodo(archivos) {
+      const b = get().busqueda;
+      const r = b.resultado;
+      if (!r || r.total === 0) return;
+      const objetivo = archivos ?? r.files.map((f) => f.file);
+      const n = r.files.filter((f) => objetivo.includes(f.file)).reduce((t, f) => t + f.matches.length, 0);
+      const sucios = get().tabs.filter((t) => t.dirty && objetivo.includes(t.rel));
+      const resp = await get().preguntar(
+        `Reemplazar ${n} coincidencia${n === 1 ? '' : 's'} de «${b.query}» por «${b.reemplazo}» en ${objetivo.length} archivo${objetivo.length === 1 ? '' : 's'}?`,
+        [
+          { id: 'reemplazar', label: sucios.length ? 'Guardar los abiertos y reemplazar' : 'Reemplazar', primary: true },
+          { id: 'cancelar', label: 'Cancelar' },
+        ],
+        sucios.length ? `Hay cambios sin guardar en: ${sucios.map((t) => t.name).join(', ')}. Se guardan antes de reemplazar.` : 'Se escribe en disco, conservando el salto de línea y el BOM de cada archivo.',
+      );
+      if (resp !== 'reemplazar') return;
+      for (const t of sucios) {
+        const g = await get().guardar(t.rel, { auto: false });
+        if (g === 'cancelado' || g === 'error') return;
+      }
+      try {
+        const opciones: OpcionesBusqueda = { query: b.query, regex: b.regex, caseSensitive: b.caseSensitive, wholeWord: b.wholeWord, allFiles: b.allFiles };
+        const informe: InformeReemplazo = await getBackend().replaceProject(opciones, b.reemplazo, objetivo);
+        // Los archivos abiertos que cambiaron se releen del disco: el editor no puede quedarse con el texto viejo.
+        for (const [rel] of informe.changed) if (getDoc(rel)) await get().recargarPestana(rel);
+        const salteados = informe.skipped.length ? ` Se saltearon ${informe.skipped.length}: ${informe.skipped.map(([f, why]) => `${f} (${why})`).join('; ')}.` : '';
+        get().avisar(`Se reemplazaron ${informe.total} coincidencia${informe.total === 1 ? '' : 's'} en ${informe.changed.length} archivo${informe.changed.length === 1 ? '' : 's'}.${salteados}`, informe.skipped.length ? 'error' : 'info');
+        await get().ejecutarBusqueda();
+        get().programarSimbolos();
+      } catch (e) {
+        get().avisar(mensajeDe(e), 'error');
+      }
     },
 
     // --- SyncTeX ----------------------------------------------------------------------------------------------------
@@ -747,6 +1072,7 @@ export const useApp = create<AppState>()((set, get) => {
       const doc = getDoc(res.file);
       if (!doc) return false;
       const ubic = await refinarInverse(host, p, res, { lineas: doc.state.doc.lines, texto: (n) => doc.state.doc.line(n).text });
+      get().registrarOrigen();
       set({ irA: { rel: res.file, line: ubic.line, n: Date.now(), inicio: ubic.inicio, fin: ubic.fin } });
       return true;
     },
@@ -766,7 +1092,7 @@ export const useApp = create<AppState>()((set, get) => {
     },
 
     async saltarProblema(dir) {
-      const lista = visibles(get().problems, get().filtro);
+      const lista = visibles(listaDeProblemas(get().problems, get().simbolos), get().filtro);
       const actual = get().problemaIdx;
       const i = siguiente(lista, actual < 0 ? (dir === 1 ? -1 : 0) : actual, dir);
       if (i < 0) return get().avisar(lista.length === 0 ? 'No hay problemas en el último build.' : 'Ningún problema tiene una ubicación en un archivo.');

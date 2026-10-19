@@ -18,6 +18,8 @@ use crate::fsio;
 use crate::graph::{Affects, ProjectIndex};
 use crate::logparse::{self, Problem};
 use crate::project;
+use crate::search::{self, ReplaceReport, SearchOptions, SearchResult};
+use crate::symbols::Symbols;
 use crate::synctex::{Rect, Synctex};
 use serde::Serialize;
 use std::collections::BTreeSet;
@@ -612,6 +614,37 @@ impl Session {
             p.take();
         }
         self.builder.cancel()
+    }
+
+    // --- símbolos, búsqueda y reemplazo -----------------------------------------------------------------------------------------
+
+    /// El índice del proyecto se rehace desde el disco cada vez: el grafo y los símbolos juntos cuestan ~25 ms con el libro.
+    fn indice_fresco(&self) -> Result<(ProjectIndex, String)> {
+        let d = self.lock()?;
+        let rf = d.root_file.clone().ok_or_else(|| otro("elegí primero la raíz del documento"))?;
+        let comandos = d.config.as_ref().map(|c| c.parts.commands.clone()).unwrap_or_else(comandos_por_defecto);
+        Ok((ProjectIndex::build(&self.root, &rf, &comandos), rf))
+    }
+
+    /// Etiquetas, citas, secciones, definiciones y archivos del proyecto, con el lint (sin compilar).
+    pub fn symbols(&self) -> Result<Symbols> {
+        let (ix, _) = self.indice_fresco()?;
+        Ok(Symbols::build(&self.root, &ix))
+    }
+
+    pub fn search(&self, o: &SearchOptions, reemplazo: Option<&str>) -> Result<SearchResult> {
+        let (ix, _) = self.indice_fresco()?;
+        search::search(&self.root, &ix, o, reemplazo)
+    }
+
+    /// Reemplaza en disco. Los archivos abiertos con cambios sin guardar los tiene que haber resuelto quien llama: acá se
+    /// reescribe lo que hay en disco.
+    pub fn replace(&self, o: &SearchOptions, reemplazo: &str, solo: Option<&[String]>) -> Result<ReplaceReport> {
+        if self.builder.is_running() {
+            return Err(Error::Busy);
+        }
+        let (ix, _) = self.indice_fresco()?;
+        search::replace(&self.root, &ix, o, reemplazo, solo)
     }
 
     // --- SyncTeX ----------------------------------------------------------------------------------------------------------

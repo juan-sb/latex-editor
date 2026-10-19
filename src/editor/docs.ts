@@ -1,7 +1,8 @@
 // Registro de los documentos abiertos. Cada uno es un `EditorState` de CodeMirror y es la ÚNICA copia del texto: no hay
 // otra autoritativa en el store ni en el core, y eso deja lugar para Yjs más adelante (11 del plan). Zustand sólo guarda
 // metadatos de las pestañas; con documentos de 200 KB, tenerlos en el store re-renderizaría todo en cada tecla.
-import { EditorState, Text, type ChangeSpec, type StateEffect } from '@codemirror/state';
+import { openSearchPanel } from '@codemirror/search';
+import { EditorState, Text, type ChangeSpec, type StateEffect, type TransactionSpec } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import type { Eol, FileRead, Problema } from '../backend';
 import { marcasDe } from '../store/problemas';
@@ -109,6 +110,25 @@ export function registrarVista(v: { rel: string; view: EditorView } | null): voi
 }
 
 /**
+ * Aplica a la vista activa lo que arma `f` sobre su estado (formato, comentar...). `false` si no hay vista, el documento es de
+ * sólo lectura o `f` no tiene nada que hacer; el listener de la vista actualiza el estado guardado.
+ */
+export function aplicarEnVista(f: (state: EditorState) => TransactionSpec | null): boolean {
+  if (!vistaActiva || vistaActiva.view.state.readOnly) return false;
+  const spec = f(vistaActiva.view.state);
+  if (!spec) return false;
+  vistaActiva.view.dispatch(spec);
+  return true;
+}
+
+/** Abre el panel de buscar (y reemplazar) de CodeMirror en el archivo actual. */
+export function abrirBusquedaEnArchivo(): boolean {
+  if (!vistaActiva) return false;
+  vistaActiva.view.focus();
+  return openSearchPanel(vistaActiva.view);
+}
+
+/**
  * Aplica un cambio al documento. Si está en la vista se despacha ahí (el listener actualiza el estado); si no, se
  * aplica sobre el estado y se recalcula "modificado" a mano. Lo usan el smoke y los tests.
  */
@@ -143,12 +163,23 @@ export function aplicarProblemas(lista: Problema[]): void {
 }
 
 /** Mueve el cursor (como lo haría el usuario): por la vista si el documento está en ella, y si no, sobre el estado guardado. */
-export function moverCursor(rel: string, anchor: number): void {
+export function moverCursor(rel: string, anchor: number, head?: number): void {
   const e = docs.get(rel);
   if (!e) throw new Error(`el documento ${rel} no está abierto`);
   if (vistaActiva && vistaActiva.rel === rel) {
-    vistaActiva.view.dispatch({ selection: { anchor } });
+    vistaActiva.view.dispatch({ selection: { anchor, head } });
     return;
   }
-  e.state = e.state.update({ selection: { anchor } }).state;
+  e.state = e.state.update({ selection: { anchor, head } }).state;
 }
+
+/** Escribe `texto` en el cursor de la vista activa como si se tecleara (dispara el autocompletado). Lo usa el smoke. */
+export function escribirComoTecleado(texto: string): void {
+  if (!vistaActiva) throw new Error('no hay una vista activa');
+  const v = vistaActiva.view;
+  const { from, to } = v.state.selection.main;
+  v.dispatch({ changes: { from, to, insert: texto }, selection: { anchor: from + texto.length }, userEvent: 'input.type' });
+}
+
+/** El elemento editable de la vista activa (para mandarle teclas reales en el smoke). */
+export const contenidoDeVista = (): HTMLElement | null => vistaActiva?.view.contentDOM ?? null;

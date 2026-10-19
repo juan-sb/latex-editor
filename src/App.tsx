@@ -1,54 +1,25 @@
 import { useEffect } from 'react';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
+import { cargarKeybindings, manejarTecla } from './comandos/comandos';
 import { PdfPane } from './pdf/PdfPane';
 import { EditorPane } from './panels/EditorPane';
 import { Sidebar } from './panels/Sidebar';
 import { BottomPanel } from './panels/BottomPanel';
 import { Aviso, Dialogo } from './panels/Overlays';
+import { QuickPick } from './panels/QuickPick';
 import { TopBar } from './panels/TopBar';
 import { useApp } from './store/app';
 
 /**
  * Atajos de ventana. Se atienden en la fase de captura y se frenan ahí: sin eso WebView2 abre "Guardar como" con Ctrl+S,
  * recarga la página con F5 y Ctrl+R (se perdería lo que no se guardó) e imprime con Ctrl+P, y CodeMirror se quedaría
- * con Ctrl+Enter (inserta una línea). El keymap configurable y la anulación completa son de F5.
+ * con Ctrl+Enter (inserta una línea) y Ctrl+M (deja de capturar el Tab). Qué atajo es de qué comando lo decide
+ * `comandos/comandos.ts`, con el `keybindings.json` del usuario encima de los de fábrica.
  */
 function useAtajosGlobales() {
   useEffect(() => {
-    const tecla = (e: KeyboardEvent) => {
-      const ctrl = e.ctrlKey || e.metaKey;
-      const k = e.key.toLowerCase();
-      const store = useApp.getState();
-      if (ctrl && !e.altKey && !e.shiftKey && k === 's') {
-        e.preventDefault();
-        e.stopPropagation();
-        void store.guardar();
-      } else if (ctrl && !e.altKey && !e.shiftKey && e.key === 'Enter') {
-        e.preventDefault();
-        e.stopPropagation();
-        void store.compilar();
-      } else if (ctrl && !e.altKey && e.shiftKey && e.key === 'Enter') {
-        // Compilar la parte del archivo abierto (la opción 1 del menú de inspo).
-        e.preventDefault();
-        e.stopPropagation();
-        void store.compilarParteActiva();
-      } else if (ctrl && e.altKey && !e.shiftKey && k === 'j') {
-        // Del cursor al PDF (SyncTeX).
-        e.preventDefault();
-        e.stopPropagation();
-        void store.irAlPdf();
-      } else if (e.key === 'F8' && !ctrl && !e.altKey) {
-        // Recorrer los problemas del último build (F8 siguiente, Mayús+F8 anterior).
-        e.preventDefault();
-        e.stopPropagation();
-        void store.saltarProblema(e.shiftKey ? -1 : 1);
-      } else if (e.key === 'F5' || (ctrl && (k === 'r' || k === 'p'))) {
-        e.preventDefault();
-        e.stopPropagation();
-      }
-    };
-    window.addEventListener('keydown', tecla, true);
-    return () => window.removeEventListener('keydown', tecla, true);
+    window.addEventListener('keydown', manejarTecla, true);
+    return () => window.removeEventListener('keydown', manejarTecla, true);
   }, []);
 }
 
@@ -62,17 +33,21 @@ export default function App() {
 
   useEffect(() => {
     init()
-      .then((opts) => {
+      .then(async (opts) => {
+        // Los atajos del usuario tienen que estar antes de que el smoke (o la persona) empiece a teclear.
+        await cargarKeybindings();
         // El smoke de aceptación sólo se carga cuando se pide: no entra en el uso normal.
         if (opts.smoke && !smokeIniciado) {
           smokeIniciado = true;
-          void (opts.smokeMode === 'f4'
-            ? import('./smoke-f4').then((m) => m.correrSmokeF4(opts))
-            : opts.smokeMode === 'f3'
-            ? import('./smoke-f3').then((m) => m.correrSmokeF3(opts))
-            : opts.smokeMode === 'f2'
-              ? import('./smoke-f2').then((m) => m.correrSmokeF2(opts))
-              : import('./smoke').then((m) => m.correrSmoke(opts)));
+          void (opts.smokeMode === 'f5'
+            ? import('./smoke-f5').then((m) => m.correrSmokeF5(opts))
+            : opts.smokeMode === 'f4'
+              ? import('./smoke-f4').then((m) => m.correrSmokeF4(opts))
+              : opts.smokeMode === 'f3'
+                ? import('./smoke-f3').then((m) => m.correrSmokeF3(opts))
+                : opts.smokeMode === 'f2'
+                  ? import('./smoke-f2').then((m) => m.correrSmokeF2(opts))
+                  : import('./smoke').then((m) => m.correrSmoke(opts)));
         }
       })
       .catch((e) => avisar(`No se pudo iniciar: ${e instanceof Error ? e.message : e}`, 'error'));
@@ -104,6 +79,7 @@ export default function App() {
       </PanelGroup>
       <Aviso />
       <Dialogo />
+      <QuickPick />
     </div>
   );
 }

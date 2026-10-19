@@ -88,6 +88,8 @@ export async function correrSmoke(opts: LaunchOptions): Promise<void> {
         document.body.dispatchEvent(ev);
         if (!ev.defaultPrevented) throw new Error(`${JSON.stringify(init)} no se frenó: recargaría la página y se perdería lo no guardado`);
       }
+      // Desde F5 Ctrl+P abre el selector de archivos: se lo cierra para que el resto del smoke siga teclando.
+      store().cerrarQuick();
     });
 
     await paso('Ctrl+S (evento de teclado real): guarda y bytes de disco = original + marcador, con el mismo EOL y BOM', async () => {

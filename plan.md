@@ -71,7 +71,7 @@ Decisiones **[decidido]**:
 - **Frontend:** React + TypeScript + Vite. Estado con Zustand. Paneles redimensionables (`react-resizable-panels` o similar). Estilos a criterio (CSS modules o Tailwind), sin librería de componentes pesada.
 - **Editor:** CodeMirror 6 (lo mismo que usa Overleaf). Gramática LaTeX: evaluar `codemirror-lang-latex` contra `@codemirror/legacy-modes` (stex). Requisito mínimo del árbol: saber si el cursor está en modo matemático, dentro de qué entorno y dentro de qué comando.
 - **PDF:** `pdfjs-dist` con su `PDFViewer` (render perezoso de páginas, capa de texto, find controller).
-- **Core en Rust:** `tokio` (procesos), `notify` (watcher), `flate2` (synctex.gz), `ignore` + `grep-searcher` (búsqueda), `serde`, `md-5`, Job Objects en Windows.
+- **Core en Rust:** `tokio` (procesos), `notify` (watcher), `flate2` (synctex.gz), `regex` (búsqueda; F5 la hizo con el crate `regex` y un recorrido propio en lugar de `ignore` + `grep-searcher`: una dependencia menos y alcanza para un proyecto de LaTeX), `serde`, `md-5`, Job Objects en Windows.
 - **Compilación:** `latexmk` (necesita Perl; en MiKTeX no viene solo) con engine configurable: pdflatex por defecto, xelatex y lualatex soportados.
 
 ### 3.2 Módulos
@@ -450,7 +450,7 @@ Todos configurables desde un `keybindings.json` en la config de la app. Hay que 
 |---|---|
 | Ctrl+S | guardar (y compilar si auto-compilación = al guardar) |
 | Ctrl+Enter | guardar todo y compilar el perfil activo |
-| Ctrl+Alt+C | compilar la parte del archivo abierto (pasa a ser la selección del parcial) |
+| Ctrl+Alt+C (y Ctrl+Mayús+Enter, el de F2) | compilar la parte del archivo abierto (pasa a ser la selección del parcial) |
 | Ctrl+Alt+T | menú de compilación: perfiles, variables, exportar, cocinar, limpiar (como el Ctrl+Alt+T de inspo) |
 | F8 / Shift+F8 | siguiente / anterior problema |
 
@@ -552,12 +552,20 @@ Aceptación: ≤ 150 ms por salto sobre el PDF completo; en 50 párrafos largos 
 
 ### F5. Editor y navegación
 
-- [ ] Atajos de formato (con toggle, multicursor, modo matemático) con tests unitarios por caso.
-- [ ] Keymap configurable, anulación de atajos nativos del webview.
-- [ ] Índice del proyecto, autocompletado, ir a definición, referencias, historial de saltos.
-- [ ] Esquema, abrir archivo rápido, paleta de comandos.
-- [ ] Búsqueda y reemplazo en el proyecto.
-- [ ] Lint liviano.
+- [x] Atajos de formato (con toggle, multicursor, modo matemático) con tests unitarios por caso.
+- [x] Keymap configurable, anulación de atajos nativos del webview.
+- [x] Índice del proyecto, autocompletado, ir a definición, referencias, historial de saltos.
+- [x] Esquema, abrir archivo rápido, paleta de comandos.
+- [x] Búsqueda y reemplazo en el proyecto.
+- [x] Lint liviano.
+
+Aceptación: el índice del libro en menos de 1 s; cada atajo de 10.3 con evento de teclado real dentro de la app; el reemplazo en el proyecto escribe bytes exactos y se revierte al original.
+
+> **Resultado de F5 (`scripts/aceptacion-f5.ps1`, dentro de la app real sobre `fixtures/editor`, 16 pasos).** El índice de símbolos del libro (38 `.tex`, 602 etiquetas, 198 secciones, 501 definiciones) tarda **13 ms** (el grafo, 9 ms más) y el lint no marca nada sobre el libro, que compila limpio (sin falsos positivos). La búsqueda en el proyecto: 16 ms sobre los archivos del grafo y 75 ms sobre todo el árbol (154 archivos). Detalle en `docs/benchmarks.md`.
+>
+> **Lo que cambió respecto del plan, y se dice:** (1) la búsqueda usa el crate `regex` y no `ignore` + `grep-searcher` (ver 3.1). (2) Se agrega `@codemirror/autocomplete`, que es parte de CodeMirror 6 y no cambia el stack. (3) Ctrl+Mayús+Enter queda como alias de Ctrl+Alt+C: es el atajo con el que F2 ya compilaba la parte activa. (4) `Ctrl+\` (alternar layout) y Ctrl+Alt+T (menú de compilación) de 10.3 no se hicieron: no hay todavía un layout alternativo ni ese menú, se retoman con F7 (variables y exportar). (5) La vista previa al pasar el mouse sobre un `\includegraphics` (10.2) queda para F10: hoy F12 sobre un `\includegraphics` informa la ruta de la imagen. (6) Ctrl+clic para ir a la definición está cableado (`ctrlClic` en `editor/extensions.ts`) pero el smoke sólo prueba F12: no hay forma confiable de mandar un clic con coordenadas reales sin automatizar el mouse.
+>
+> **Notas de implementación:** `keybindings.json` vive en el directorio de configuración de la app (`LV_CONFIG_DIR` lo redirige en los smokes) y se interpreta como `{ "comando": "Ctrl+X" | ["A","B"] | null }`; lo que no se entiende se avisa y se ignora, y ante un atajo repetido gana el primer comando en el orden del registro. Mientras hay un selector rápido abierto el despachador no atiende atajos (sólo frena los nativos). El historial de saltos guarda hasta 100 lugares y el origen de cada salto (definición, problema, inverse de SyncTeX, esquema, búsqueda).
 
 ### F6. Cache de figuras
 

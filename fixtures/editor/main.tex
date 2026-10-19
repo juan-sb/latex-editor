@@ -1,0 +1,12 @@
+\documentclass{article}
+\usepackage{amsmath}
+\usepackage[backend=biber]{biblatex}
+\addbibresource{refs.bib}
+\newcommand{\vect}[1]{\mathbf{#1}}
+\begin{document}
+\section{Introducción}\label{sec:intro}
+Texto de la introducción con una cita \cite{knuth84} y una referencia a \ref{sec:uno}.
+\input{cap-uno}
+\input{cap-dos}
+\printbibliography
+\end{document}

@@ -248,3 +248,40 @@ La única falla de las 50 es una palabra ("mismo", en `Aproximación de Cauer.te
 - **PDF.js restaura "la página actual" al cambiar el tamaño del panel**: `mostrar` le dice primero cuál es la página (`currentPageNumber`) y después ajusta el desplazamiento fino.
 - **Una caja con alto pero sin ancho** (un puntal, una regla de ancho cero) no sirve para resaltar: el forward la reemplaza por la contenedora que tiene los dos tamaños.
 - **El tiempo absoluto de F2 depende de la carga de la máquina**: con otro proceso ocupando CPU, el parcial pasó de 4,6 a 4,9 s de latexmk y el rápido de 8,9 a 10,9 s. El smoke de F2 ahora falla por lo que la app agrega a latexmk (312 a 442 ms con el libro; límite 700 ms) y sólo informa el umbral absoluto de 5,0 y 9,6 s.
+
+## F5: editor y navegación
+
+### Índice del proyecto y búsqueda, sobre el libro
+
+`cargo run --release -p lv-core --example simbolos -- fixtures/libro-tc --search <texto>`, con el `latexviewer.json` del libro (38 `.tex` alcanzados, 154 archivos de texto en el árbol). Cinco corridas del índice, tres de cada búsqueda.
+
+| | Medido | Criterio |
+|---|---|---|
+| Grafo de inclusión (ya existía en F2) | 8,6 a 10,9 ms | |
+| Índice de símbolos: 602 etiquetas, 465 `ref`, 17 citas, 19 entradas de `.bib`, 198 secciones, 501 definiciones, 124 archivos, lint | **13,1 a 14,8 ms** | < 1 s |
+| Problemas de lint sobre el libro | **0** | el libro compila limpio: sin falsos positivos |
+| Búsqueda literal (`aproximación`, 179 coincidencias en 22 archivos del grafo) | 15,6 a 16,7 ms | |
+| Búsqueda con regex (`ref` y `eqref`, 545 coincidencias en 21 archivos) | 16,0 a 17,1 ms | |
+| Lo mismo sobre todo el árbol (154 archivos leídos) | 71 a 80 ms; **1,4 s la primera vez** (el sistema todavía no tenía los archivos en memoria) | |
+
+### Smoke de aceptación de F5 (dentro de la app real)
+
+`scripts/aceptacion-f5.ps1` sobre `fixtures/editor` (no compila, no necesita TeX): **16 pasos, 5 s en total**. Todo con eventos de teclado reales sobre el editor y el despachador de la ventana: formato (texto, matemática, comentar, `$…$`, `\emph`), autocompletado con el menú real de CodeMirror para `\ref{` y `\cite{`, F12 hacia etiqueta, clave y archivo con Alt+← y Alt+→, Shift+F12, Ctrl+P, paleta, Ctrl+Mayús+O y Ctrl+T, el panel Esquema, búsqueda comparada con el core, reemplazo con **bytes de disco exactos** y reversión byte a byte al original (con la pestaña limpia y con la pestaña modificada, que se guarda antes), lint en el gutter y `keybindings.json` (atajo nuevo, atajo quitado, comando inexistente avisado).
+
+### Regresión con la interfaz nueva
+
+F3, F4 y F1 (sobre el libro, 194 páginas, build completo ok) siguen pasando. El smoke de F3 falló una vez: el lint de F5 suma dos filas al panel de problemas de `fixtures/errores` (referencias sin etiqueta) y cuatro saltos más en F8; ahora el smoke de F3 apaga el filtro de lint, que tiene su propio smoke.
+
+### Pruebas
+
+| | Cantidad | Qué cubren |
+|---|---|---|
+| `cargo test -p lv-core` | 127 | lo de F4 (106) más los símbolos y el lint (etiquetas duplicadas, `ref` y citas rotas, entornos desbalanceados, comentarios, `%` escapado, llaves anidadas, claves de `.bib`) y la búsqueda y el reemplazo (regex, palabra, mayúsculas, columnas UTF-16, EOL y BOM, conflicto de versión) |
+| `npx vitest run` | 177 | lo de F4 (96) más formato caso por caso (24), atajos y `keybindings.json` (13), filtro difuso (7), qué hay bajo el cursor y a dónde va F12 (10), fuentes de autocompletado (15) y el store de navegación y búsqueda (12: historial, F12, selectores, lint en F8, búsqueda lenta, reemplazo con confirmación) |
+
+### Hallazgos de F5
+
+- **El lint pasa a ser parte de F8 y del panel de problemas**: sin tocar los smokes anteriores habrían contado filas y saltos de más. Un filtro propio ("Lint") lo apaga.
+- **El historial guarda el lugar actual con el cursor real**: al salir de un lugar con Alt+← se actualiza su línea con la del cursor, así Alt+→ vuelve adonde estabas y no adonde llegaste.
+- **Ctrl+clic ya no agrega un cursor**: se usa para ir a la definición; el multicursor queda en Alt+clic.
+- **Mientras hay un selector abierto el despachador no atiende atajos**: sólo frena los nativos (Ctrl+P y compañía). Sin eso, Ctrl+B o F8 actuaban sobre el editor que está atrás.

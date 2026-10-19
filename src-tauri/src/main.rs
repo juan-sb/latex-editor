@@ -9,6 +9,8 @@ use lv_core::error::{Error, ErrorInfo};
 use lv_core::fsio::{self, FileRead, WriteOutcome};
 use lv_core::logparse::Problem;
 use lv_core::project::{self, DirEntry};
+use lv_core::search::{ReplaceReport, SearchOptions, SearchResult};
+use lv_core::symbols::Symbols;
 use lv_core::session::{BuildAck, FileInfo, ProjectView, Published, Session, SyncForward, SyncInverse};
 use serde::Serialize;
 use std::path::PathBuf;
@@ -63,6 +65,7 @@ async fn launch_options() -> LaunchOptions {
             Some("f2") => "f2".into(),
             Some("f3") => "f3".into(),
             Some("f4") => "f4".into(),
+            Some("f5") => "f5".into(),
             _ => "f1".into(),
         },
         smoke_file: var("LV_SMOKE_FILE"),
@@ -225,6 +228,60 @@ async fn synctex_inverse(state: TauriState<'_, AppState>, profile: String, page:
     tauri::async_runtime::spawn_blocking(move || s.synctex_inverse(&profile, page, x, y)).await.map_err(|e| otro(&e.to_string()))?.map_err(|e| e.info())
 }
 
+/// Etiquetas, citas, secciones, definiciones y archivos del proyecto, con el lint.
+#[tauri::command]
+async fn get_symbols(state: TauriState<'_, AppState>) -> Res<Symbols> {
+    let s = sesion(&state)?;
+    tauri::async_runtime::spawn_blocking(move || s.symbols()).await.map_err(|e| otro(&e.to_string()))?.map_err(|e| e.info())
+}
+
+/// Búsqueda en el proyecto; con `replacement` cada coincidencia trae lo que quedaría (vista previa).
+#[tauri::command]
+async fn search_project(state: TauriState<'_, AppState>, options: SearchOptions, replacement: Option<String>) -> Res<SearchResult> {
+    let s = sesion(&state)?;
+    tauri::async_runtime::spawn_blocking(move || s.search(&options, replacement.as_deref())).await.map_err(|e| otro(&e.to_string()))?.map_err(|e| e.info())
+}
+
+/// Reemplazo en disco (conserva EOL y BOM de cada archivo). `files`: sólo esos archivos; `None`: todos los que tengan coincidencias.
+#[tauri::command]
+async fn replace_project(state: TauriState<'_, AppState>, options: SearchOptions, replacement: String, files: Option<Vec<String>>) -> Res<ReplaceReport> {
+    let s = sesion(&state)?;
+    tauri::async_runtime::spawn_blocking(move || s.replace(&options, &replacement, files.as_deref())).await.map_err(|e| otro(&e.to_string()))?.map_err(|e| e.info())
+}
+
+fn ruta_de_config(app: &AppHandle, nombre: &str) -> Res<PathBuf> {
+    if nombre.is_empty() || !nombre.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_')) || nombre.contains("..") {
+        return Err(otro("nombre de archivo de configuración inválido"));
+    }
+    // `LV_CONFIG_DIR` (sólo para los smokes y las pruebas) evita tocar la configuración real de quien corre la prueba.
+    if let Some(dir) = var("LV_CONFIG_DIR") {
+        return Ok(PathBuf::from(dir).join(nombre));
+    }
+    Ok(app.path().app_config_dir().map_err(|e| otro(&e.to_string()))?.join(nombre))
+}
+
+/// Un archivo de la configuración del usuario (por ejemplo `keybindings.json`), en el directorio de configuración de la app. `None` si no existe.
+#[tauri::command]
+async fn read_user_config(app: AppHandle, name: String) -> Res<Option<String>> {
+    let ruta = ruta_de_config(&app, &name)?;
+    match std::fs::read(&ruta) {
+        Ok(b) => Ok(Some(String::from_utf8_lossy(b.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(&b)).into_owned())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(Error::Io(format!("{}: {e}", ruta.display())).info()),
+    }
+}
+
+/// Escribe un archivo de la configuración del usuario y devuelve su ruta.
+#[tauri::command]
+async fn write_user_config(app: AppHandle, name: String, text: String) -> Res<String> {
+    let ruta = ruta_de_config(&app, &name)?;
+    if let Some(dir) = ruta.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| Error::Io(format!("{}: {e}", dir.display())).info())?;
+    }
+    std::fs::write(&ruta, text).map_err(|e| Error::Io(format!("{}: {e}", ruta.display())).info())?;
+    Ok(ruta.display().to_string())
+}
+
 #[tauri::command]
 async fn cancel_build(state: TauriState<'_, AppState>) -> Res<bool> {
     Ok(sesion(&state)?.cancel())
@@ -263,6 +320,11 @@ fn main() {
             build,
             cancel_build,
             problems,
+            get_symbols,
+            search_project,
+            replace_project,
+            read_user_config,
+            write_user_config,
             synctex_forward,
             synctex_inverse,
             publish,

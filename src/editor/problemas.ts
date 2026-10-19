@@ -11,18 +11,19 @@ class Marcador extends GutterMarker {
   constructor(
     readonly severity: Marca['severity'],
     readonly texto: string,
+    readonly lint = false,
   ) {
     super();
   }
 
   eq(otro: GutterMarker): boolean {
-    return otro instanceof Marcador && otro.severity === this.severity && otro.texto === this.texto;
+    return otro instanceof Marcador && otro.severity === this.severity && otro.texto === this.texto && otro.lint === this.lint;
   }
 
   toDOM(): Node {
     const el = document.createElement('span');
-    el.className = `lv-marca ${this.severity}`;
-    el.textContent = this.severity === 'error' ? '●' : this.severity === 'warning' ? '▲' : '○';
+    el.className = `lv-marca ${this.severity}${this.lint ? ' lint' : ''}`;
+    el.textContent = this.lint ? '◆' : this.severity === 'error' ? '●' : this.severity === 'warning' ? '▲' : '○';
     el.title = this.texto;
     return el;
   }
@@ -48,9 +49,9 @@ function construir(doc: { lines: number; line(n: number): { from: number } }, ma
   }
   for (const [l, m] of porLinea) {
     const from = doc.line(l).from;
-    decos.push({ from, value: Decoration.line({ class: `lv-linea-${m.severity}`, attributes: { title: m.message } }) });
+    decos.push({ from, value: Decoration.line({ class: `lv-linea-${m.severity}${m.lint ? ' lv-linea-lint' : ''}`, attributes: { title: m.message } }) });
     // El marcador va sólo en la primera línea del rango: un overfull de 40 líneas no llena el gutter.
-    if (l === Math.min(m.line, doc.lines)) marcadores.push({ from, value: new Marcador(m.severity, m.message) });
+    if (l === Math.min(m.line, doc.lines)) marcadores.push({ from, value: new Marcador(m.severity, m.message, m.lint) });
   }
   const orden = (a: { from: number }, b: { from: number }) => a.from - b.from;
   return {
@@ -77,6 +78,7 @@ const tema = EditorView.baseTheme({
   '.lv-marca.badbox': { color: 'var(--texto-suave)' },
   '.lv-linea-error': { backgroundImage: 'linear-gradient(var(--peligro), var(--peligro))', backgroundSize: '100% 2px', backgroundRepeat: 'no-repeat', backgroundPosition: '0 100%', backgroundColor: 'var(--fondo-error)' },
   '.lv-linea-warning': { backgroundImage: 'linear-gradient(var(--aviso), var(--aviso))', backgroundSize: '100% 1px', backgroundRepeat: 'no-repeat', backgroundPosition: '0 100%', backgroundColor: 'var(--fondo-aviso)' },
+  '.lv-linea-lint': { backgroundImage: 'none', textDecoration: 'underline dotted var(--aviso)', textUnderlineOffset: '3px' },
   '.lv-linea-badbox': { backgroundColor: 'var(--fondo-badbox)' },
 });
 

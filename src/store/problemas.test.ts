@@ -74,9 +74,9 @@ describe('marcas en el editor (CodeMirror)', () => {
     let s = estado();
     s = s.update({
       effects: setProblemas.of([
-        { severity: 'warning', line: 2, lineEnd: 2, message: 'a' },
-        { severity: 'error', line: 2, lineEnd: 2, message: 'b' },
-        { severity: 'badbox', line: 4, lineEnd: 5, message: 'c' },
+        { severity: 'warning', line: 2, lineEnd: 2, message: 'a', lint: false },
+        { severity: 'error', line: 2, lineEnd: 2, message: 'b', lint: false },
+        { severity: 'badbox', line: 4, lineEnd: 5, message: 'c', lint: false },
       ]),
     }).state;
     expect(lineasMarcadas(s)).toEqual([2, 4]);
@@ -84,7 +84,7 @@ describe('marcas en el editor (CodeMirror)', () => {
 
   it('las marcas se mueven con las ediciones: una línea nueva arriba empuja el marcador', () => {
     let s = estado();
-    s = s.update({ effects: setProblemas.of([{ severity: 'error', line: 3, lineEnd: 3, message: 'x' }]) }).state;
+    s = s.update({ effects: setProblemas.of([{ severity: 'error', line: 3, lineEnd: 3, message: 'x', lint: false }]) }).state;
     expect(lineasMarcadas(s)).toEqual([3]);
     s = s.update({ changes: { from: 0, insert: 'nueva\n' } }).state;
     expect(lineasMarcadas(s)).toEqual([4]);
@@ -93,7 +93,7 @@ describe('marcas en el editor (CodeMirror)', () => {
   });
 
   it('una línea fuera del documento (el archivo se acortó) se ajusta al final en lugar de romper', () => {
-    const s = estado().update({ effects: setProblemas.of([{ severity: 'error', line: 99, lineEnd: 99, message: 'x' }]) }).state;
+    const s = estado().update({ effects: setProblemas.of([{ severity: 'error', line: 99, lineEnd: 99, message: 'x', lint: false }]) }).state;
     expect(lineasMarcadas(s)).toEqual([s.doc.lines]);
   });
 });

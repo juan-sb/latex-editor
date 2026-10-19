@@ -8,15 +8,18 @@ import {
   type BuildEvent,
   type Eol,
   type FileInfo,
+  type InformeReemplazo,
   type Problema,
+  type ResultadoBusqueda,
+  type Simbolos,
   type SyncForward,
   type SyncInverse,
   type ProfileInfo,
   type ProjectInfo,
   type StatePatch,
 } from '../backend';
-import { cerrarTodos, editarDoc, getDoc } from '../editor/docs';
-import { BUILD_INICIAL, useApp } from './app';
+import { cerrarTodos, editarDoc, getDoc, moverCursor, textoDe } from '../editor/docs';
+import { BUILD_INICIAL, BUSQUEDA_INICIAL, useApp } from './app';
 import { logBuffer } from './logbuffer';
 import { pdfApi } from '../pdf/api';
 import { FILTRO_INICIAL } from './problemas';
@@ -91,6 +94,11 @@ function falso(archivos: Record<string, Partial<Archivo> & { text: string }>, pr
     ack: { kind: 'started', id: 1 } as BuildAck,
     problemas: [] as Problema[],
     forward: null as SyncForward | null,
+    simbolos: { labels: [], refs: [], cites: [], bib: [], sections: [], defs: [], files: [], lint: [], scan_ms: 1 } as Simbolos,
+    busqueda: { files: [], total: 0, truncated: false, files_scanned: 0, ms: 1 } as ResultadoBusqueda,
+    buscar: null as null | (() => Promise<ResultadoBusqueda>),
+    reemplazo: { changed: [], skipped: [], total: 0 } as InformeReemplazo,
+    config: {} as Record<string, string>,
     inverse: null as SyncInverse | null,
   };
   const vista = (o: Partial<ProjectInfo> = {}) => infoDe({ ...proyecto, state: { ...estado }, ...o });
@@ -154,6 +162,20 @@ function falso(archivos: Record<string, Partial<Archivo> & { text: string }>, pr
       llamadas.push(`forward ${rel}:${line}`);
       return control.forward;
     },
+    getSymbols: async () => control.simbolos,
+    searchProject: async (o, r) => {
+      llamadas.push(`buscar ${o.query}${r !== undefined ? ` -> ${r}` : ''}`);
+      return control.buscar ? control.buscar() : control.busqueda;
+    },
+    replaceProject: async (o, r, files) => {
+      llamadas.push(`reemplazar ${o.query} -> ${r} en ${files ? files.join(',') : 'todos'}`);
+      return control.reemplazo;
+    },
+    readUserConfig: async (n) => control.config[n] ?? null,
+    writeUserConfig: async (n, t) => {
+      control.config[n] = t;
+      return `C:/cfg/${n}`;
+    },
     synctexInverse: async (perfil, page, x, y) => {
       llamadas.push(`inverse ${perfil} ${page} ${Math.round(x)},${Math.round(y)}`);
       return control.inverse;
@@ -200,6 +222,11 @@ beforeEach(() => {
     problemaIdx: -1,
     panelInferior: 'log',
     irA: null,
+    simbolos: null,
+    quick: null,
+    historial: [],
+    histIdx: -1,
+    busqueda: BUSQUEDA_INICIAL,
     notice: null,
     dialog: null,
   });
@@ -1052,5 +1079,203 @@ describe('SyncTeX', () => {
     expect(v.some((x) => x.startsWith('resaltar'))).toBe(false);
     expect(v).toContain('mostrar 1');
     expect(st().notice).toBeNull();
+  });
+});
+
+describe('navegación y búsqueda (F5)', () => {
+  const simbolos = (o: Partial<Simbolos> = {}): Simbolos => ({
+    labels: [{ name: 'sec:x', file: 'b.tex', line: 2, context: 'Un título' }],
+    refs: [{ name: 'sec:x', command: 'ref', file: 'a.tex', line: 1 }],
+    cites: [],
+    bib: [],
+    sections: [
+      { level: 1, title: 'Uno', file: 'a.tex', line: 1, label: null },
+      { level: 2, title: 'Dos', file: 'b.tex', line: 2, label: 'sec:x' },
+    ],
+    defs: [],
+    files: [
+      { rel: 'a.tex', kind: 'tex' },
+      { rel: 'b.tex', kind: 'tex' },
+      { rel: 'refs.bib', kind: 'bib' },
+      { rel: 'fig.png', kind: 'image' },
+    ],
+    lint: [],
+    scan_ms: 1,
+    ...o,
+  });
+  const dosArchivos = () => falso({ 'a.tex': { text: 'Ver \\ref{sec:x} aquí\n' }, 'b.tex': { text: 'x\n\\section{Dos}\\label{sec:x}\n' }, 'refs.bib': { text: '@book{k,}\n' } });
+
+  it('irAUbicacion abre el archivo, pide ir a la línea y recuerda el origen; Alt+← y Alt+→ recorren el historial', async () => {
+    dosArchivos();
+    await st().abrirArchivo('a.tex');
+    await st().irAUbicacion('b.tex', 2);
+    expect(st().activeRel).toBe('b.tex');
+    expect(st().irA).toMatchObject({ rel: 'b.tex', line: 2 });
+    expect(st().historial.map((u) => `${u.rel}:${u.line}`)).toEqual(['a.tex:1', 'b.tex:2']);
+    // En la app el editor lleva el cursor a la línea pedida; acá no hay vista, se lo mueve a mano.
+    moverCursor('b.tex', 2);
+    await st().atras();
+    expect(st().activeRel).toBe('a.tex');
+    expect(st().irA).toMatchObject({ rel: 'a.tex', line: 1 });
+    await st().adelante();
+    expect(st().activeRel).toBe('b.tex');
+    expect(st().irA).toMatchObject({ rel: 'b.tex', line: 2 });
+  });
+
+  it('sin lugar anterior o siguiente avisa y no mueve nada', async () => {
+    dosArchivos();
+    await st().abrirArchivo('a.tex');
+    await st().atras();
+    expect(st().notice?.texto).toMatch(/anterior/);
+    await st().adelante();
+    expect(st().notice?.texto).toMatch(/siguiente/);
+    expect(st().activeRel).toBe('a.tex');
+  });
+
+  it('un salto nuevo después de volver descarta lo que había "adelante"', async () => {
+    dosArchivos();
+    await st().abrirArchivo('a.tex');
+    await st().irAUbicacion('b.tex', 2);
+    await st().atras();
+    await st().irAUbicacion('refs.bib', 1);
+    expect(st().historial.map((u) => u.rel)).toEqual(['a.tex', 'refs.bib']);
+    await st().adelante();
+    expect(st().notice?.texto).toMatch(/siguiente/);
+  });
+
+  it('F12 sobre un \\ref va a su \\label; sobre algo sin definición avisa', async () => {
+    const f = dosArchivos();
+    f.control.simbolos = simbolos();
+    await st().abrirArchivo('a.tex');
+    moverCursor('a.tex', 'Ver \\ref{sec'.length);
+    await st().irADefinicion();
+    expect(st().activeRel).toBe('b.tex');
+    expect(st().irA).toMatchObject({ rel: 'b.tex', line: 2 });
+    await st().activar('a.tex');
+    moverCursor('a.tex', 1);
+    await st().irADefinicion();
+    expect(st().notice?.texto).toMatch(/nada con definición/);
+  });
+
+  it('abrir archivo rápido lista los .tex y .bib (no las imágenes) con los abiertos primero', async () => {
+    const f = dosArchivos();
+    f.control.simbolos = simbolos();
+    await st().abrirArchivo('b.tex');
+    await st().cargarSimbolos();
+    await st().abrirArchivoRapido();
+    const q = st().quick!;
+    expect(q.items.map((i) => i.id)).toEqual(['b.tex', 'a.tex', 'refs.bib']);
+    expect(q.items[0].detalle).toBe('abierto');
+    await q.items[2].ejecutar();
+    expect(st().activeRel).toBe('refs.bib');
+  });
+
+  it('ir a sección: del archivo sólo las suyas; del proyecto, todas con sus etiquetas', async () => {
+    const f = dosArchivos();
+    f.control.simbolos = simbolos();
+    await st().abrirArchivo('b.tex');
+    await st().irASeccion('archivo');
+    expect(st().quick!.items.map((i) => i.titulo.trim())).toEqual(['§ Dos', '⚑ sec:x']);
+    await st().irASeccion('proyecto');
+    expect(st().quick!.items).toHaveLength(3);
+  });
+
+  it('la pestaña siguiente da la vuelta en los dos sentidos', async () => {
+    dosArchivos();
+    await st().abrirArchivo('a.tex');
+    await st().abrirArchivo('b.tex');
+    await st().abrirArchivo('refs.bib');
+    st().pestanaSiguiente(1);
+    expect(st().activeRel).toBe('a.tex');
+    st().pestanaSiguiente(-1);
+    expect(st().activeRel).toBe('refs.bib');
+  });
+
+  it('el lint entra en la lista de problemas que recorre F8, y con la casilla apagada no', async () => {
+    const f = dosArchivos();
+    f.control.simbolos = simbolos({
+      lint: [{ severity: 'warning', kind: 'lint-ref', message: 'sin etiqueta', file: 'a.tex', line: 1, line_end: null, context: '' }],
+    });
+    await st().cargarSimbolos();
+    await st().saltarProblema(1);
+    expect(st().activeRel).toBe('a.tex');
+    expect(st().problemaIdx).toBe(0);
+    st().setFiltro({ lint: false });
+    st().cerrarTab('a.tex');
+    await st().saltarProblema(1);
+    expect(st().activeRel).not.toBe('a.tex');
+  });
+
+  it('una búsqueda lenta no pisa el resultado de una más nueva', async () => {
+    const f = dosArchivos();
+    const resultado = (total: number): ResultadoBusqueda => ({ files: [], total, truncated: false, files_scanned: 1, ms: 1 });
+    let soltar: () => void = () => {};
+    const primera = new Promise<void>((r) => (soltar = r));
+    let n = 0;
+    f.control.buscar = async () => {
+      n++;
+      if (n === 1) {
+        await primera;
+        return resultado(1);
+      }
+      return resultado(2);
+    };
+    st().setBusqueda({ query: 'a' });
+    const lenta = st().ejecutarBusqueda();
+    st().setBusqueda({ query: 'ab' });
+    await st().ejecutarBusqueda();
+    soltar();
+    await lenta;
+    expect(st().busqueda.resultado?.total).toBe(2);
+    expect(st().busqueda.buscando).toBe(false);
+  });
+
+  it('reemplazar: confirma, guarda lo modificado antes, reemplaza en los archivos pedidos y relee las pestañas abiertas', async () => {
+    const f = dosArchivos();
+    f.control.busqueda = {
+      files: [{ file: 'a.tex', matches: [{ line: 1, col: 0, len: 3, text: 'Ver', offset: 0, replaced: 'Mirar' }] }],
+      total: 1,
+      truncated: false,
+      files_scanned: 2,
+      ms: 1,
+    };
+    f.control.reemplazo = { changed: [['a.tex', 1]], skipped: [], total: 1 };
+    await st().abrirArchivo('a.tex');
+    editarDoc('a.tex', { from: 0, insert: '% ' });
+    st().setBusqueda({ query: 'Ver', reemplazo: 'Mirar', conReemplazo: true });
+    await st().ejecutarBusqueda();
+    f.llamadas.length = 0;
+    const p = st().reemplazarTodo();
+    await vi.waitFor(() => expect(st().dialog).not.toBeNull());
+    expect(st().dialog!.detalle).toMatch(/sin guardar/);
+    st().responderDialogo('reemplazar');
+    await p;
+    // Se guarda antes de tocar el disco, se reemplaza sólo en a.tex y se vuelve a leer la pestaña.
+    const orden = f.llamadas.filter((l) => /^(write|reemplazar|read) /.test(l));
+    expect(orden).toEqual(['write a.tex', 'reemplazar Ver -> Mirar en a.tex', 'read a.tex']);
+    expect(tab('a.tex').dirty).toBe(false);
+  });
+
+  it('cancelar la confirmación no toca nada', async () => {
+    const f = dosArchivos();
+    f.control.busqueda = { files: [{ file: 'a.tex', matches: [{ line: 1, col: 0, len: 3, text: 'Ver', offset: 0, replaced: null }] }], total: 1, truncated: false, files_scanned: 1, ms: 1 };
+    st().setBusqueda({ query: 'Ver', reemplazo: 'X', conReemplazo: true });
+    await st().ejecutarBusqueda();
+    f.llamadas.length = 0;
+    const p = st().reemplazarTodo();
+    await vi.waitFor(() => expect(st().dialog).not.toBeNull());
+    st().responderDialogo('cancelar');
+    await p;
+    expect(f.llamadas.some((l) => l.startsWith('reemplazar'))).toBe(false);
+  });
+
+  it('lo que el core reemplazó en un archivo abierto se relee del disco', async () => {
+    const f = dosArchivos();
+    await st().abrirArchivo('a.tex');
+    f.disco.get('a.tex')!.text = 'Mirar \\ref{sec:x} aquí\n';
+    f.disco.get('a.tex')!.version = 'v9';
+    await st().recargarPestana('a.tex');
+    expect(textoDe('a.tex')).toBe('Mirar \\ref{sec:x} aquí\n');
+    expect(tab('a.tex').epoch).toBe(1);
   });
 });

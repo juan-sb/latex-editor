@@ -30,7 +30,7 @@ export const tauriBackend: Backend = {
       open: string | null;
       root: string | null;
       smoke: boolean;
-      smoke_mode: 'f1' | 'f2' | 'f3' | 'f4';
+      smoke_mode: 'f1' | 'f2' | 'f3' | 'f4' | 'f5';
       smoke_file: string | null;
       smoke_pausa_ms: number;
     }>('launch_options');
@@ -55,6 +55,11 @@ export const tauriBackend: Backend = {
   problems: (profile) => llamar('problems', { profile }),
   synctexForward: (rel, line) => llamar('synctex_forward', { rel, line }),
   synctexInverse: (profile, page, x, y) => llamar('synctex_inverse', { profile, page, x, y }),
+  getSymbols: () => llamar('get_symbols'),
+  searchProject: (options, replacement) => llamar('search_project', { options, replacement: replacement ?? null }),
+  replaceProject: (options, replacement, files) => llamar('replace_project', { options, replacement, files: files ?? null }),
+  readUserConfig: (name) => llamar('read_user_config', { name }),
+  writeUserConfig: (name, text) => llamar('write_user_config', { name, text }),
   publish: (profile) => llamar('publish', { profile }),
   async onBuildEvent(cb) {
     const nombres = ['build:queued', 'build:started', 'build:log', 'build:finished', 'build:error'];

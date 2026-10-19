@@ -11,5 +11,7 @@ pub mod graph;
 pub mod logparse;
 pub mod procs;
 pub mod project;
+pub mod search;
 pub mod session;
+pub mod symbols;
 pub mod synctex;

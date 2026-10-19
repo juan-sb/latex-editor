@@ -73,6 +73,8 @@ export async function correrSmokeF3(opts: LaunchOptions): Promise<void> {
     await paso('proyecto abierto en modo manual', async () => {
       if (!store().project || store().rootFile !== 'main.tex') throw new Error(`proyecto/raíz inesperados: ${store().rootFile}`);
       await store().setAutoCompile('manual');
+      // Este smoke prueba los problemas del build: el lint (F5) tiene el suyo y sumaría filas, marcas y saltos de F8.
+      store().setFiltro({ lint: false });
     });
 
     await paso('el build falla y el conteo es el del log: 2 errores, 5 avisos, 1 caja mal llena', async () => {
@@ -89,8 +91,8 @@ export async function correrSmokeF3(opts: LaunchOptions): Promise<void> {
       if (store().panelInferior !== 'problemas') throw new Error('el panel no se abrió');
       await esperarHasta(() => store().problems.length > 0, 10_000, 'la lista de problemas');
       if (store().problems.length !== 8) throw new Error(`${store().problems.length} problemas en total`);
-      const filas = document.querySelectorAll('.problema').length;
-      if (filas !== 7) throw new Error(`${filas} filas visibles (se esperaban 7: 2 errores y 5 avisos)`);
+      const filas = document.querySelectorAll('.problema:not(.lint)').length;
+      if (filas !== 7) throw new Error(`${filas} filas visibles (se esperaban 7 sin contar el lint: 2 errores y 5 avisos)`);
       if (!document.querySelector('.problemas-resumen')?.textContent?.includes('2 errores')) throw new Error('falta el resumen en la barra superior');
       detalle(document.querySelector('.problemas-resumen')?.textContent ?? '');
     });

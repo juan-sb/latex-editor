@@ -83,7 +83,7 @@ pub struct ProjectIndex {
 // --- lectura de los comandos -------------------------------------------------------------------------------------------
 
 /// Texto sin lo que sigue a un `%` que no esté escapado (`\%` es un porcentaje; `\\%` es salto de línea y comentario).
-fn sin_comentario(linea: &str) -> &str {
+pub(crate) fn sin_comentario(linea: &str) -> &str {
     let mut barras = 0;
     for (i, c) in linea.char_indices() {
         if c == '\\' {

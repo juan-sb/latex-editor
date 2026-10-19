@@ -7,6 +7,7 @@ import { highlightSelectionMatches, search, searchKeymap } from '@codemirror/sea
 import { EditorState, type Extension } from '@codemirror/state';
 import { drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers } from '@codemirror/view';
 import { tags as t } from '@lezer/highlight';
+import { extensionAutocompletar, type FuenteDeSimbolos } from './autocompletar';
 import { extensionProblemas } from './problemas';
 
 /**
@@ -40,6 +41,33 @@ const tema = EditorView.theme({
   '.cm-searchMatch': { backgroundColor: 'var(--ed-busqueda)' },
 });
 
+// El editor no importa el store (el store importa el editor): lo que necesita de él entra por estos ganchos.
+let fuenteSimbolos: FuenteDeSimbolos = () => null;
+let alClicDefinicion: () => void = () => {};
+
+/** De dónde saca el autocompletado el índice del proyecto. */
+export function setFuenteSimbolos(f: FuenteDeSimbolos): void {
+  fuenteSimbolos = f;
+}
+
+/** Qué hace Ctrl+clic (ir a la definición de lo que hay bajo el cursor). */
+export function setManejadorDefinicion(f: () => void): void {
+  alClicDefinicion = f;
+}
+
+/** Ctrl+clic: CodeMirror lo usa para agregar un cursor; acá es "ir a la definición" (el multicursor sigue con Alt+clic). */
+const ctrlClic = EditorView.domEventHandlers({
+  mousedown(e, view) {
+    if (e.button !== 0 || !(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return false;
+    const pos = view.posAtCoords({ x: e.clientX, y: e.clientY });
+    if (pos === null) return false;
+    e.preventDefault();
+    view.dispatch({ selection: { anchor: pos } });
+    alClicDefinicion();
+    return true;
+  },
+});
+
 /** Soft wrap por defecto: cada párrafo del libro es una sola línea de hasta ~500 caracteres. */
 export function extensionesBase(): Extension[] {
   return [
@@ -59,6 +87,8 @@ export function extensionesBase(): Extension[] {
     syntaxHighlighting(resaltado),
     keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap]),
     extensionProblemas(),
+    extensionAutocompletar(() => fuenteSimbolos()),
+    ctrlClic,
     tema,
   ];
 }
