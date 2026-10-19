@@ -32,6 +32,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 mod bake;
+mod export;
 pub use bake::{Cocinando, ErrorFigura, FiglistView, FiguraView, FiguresStatus};
 
 // --- lo que ve la interfaz ----------------------------------------------------------------------------------------------
@@ -74,6 +75,8 @@ pub struct ConfigView {
     pub variables: Vec<VariableView>,
     /// Dónde se publica, si el proyecto lo dice.
     pub publish_dir: Option<String>,
+    /// Dónde van los PDF de las partes exportadas (`export.dir`, `export/` por defecto).
+    pub export_dir: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -160,6 +163,8 @@ pub struct Session {
     /// Lo que lanza las subcompilaciones de la cocción de figuras (los tests le ponen un motor falso).
     cocinero: Cocinero,
     bake: bake::EstadoBake,
+    /// La exportación en curso (`session/export.rs`).
+    export: export::EstadoExport,
     /// Las partes que la interfaz vio por última vez (`view`/`refresh`): `file_info` avisa cuando ya no coinciden.
     partes_vistas: Mutex<Vec<String>>,
     /// Los problemas del último build de cada perfil (`logparse`), para que la interfaz los pida sin releer el log.
@@ -168,12 +173,16 @@ pub struct Session {
     synctex: Mutex<std::collections::HashMap<String, (std::time::SystemTime, Arc<Synctex>)>>,
 }
 
-/// Un trabajo de la cola. En F6 se suma `Bake` (cocción de figuras); en F7, `Export` y `Fragment`.
+/// Un trabajo de la cola: un build, la cocción de figuras (F6), la exportación de partes y la vista previa de un fragmento (F7).
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Job {
     Build { perfil: String },
     /// La cocción de figuras en paralelo (`session/bake.rs`).
     Bake(bake::BakeJob),
+    /// Exportar partes a PDF sueltos (`session/export.rs`).
+    Export(export::ExportJob),
+    /// La vista previa de un fragmento (`session/export.rs`).
+    Fragment(export::FragmentJob),
 }
 
 impl Trabajo for Job {
@@ -181,8 +190,23 @@ impl Trabajo for Job {
         match self {
             Job::Build { .. } => Clase::Build,
             Job::Bake(_) => Clase::Bake,
+            Job::Export(_) => Clase::Export,
+            Job::Fragment(_) => Clase::Fragment,
         }
     }
+}
+
+/// Lo que cambia de un build de servicio (exportación y fragmento) respecto de uno normal.
+#[derive(Debug, Clone, Default)]
+struct PlanExtra {
+    /// Las partes que entran, en lugar de las del perfil (una parte por exportación; ninguna en un fragmento).
+    partes: Option<Vec<String>>,
+    /// El texto del fragmento: se escribe en `.lv/fragment/frag.tex` justo antes de compilar.
+    fragmento: Option<String>,
+}
+
+fn es_de_servicio(perfil: &str) -> bool {
+    perfil == config::PERFIL_EXPORT || perfil == config::PERFIL_FRAGMENTO
 }
 
 /// Todo lo que hace falta para lanzar un build, resuelto bajo el candado de los datos.
@@ -195,6 +219,8 @@ struct Plan {
     dirs: BTreeSet<String>,
     /// Lo que las figuras leen desde adentro de su `tikzpicture`, si el perfil externaliza (`None`: no hay nada que invalidar).
     datos_de_figuras: Option<Vec<figcache::DatoDeFigura>>,
+    /// El fragmento de la vista previa, a escribir antes de compilar.
+    fragmento: Option<String>,
 }
 
 fn otro(m: impl Into<String>) -> Error {
@@ -244,6 +270,7 @@ impl Session {
             cola: Cola::new(),
             cocinero,
             bake: bake::EstadoBake::nuevo(),
+            export: export::EstadoExport::nuevo(),
             partes_vistas: Mutex::new(vec![]),
             problemas: Mutex::new(Default::default()),
             synctex: Mutex::new(Default::default()),
@@ -326,6 +353,7 @@ impl Session {
                 })
                 .collect(),
             publish_dir: c.publish.as_ref().map(|p| p.dir.clone()),
+            export_dir: c.export_cfg().dir,
         });
         ProjectView {
             name: self.name.clone(),
@@ -477,14 +505,28 @@ impl Session {
     // --- compilar -------------------------------------------------------------------------------------------------------
 
     fn plan(&self, perfil: &str, retry: bool) -> Result<Plan> {
+        self.plan_con(perfil, retry, &PlanExtra::default())
+    }
+
+    fn plan_con(&self, perfil: &str, retry: bool, extra: &PlanExtra) -> Result<Plan> {
         let mut d = self.lock()?;
         let rf = d.root_file.clone().ok_or_else(|| otro("elegí primero la raíz del documento"))?;
         let cfg = d.config.clone().ok_or_else(|| otro("no hay configuración"))?;
-        let pc = cfg.profiles.get(perfil).ok_or_else(|| otro(format!("no existe el perfil {perfil:?}")))?.clone();
+        let pc = if es_de_servicio(perfil) {
+            cfg.perfil_de_servicio(perfil)
+        } else {
+            cfg.profiles.get(perfil).ok_or_else(|| otro(format!("no existe el perfil {perfil:?}")))?.clone()
+        };
         // El índice se rehace acá: acaban de guardar y el pedido tiene que ver lo que hay en disco.
         let ix = ProjectIndex::build(&self.root, &rf, &cfg.parts.commands);
         let nombres = ix.part_names();
-        let includeonly = match pc.parts {
+        let includeonly = if let Some(partes) = &extra.partes {
+            if let Some(mala) = partes.iter().find(|p| !nombres.contains(p)) {
+                return Err(otro(format!("{mala:?} no es una parte del proyecto")));
+            }
+            Some(partes.clone())
+        } else {
+            match pc.parts {
             PartsSel::All => None,
             PartsSel::Selection => {
                 if nombres.is_empty() {
@@ -499,6 +541,7 @@ impl Session {
                 Some(sel)
             }
             PartsSel::One => return Err(otro(format!("el perfil {perfil:?} es de exportación: se lanza desde Exportar"))),
+            }
         };
         let mut flags = Vec::new();
         if pc.partial {
@@ -519,7 +562,12 @@ impl Session {
             )
         });
         // En el modo `app` el driver de un perfil que externaliza lleva la externalización de figuras.
-        let figuras = if pc.externalize { self.inyeccion_de_figuras(&cfg, &ix, false)? } else { None };
+        let mut figuras = if pc.externalize { self.inyeccion_de_figuras(&cfg, &ix, false)? } else { None };
+        if let (Some(f), true) = (&mut figuras, extra.fragmento.is_some()) {
+            // Las figuras de un fragmento llevan su propio slug: con el de la parte que se está editando pisarían, en el cache
+            // compartido, las figuras del capítulo (el índice dentro del fragmento no es el del capítulo).
+            f.slugs.push((crate::build::FRAGMENTO_REL.to_string(), "frag".to_string()));
+        }
         let driver = render_driver_spec(&DriverSpec {
             perfil: perfil.to_string(),
             root_rel: rf.clone(),
@@ -530,12 +578,14 @@ impl Session {
             draft_images: pc.draft_images,
             figuras,
             solo_cache: pc.externalize && pc.cache_only,
+            fragmento: extra.fragmento.is_some(),
         })?;
         let dirs = ix.include_dirs(&cfg.parts.commands);
         let datos_de_figuras = (pc.externalize && figcache::FigureCfg::de(&cfg).modo != figcache::Modo::Off).then(|| self.datos_de_figuras(&cfg, &ix));
         d.index = Some(ix);
         Ok(Plan {
             datos_de_figuras,
+            fragmento: extra.fragmento.clone(),
             spec: RunSpec { perfil: perfil.to_string(), root_rel: rf, driver, engine: cfg.engine.clone(), shell_escape: pc.externalize && !pc.cache_only, retry },
             cache_dir: cfg.figure_dir(),
             clean: pc.clean_before,
@@ -559,11 +609,22 @@ impl Session {
         match trabajo {
             Job::Build { perfil } => self.lanzar(perfil, retry),
             Job::Bake(b) => self.lanzar_bake(b),
+            Job::Export(e) => self.lanzar_export(e),
+            Job::Fragment(f) => self.lanzar_fragmento(f),
         }
     }
 
     fn lanzar(self: &Arc<Self>, perfil: &str, retry: bool) -> Result<u64> {
         let plan = self.plan(perfil, retry)?;
+        // Las figuras que lance este build se verifican contra este instante: su PDF tiene que ser posterior.
+        let desde = std::time::SystemTime::now();
+        let sink = self.envolver(perfil.to_string(), plan.cache_dir.clone(), retry, desde);
+        self.lanzar_con(plan, perfil, sink)
+    }
+
+    /// Lanza latexmk con un plan ya armado. Lo que hay que preparar antes (limpiar o sembrar auxiliares, el fragmento) va DENTRO
+    /// de `start_with`: después de comprobar que no hay otro build.
+    fn lanzar_con(self: &Arc<Self>, plan: Plan, perfil: &str, sink: Sink) -> Result<u64> {
         let root = self.root.clone();
         let nombre = perfil.to_string();
         let antes = {
@@ -583,13 +644,16 @@ impl Session {
                 if let Some((excluidas, fuentes)) = &plan.seed {
                     aux::seed(root, nombre, excluidas, fuentes)?;
                 }
+                if let Some(texto) = &plan.fragmento {
+                    // Antes del texto, el slug de las figuras del fragmento (en el modo `app` lo pone el driver).
+                    let rel = crate::build::FRAGMENTO_REL;
+                    let contenido = format!("\\ifdefined\\FigurasDe\\FigurasDe{{frag}}\\fi\n{texto}\n");
+                    crate::build::write_if_changed(&root.join(rel), &contenido)?;
+                }
                 // Sospechoso hasta que el build salga bien: sobrevive a un cierre brusco de la app.
                 aux::mark_suspect(root, nombre)
             }
         };
-        // Las figuras que lance este build se verifican contra este instante: su PDF tiene que ser posterior.
-        let desde = std::time::SystemTime::now();
-        let sink = self.envolver(perfil.to_string(), plan.cache_dir.clone(), retry, desde);
         self.builder.start_with(&self.root, &plan.spec, sink, &antes)
     }
 
@@ -602,22 +666,42 @@ impl Session {
         })
     }
 
-    fn al_terminar(self: &Arc<Self>, ev: BuildEvent, perfil: &str, cache_dir: &str, retry: bool, desde: std::time::SystemTime) {
-        let mut ev = ev;
-        let BuildEvent::Finished { id, ok, cancelled, truncated_aux, figuras, .. } = &ev else { return };
-        let (id, ok, cancelled, truncated_aux) = (*id, *ok, *cancelled, *truncated_aux);
-        // Primero se verifican las figuras que pgf lanzó (7 del plan, "Figuras que fallan o se cortan"): pgf escribe su `.md5`
-        // antes de subcompilar, así que una que falló o se cortó no puede pasar al cache compartido. Se hace también antes
-        // del reintento por `.aux` truncado: el reintento vería ese `.md5` y daría la figura por buena.
-        let rotas = figures::verificar(&self.root, perfil, figuras, desde, cancelled);
+    /// Lo que hay que hacer con las figuras después de cualquier build (7 del plan, "Figuras que fallan o se cortan"): se verifican
+    /// las que pgf lanzó (pgf escribe su `.md5` antes de subcompilar, así que una que falló o se cortó no puede pasar al cache
+    /// compartido), se mueven los `.md5` y, si salió todo bien, el perfil deja de ser sospechoso.
+    fn verificar_build(&self, ev: &BuildEvent, perfil: &str, cache_dir: &str, desde: std::time::SystemTime) -> Vec<figures::FiguraRota> {
+        let BuildEvent::Finished { ok, cancelled, figuras, .. } = ev else { return vec![] };
+        let rotas = figures::verificar(&self.root, perfil, figuras, desde, *cancelled);
         self.registrar_rotas(figuras, &rotas);
         figures::quitar_residuos_de_subcompilacion(&self.root, &format!("lv-{perfil}"));
         aux::move_md5(&self.root, perfil, cache_dir);
         // Con una figura rota el PDF lleva una imagen vieja (o ninguna): sigue sospechoso, no se publica ni se siembra.
-        if ok && rotas.is_empty() {
+        if *ok && rotas.is_empty() {
             aux::clear_suspect(&self.root, perfil);
         }
-        if !ok && truncated_aux && !cancelled && !retry {
+        rotas
+    }
+
+    /// Los problemas del log se leen una vez por build y viajan resumidos en el `Finished`; la lista la pide la interfaz.
+    fn cerrar_problemas(&self, ev: &mut BuildEvent, perfil: &str, rotas: Vec<figures::FiguraRota>) {
+        let mut encontrados = logparse::problems_of_profile(&self.root, perfil);
+        encontrados.extend(rotas.into_iter().flat_map(|f| f.problemas));
+        if let BuildEvent::Finished { errors, warnings, badboxes, .. } = ev {
+            let c = logparse::count(&encontrados);
+            (*errors, *warnings, *badboxes) = (c.errors, c.warnings, c.badboxes);
+        }
+        if let Ok(mut m) = self.problemas.lock() {
+            m.insert(perfil.to_string(), encontrados);
+        }
+    }
+
+    fn al_terminar(self: &Arc<Self>, ev: BuildEvent, perfil: &str, cache_dir: &str, retry: bool, desde: std::time::SystemTime) {
+        let mut ev = ev;
+        let BuildEvent::Finished { id, ok, cancelled, truncated_aux, .. } = &ev else { return };
+        let (id, ok, cancelled, truncated_aux) = (*id, *ok, *cancelled, *truncated_aux);
+        // Primero las figuras: también antes del reintento por `.aux` truncado, que vería un `.md5` de una figura rota y la daría por buena.
+        let rotas = self.verificar_build(&ev, perfil, cache_dir, desde);
+        if !ok && truncated_aux && !cancelled && !retry && !es_de_servicio(perfil) {
             (self.sink)(BuildEvent::Log {
                 id,
                 text: format!("\n== .aux truncado en el perfil «{perfil}»: borro sus auxiliares y reintento una vez\n"),
@@ -629,16 +713,7 @@ impl Session {
                 Err(e) => (self.sink)(BuildEvent::Error { message: format!("no se pudo reintentar: {e}") }),
             }
         }
-        // Los problemas del log se leen una vez por build y viajan resumidos en el `Finished`; la lista la pide la interfaz.
-        let mut encontrados = logparse::problems_of_profile(&self.root, perfil);
-        encontrados.extend(rotas.into_iter().flat_map(|f| f.problemas));
-        if let BuildEvent::Finished { errors, warnings, badboxes, .. } = &mut ev {
-            let c = logparse::count(&encontrados);
-            (*errors, *warnings, *badboxes) = (c.errors, c.warnings, c.badboxes);
-        }
-        if let Ok(mut m) = self.problemas.lock() {
-            m.insert(perfil.to_string(), encontrados);
-        }
+        self.cerrar_problemas(&mut ev, perfil, rotas);
         // El ejecutor se libera antes de avisar que terminó: quien mira `is_building` después del aviso ve la verdad.
         let siguiente = self.cola.liberar();
         (self.sink)(ev);
@@ -664,6 +739,8 @@ impl Session {
                     let cual = match &trabajo {
                         Job::Build { perfil } => format!("el build pendiente ({perfil})"),
                         Job::Bake(_) => "la cocción de figuras pendiente".to_string(),
+                        Job::Export(_) => "la exportación pendiente".to_string(),
+                        Job::Fragment(_) => "la vista previa del fragmento pendiente".to_string(),
                     };
                     (self.sink)(BuildEvent::Error { message: format!("no se pudo lanzar {cual}: {e}") });
                     actual = self.cola.liberar();
@@ -680,9 +757,11 @@ impl Session {
     /// Cancela el trabajo en curso y descarta los pendientes. Devuelve si había algo corriendo.
     pub fn cancel(&self) -> bool {
         self.cola.descartar();
+        // Una exportación hace varios builds seguidos: se avisa antes de matar el que corre, para que no lance el que sigue.
+        let hay_export = self.cancelar_export();
         let hay_build = self.builder.cancel();
         // Si lo que corre es una cocción de figuras, se la mata a ella (y a sus subcompilaciones).
-        self.cancelar_bake() || hay_build
+        self.cancelar_bake() || hay_build || hay_export
     }
 
     // --- símbolos, búsqueda y reemplazo -----------------------------------------------------------------------------------------

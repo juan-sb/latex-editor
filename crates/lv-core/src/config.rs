@@ -157,6 +157,64 @@ pub struct ProjectConfig {
     pub extra: Map<String, Value>,
 }
 
+/// Los perfiles de servicio de la app: el que compila cada parte en una exportación y el de la vista previa de un fragmento. Si el
+/// proyecto no los define en `profiles`, la app los arma (ocultos); si los define, vale lo que dice.
+pub const PERFIL_EXPORT: &str = "export";
+pub const PERFIL_FRAGMENTO: &str = "fragmento";
+
+/// `export` de `latexviewer.json` (8.1 del plan): dónde van los PDF de las partes y cómo se llaman.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExportCfg {
+    /// Relativa a la raíz; puede salir de ella (`../PDF/Capítulos`): es una decisión explícita del proyecto, como `publish.dir`.
+    pub dir: String,
+    /// `{num}` (número impreso del capítulo), `{num:02}` (con ceros a la izquierda) y `{name}` (el nombre de la parte).
+    pub pattern: String,
+}
+
+pub const PATRON_DE_EXPORTACION: &str = "{num:02} - {name}.pdf";
+
+/// El nombre de un PDF exportado: el patrón con el número y el nombre de la parte. Sin caracteres que Windows no admita en un
+/// nombre de archivo, y siempre con `.pdf`.
+pub fn nombre_de_exportacion(patron: &str, num: &str, nombre: &str) -> String {
+    let limpio = |t: &str| -> String {
+        let s: String = t.chars().map(|c| if matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') || c.is_control() { '-' } else { c }).collect();
+        s.trim().trim_end_matches('.').to_string()
+    };
+    let mut out = String::new();
+    let mut resto = patron;
+    while let Some(i) = resto.find('{') {
+        out.push_str(&resto[..i]);
+        let Some(j) = resto[i..].find('}') else {
+            out.push_str(&resto[i..]);
+            resto = "";
+            break;
+        };
+        let campo = &resto[i + 1..i + j];
+        match campo {
+            "name" => out.push_str(&limpio(nombre)),
+            "num" => out.push_str(&limpio(num)),
+            c if c.starts_with("num:0") && c[5..].parse::<usize>().is_ok() => {
+                let ancho: usize = c[5..].parse().unwrap_or(0);
+                let n = limpio(num);
+                if n.chars().all(|ch| ch.is_ascii_digit()) {
+                    out.push_str(&format!("{n:0>ancho$}"));
+                } else {
+                    out.push_str(&n);
+                }
+            }
+            otro => out.push_str(&format!("{{{otro}}}")),
+        }
+        resto = &resto[i + j + 1..];
+    }
+    out.push_str(resto);
+    let out = out.trim().to_string();
+    if out.to_lowercase().ends_with(".pdf") {
+        out
+    } else {
+        format!("{out}.pdf")
+    }
+}
+
 /// Nombre de macro de TeX que se puede escribir como `\def\Nombre`.
 pub fn macro_valida(n: &str) -> bool {
     !n.is_empty() && n.chars().all(|c| c.is_ascii_alphabetic() || c == '@')
@@ -205,6 +263,34 @@ impl ProjectConfig {
             .filter(|d| !d.is_empty() && !d.starts_with('/') && !d.contains("..") && !d.contains(':'))
             .map(|d| d.replace('\\', "/").trim_matches('/').to_string())
             .unwrap_or_else(|| "figuras-cache".into())
+    }
+
+    /// `export` con sus valores por defecto: `export/` en la raíz y `{num:02} - {name}.pdf`.
+    pub fn export_cfg(&self) -> ExportCfg {
+        let v = self.export.as_ref();
+        let texto = |k: &str| v.and_then(|v| v.get(k)).and_then(|x| x.as_str()).filter(|t| !t.trim().is_empty());
+        ExportCfg {
+            dir: texto("dir").map(|d| d.replace('\\', "/").trim_end_matches('/').to_string()).unwrap_or_else(|| "export".into()),
+            pattern: texto("pattern").unwrap_or(PATRON_DE_EXPORTACION).to_string(),
+        }
+    }
+
+    /// El perfil de servicio `id` (`PERFIL_EXPORT` o `PERFIL_FRAGMENTO`): el del proyecto si lo define y, si no, uno oculto que
+    /// compila en reducido (con los flags de `partial` del proyecto) y externaliza si el proyecto usa cache de figuras.
+    pub fn perfil_de_servicio(&self, id: &str) -> ProfileCfg {
+        if let Some(p) = self.profiles.get(id) {
+            return p.clone();
+        }
+        let usa_cache = !self.flags.externalize.is_empty() || self.profiles.values().any(|p| p.externalize);
+        ProfileCfg {
+            label: Some(if id == PERFIL_EXPORT { "Exportación" } else { "Fragmento" }.into()),
+            partial: !self.flags.partial.is_empty(),
+            externalize: usa_cache,
+            parts: PartsSel::One,
+            auto_compile: false,
+            hidden: true,
+            ..Default::default()
+        }
     }
 
     pub fn visible_profiles(&self) -> impl Iterator<Item = (&String, &ProfileCfg)> {
@@ -489,6 +575,38 @@ mod tests {
         std::fs::write(d.path().join(CONFIG_FILE), "{ roto").unwrap();
         let e = read_config(d.path()).unwrap_err().to_string();
         assert!(e.contains(CONFIG_FILE), "{e}");
+    }
+
+    #[test]
+    fn el_nombre_de_un_pdf_exportado_sale_del_patron_con_el_numero_impreso_y_sin_caracteres_prohibidos() {
+        let n = |p: &str, num: &str, nombre: &str| nombre_de_exportacion(p, num, nombre);
+        assert_eq!(n(PATRON_DE_EXPORTACION, "8", "Desnormalización"), "08 - Desnormalización.pdf");
+        assert_eq!(n(PATRON_DE_EXPORTACION, "12", "Cauer"), "12 - Cauer.pdf", "con dos cifras no se agrega nada");
+        assert_eq!(n("{num:03}-{name}", "8", "A"), "008-A.pdf", "sin `.pdf` se lo agrega");
+        assert_eq!(n("Capítulo {num} ({name}).PDF", "A", "x"), "Capítulo A (x).PDF", "un número que no es entero no se rellena y `.PDF` vale");
+        assert_eq!(n("{num:02} - {name}.pdf", "8", "¿Qué? a/b: c*"), "08 - ¿Qué- a-b- c-.pdf", "lo que Windows no admite en un nombre se cambia por `-`");
+        assert_eq!(n("{otro} {name}.pdf", "1", "x"), "{otro} x.pdf", "un campo que no se conoce queda como está");
+        assert_eq!(n("{name", "1", "x"), "{name.pdf");
+    }
+
+    #[test]
+    fn export_se_lee_con_sus_valores_por_defecto_y_los_perfiles_de_servicio_se_arman_solos() {
+        let mut c = infer_config("main.tex", true);
+        assert_eq!(c.export_cfg(), ExportCfg { dir: "export".into(), pattern: PATRON_DE_EXPORTACION.into() });
+        c.export = Some(serde_json::json!({ "dir": "..\\PDF\\Capítulos\\", "pattern": "{num:02} {name}.pdf" }));
+        assert_eq!(c.export_cfg().dir, "../PDF/Capítulos");
+        assert_eq!(c.export_cfg().pattern, "{num:02} {name}.pdf");
+        // Sin `export` en `profiles`, el de servicio es oculto, de una parte y no es candidato a compilar al guardar.
+        let p = c.perfil_de_servicio(PERFIL_EXPORT);
+        assert!(p.hidden && !p.auto_compile && p.parts == PartsSel::One);
+        assert!(!p.externalize && !p.partial, "sin flags ni cache en el proyecto no se inventa nada");
+        c.flags.partial = vec!["Reducida".into()];
+        c.flags.externalize = vec!["Cache".into()];
+        let p = c.perfil_de_servicio(PERFIL_FRAGMENTO);
+        assert!(p.partial && p.externalize);
+        // Si el proyecto lo define, vale lo que dice.
+        c.profiles.insert(PERFIL_EXPORT.into(), ProfileCfg { externalize: false, partial: false, parts: PartsSel::One, ..Default::default() });
+        assert!(!c.perfil_de_servicio(PERFIL_EXPORT).externalize);
     }
 
     #[test]

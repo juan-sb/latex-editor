@@ -74,6 +74,14 @@ pub enum BuildEvent {
     BakeProgress { id: u64, done: u32, total: u32, name: String, ok: bool },
     /// La cocción terminó. `ceded`: cedió el paso a un build y queda `remaining` por cocinar; `error`: no pudo ni empezar.
     BakeFinished { id: u64, ok: bool, cancelled: bool, ceded: bool, cooked: u32, failed: u32, remaining: u32, ms: u64, error: Option<String> },
+    /// Hay otro trabajo corriendo y la exportación quedó pendiente.
+    ExportQueued,
+    /// Arrancó una exportación de `total` partes (cada una es un build del perfil `export`, con su `Started`/`Log`).
+    ExportStarted { id: u64, total: u32 },
+    /// Una parte terminó. `num`: el número de capítulo impreso (del `.aux`); `file`: el PDF exportado, relativo a la raíz.
+    ExportProgress { id: u64, done: u32, total: u32, part: String, num: Option<String>, file: Option<String>, ok: bool },
+    /// La exportación terminó. `dir`: la carpeta de destino, relativa a la raíz.
+    ExportFinished { id: u64, ok: bool, cancelled: bool, exported: u32, failed: u32, ms: u64, dir: String, error: Option<String> },
 }
 
 pub type Sink = Arc<dyn Fn(BuildEvent) + Send + Sync>;
@@ -117,7 +125,12 @@ pub struct DriverSpec {
     pub figuras: Option<FigureInject>,
     /// El perfil sólo consume el cache de figuras: `external/mode=graphics if exists`, sin subcompilaciones (spike S5).
     pub solo_cache: bool,
+    /// Vista previa de un fragmento (8.2): el documento no lleva ninguna parte y el fragmento entra al principio del cuerpo.
+    pub fragmento: bool,
 }
+
+/// Dónde escribe la app el fragmento de la vista previa.
+pub const FRAGMENTO_REL: &str = ".lv/fragment/frag.tex";
 
 /// Lo que el modo `app` agrega al driver para externalizar las figuras de un proyecto que no tiene externalización propia.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -243,6 +256,11 @@ pub fn render_driver_spec(s: &DriverSpec) -> Result<String> {
         // `\includeonly` sólo vale en el preámbulo. El hook corre al principio de `\begin{document}`, antes de que LaTeX
         // lo prohíba, y así no hay que editar la raíz del usuario (S4: el PDF sale idéntico píxel a píxel).
         l.push(format!("\\AddToHook{{begindocument/before}}{{\\includeonly{{{}}}}}", partes.join(",")));
+    }
+    if s.fragmento {
+        // `begindocument/end` corre al terminar `\begin{document}`: el fragmento es lo primero del cuerpo. Con `\includeonly{}` ninguna
+        // parte entra, así que el PDF es sólo el fragmento (más lo que la raíz imprima fuera de las partes).
+        l.push("\\AddToHook{begindocument/end}{\\input{.lv/fragment/frag}}".into());
     }
     let base = s.root_rel.strip_suffix(".tex").or_else(|| s.root_rel.strip_suffix(".TEX")).unwrap_or(&s.root_rel);
     l.push(format!("\\input{{\"{base}\"}}"));
@@ -771,6 +789,7 @@ mod tests {
             draft_images: true,
             figuras: None,
             solo_cache: false,
+            fragmento: false,
         })
         .unwrap();
         assert_eq!(

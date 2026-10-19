@@ -6,17 +6,23 @@
 //! - Con el ejecutor libre, un pedido corre en el acto.
 //! - Con el ejecutor ocupado, el pedido queda **pendiente**. Hay a lo sumo un pendiente por clase y un pedido nuevo de
 //!   la misma clase reemplaza al anterior (gana el último: guardar tres veces seguidas es un solo build).
-//! - Al terminar el activo corre primero el pendiente de build y después el de cocción: un build es lo que el usuario está
-//!   esperando; la cocción cede el paso.
+//! - Al terminar el activo corre el pendiente de mayor prioridad: build, vista previa de fragmento, exportación y, al final, la
+//!   cocción (el orden de las variantes de `Clase`). Un build es lo que el usuario está esperando; la cocción cede el paso.
 //! - Cancelar descarta los pendientes (cancelar el trabajo activo es cosa de quien lo corre).
 //!
 //! La cola no lanza nada: decide quién sigue. Es genérica sobre el trabajo para probarla sin procesos.
 
+use std::collections::BTreeMap;
 use std::sync::{Mutex, MutexGuard};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Las clases de trabajo, **en orden de prioridad**: al liberarse el ejecutor corre primero el pendiente de la clase menor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Clase {
     Build,
+    /// La vista previa de un fragmento (8.2): interactiva, va antes que una exportación larga.
+    Fragment,
+    /// Exportar partes a PDF sueltos (8.1).
+    Export,
     Bake,
 }
 
@@ -36,8 +42,8 @@ pub enum Pedido<J> {
 
 struct Estado<J> {
     activo: Option<Clase>,
-    build: Option<J>,
-    bake: Option<J>,
+    /// A lo sumo un pendiente por clase.
+    pendientes: BTreeMap<Clase, J>,
 }
 
 pub struct Cola<J> {
@@ -52,7 +58,7 @@ impl<J: Trabajo> Default for Cola<J> {
 
 impl<J: Trabajo> Cola<J> {
     pub fn new() -> Self {
-        Cola { e: Mutex::new(Estado { activo: None, build: None, bake: None }) }
+        Cola { e: Mutex::new(Estado { activo: None, pendientes: BTreeMap::new() }) }
     }
 
     fn lock(&self) -> MutexGuard<'_, Estado<J>> {
@@ -63,10 +69,7 @@ impl<J: Trabajo> Cola<J> {
     pub fn pedir(&self, trabajo: J) -> Pedido<J> {
         let mut e = self.lock();
         if e.activo.is_some() {
-            match trabajo.clase() {
-                Clase::Build => e.build = Some(trabajo),
-                Clase::Bake => e.bake = Some(trabajo),
-            }
+            e.pendientes.insert(trabajo.clase(), trabajo);
             return Pedido::Encolado;
         }
         e.activo = Some(trabajo.clase());
@@ -77,7 +80,7 @@ impl<J: Trabajo> Cola<J> {
     /// quedó libre. Se llama **antes** de avisar que el trabajo terminó: quien mira `ocupado` después del aviso ve la verdad.
     pub fn liberar(&self) -> Option<J> {
         let mut e = self.lock();
-        let siguiente = e.build.take().or_else(|| e.bake.take());
+        let siguiente = e.pendientes.pop_first().map(|(_, j)| j);
         e.activo = siguiente.as_ref().map(Trabajo::clase);
         siguiente
     }
@@ -85,9 +88,8 @@ impl<J: Trabajo> Cola<J> {
     /// Descarta los pendientes. Devuelve si había alguno.
     pub fn descartar(&self) -> bool {
         let mut e = self.lock();
-        let habia = e.build.is_some() || e.bake.is_some();
-        e.build = None;
-        e.bake = None;
+        let habia = !e.pendientes.is_empty();
+        e.pendientes.clear();
         habia
     }
 
@@ -101,7 +103,12 @@ impl<J: Trabajo> Cola<J> {
 
     /// ¿Hay un pedido de build esperando? La cocción lo mira para ceder el paso entre figura y figura.
     pub fn build_pendiente(&self) -> bool {
-        self.lock().build.is_some()
+        self.lock().pendientes.contains_key(&Clase::Build)
+    }
+
+    /// ¿Hay algo esperando de esta clase?
+    pub fn pendiente(&self, clase: Clase) -> bool {
+        self.lock().pendientes.contains_key(&clase)
     }
 }
 
@@ -163,6 +170,25 @@ mod tests {
         assert_eq!(c.liberar(), Some(T(B, "build")));
         assert_eq!(c.liberar(), Some(T(C, "cocer")));
         assert_eq!(c.liberar(), None);
+    }
+
+    #[test]
+    fn al_liberarse_corre_primero_el_build_despues_el_fragmento_despues_la_exportacion_y_al_final_la_coccion() {
+        let c = Cola::new();
+        c.pedir(T(Clase::Bake, "activo"));
+        for (clase, n) in [(Clase::Bake, "cocer"), (Clase::Export, "exportar"), (Clase::Fragment, "fragmento"), (Clase::Build, "build")] {
+            assert_eq!(c.pedir(T(clase, n)), Pedido::Encolado);
+        }
+        assert!(c.pendiente(Clase::Export) && c.build_pendiente());
+        for esperado in ["build", "fragmento", "exportar", "cocer"] {
+            assert_eq!(c.liberar().map(|t| t.1), Some(esperado));
+        }
+        assert_eq!(c.liberar(), None);
+        // Una exportación pendiente la reemplaza otra (gana la última), como a un build.
+        c.pedir(T(Clase::Build, "a"));
+        c.pedir(T(Clase::Export, "uno"));
+        c.pedir(T(Clase::Export, "dos"));
+        assert_eq!(c.liberar().map(|t| t.1), Some("dos"));
     }
 
     #[test]

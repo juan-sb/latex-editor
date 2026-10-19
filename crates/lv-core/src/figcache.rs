@@ -135,6 +135,15 @@ fn base_de(archivo: &str) -> &str {
     archivo.split('.').next().unwrap_or(archivo)
 }
 
+/// Lo que genera pgf para una figura. Sólo estos archivos hacen a una figura del cache: el resto de lo que haya en la carpeta (los
+/// `.run.xml` que deja biblatex en cada subcompilación, por ejemplo) no es una figura ni cuenta en sus tamaños.
+const EXTENSIONES_DE_FIGURA: [&str; 6] = ["pdf", "md5", "dpth", "log", "aux", "auxlock"];
+
+/// Lo que dejan las subcompilaciones de pgf al lado de la figura y no sirve a nadie: la limpieza lo borra siempre.
+fn es_residuo(archivo: &str) -> bool {
+    archivo.to_ascii_lowercase().ends_with(".run.xml")
+}
+
 /// Las figuras de la carpeta del cache, ordenadas por nombre.
 pub fn escanear(root: &Path, dir: &str) -> Vec<FiguraEnCache> {
     let mut m: BTreeMap<String, FiguraEnCache> = BTreeMap::new();
@@ -145,6 +154,9 @@ pub fn escanear(root: &Path, dir: &str) -> Vec<FiguraEnCache> {
             continue;
         }
         let archivo = e.file_name().to_string_lossy().to_string();
+        if !EXTENSIONES_DE_FIGURA.contains(&archivo.rsplit('.').next().unwrap_or("")) {
+            continue;
+        }
         let base = base_de(&archivo).to_string();
         let f = m.entry(base.clone()).or_insert(FiguraEnCache { nombre: base, pdf: false, md5: false, log: false, bytes: 0 });
         f.bytes += meta.len();
@@ -378,11 +390,37 @@ pub struct DatoDeFigura {
     pub slugs: Option<Vec<String>>,
 }
 
-fn md5_de_archivo(p: &Path) -> String {
-    match fs::read(p) {
-        Ok(b) => format!("{:X}", Md5::digest(&b)),
-        Err(_) => "falta".into(),
+/// Lo que se sabe de un archivo de datos la última vez que se lo miró. Con el mismo tamaño y la misma fecha de modificación no se
+/// vuelve a calcular el md5 (un build sin cambios no tiene que leer las imágenes y los datos de todas las figuras).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct DatoGuardado {
+    tamano: u64,
+    mtime_ms: u64,
+    md5: String,
+}
+
+/// El estado de `.lv/tikz-datos.json`. El formato anterior (sólo el md5, como texto) se lee con un tamaño imposible: el primer
+/// build lo recalcula y lo reescribe en el formato nuevo, sin invalidar nada si el md5 no cambió.
+fn leer_datos_guardados(root: &Path) -> BTreeMap<String, DatoGuardado> {
+    let Some(serde_json::Value::Object(m)) = fs::read(root.join(DATOS_FILE)).ok().and_then(|b| serde_json::from_slice(&b).ok()) else { return BTreeMap::new() };
+    m.into_iter()
+        .filter_map(|(k, v)| match v {
+            serde_json::Value::String(md5) => Some((k, DatoGuardado { tamano: u64::MAX, mtime_ms: 0, md5 })),
+            v => serde_json::from_value(v).ok().map(|d| (k, d)),
+        })
+        .collect()
+}
+
+/// Tamaño y fecha del archivo, y su md5 sólo si cambiaron respecto de `previo`.
+fn mirar_dato(p: &Path, previo: Option<&DatoGuardado>) -> DatoGuardado {
+    let Ok(meta) = fs::metadata(p) else { return DatoGuardado { tamano: 0, mtime_ms: 0, md5: "falta".into() } };
+    let tamano = meta.len();
+    let mtime_ms = meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_millis() as u64);
+    if let Some(d) = previo.filter(|d| d.tamano == tamano && d.mtime_ms == mtime_ms && d.md5 != "falta") {
+        return d.clone();
     }
+    let md5 = fs::read(p).map_or_else(|_| "falta".into(), |b| format!("{:X}", Md5::digest(&b)));
+    DatoGuardado { tamano, mtime_ms, md5 }
 }
 
 /// pgf decide si una figura cambió con el md5 del texto de su dibujo **tal como está escrito**: con un `\input{datos}` adentro,
@@ -395,15 +433,16 @@ fn md5_de_archivo(p: &Path) -> String {
 ///
 /// Devuelve los nombres de las figuras invalidadas. Se llama antes de cada build de un perfil que externaliza y antes de cada cocción.
 pub fn invalidar_por_datos(root: &Path, dir: &str, datos: &[DatoDeFigura]) -> Vec<String> {
-    let guardado: BTreeMap<String, String> = fs::read(root.join(DATOS_FILE)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+    let guardado = leer_datos_guardados(root);
     let mut nuevo = BTreeMap::new();
     let mut cambiados: Vec<&DatoDeFigura> = Vec::new();
     for d in datos {
-        let md5 = md5_de_archivo(&root.join(&d.dato));
-        if guardado.get(&d.dato) != Some(&md5) {
+        let previo = guardado.get(&d.dato);
+        let ahora = mirar_dato(&root.join(&d.dato), previo);
+        if previo.map(|p| &p.md5) != Some(&ahora.md5) {
             cambiados.push(d);
         }
-        nuevo.insert(d.dato.clone(), md5);
+        nuevo.insert(d.dato.clone(), ahora);
     }
     let mut borradas: BTreeSet<String> = BTreeSet::new();
     if !cambiados.is_empty() {
@@ -506,9 +545,8 @@ pub struct Limpieza {
     pub figuras: usize,
 }
 
-/// Lo que genera pgf para una figura. La limpieza sólo toca esto: aunque la configuración apuntara a una carpeta con otras
-/// cosas, no se borra nada que no tenga pinta de figura.
-const EXTENSIONES_DE_FIGURA: [&str; 6] = ["pdf", "md5", "dpth", "log", "aux", "auxlock"];
+// La limpieza sólo toca los archivos de una figura (`EXTENSIONES_DE_FIGURA`) y los residuos de pgf (`es_residuo`): aunque la
+// configuración apuntara a una carpeta con otras cosas, no se borra nada que no tenga pinta de figura.
 
 fn dir_de_cache_seguro(dir: &str) -> bool {
     let d = dir.trim_matches('/');
@@ -536,11 +574,15 @@ pub fn limpieza_preview(root: &Path, dir: &str, sello_hoy: &str, f: Option<&Figl
         let Ok(meta) = e.metadata() else { continue };
         let archivo = e.file_name().to_string_lossy().to_string();
         let ext = archivo.rsplit('.').next().unwrap_or("");
-        if !meta.is_file() || !EXTENSIONES_DE_FIGURA.contains(&ext) || vivos.contains(base_de(&archivo)) {
+        let residuo = es_residuo(&archivo);
+        let viva = vivos.contains(base_de(&archivo));
+        if !meta.is_file() || !(residuo || (EXTENSIONES_DE_FIGURA.contains(&ext) && !viva)) {
             continue;
         }
         l.bytes += meta.len();
-        bases.insert(base_de(&archivo).to_string());
+        if !viva && !residuo {
+            bases.insert(base_de(&archivo).to_string());
+        }
         l.archivos.push(format!("{}/{archivo}", dir.trim_matches('/')));
     }
     l.archivos.sort();
@@ -721,10 +763,10 @@ mod tests {
         escribir(r, ".lv/build/rapido/lv-rapido.fdb_latexmk", "fdb");
         assert!(invalidar_por_datos(r, "figuras-cache", &datos).is_empty());
         assert!(r.join("figuras-cache/AAAAAA-cap-0.md5").is_file() && r.join(".lv/build/rapido/lv-rapido.fdb_latexmk").is_file());
-        escribir(r, "datos.tex", "dos");
+        escribir(r, "datos.tex", "dos dos");
         assert_eq!(invalidar_por_datos(r, "figuras-cache", &datos), ["AAAAAA-cap-0", "AAAAAA-cap-1", "BBBBBB-cap-0"]);
         // Sin slug conocido se invalidan todas; un dato que deja de leerse se olvida y uno nuevo cuenta como cambiado.
-        escribir(r, "datos.tex", "tres");
+        escribir(r, "datos.tex", "tres tres tres");
         let todas = invalidar_por_datos(r, "figuras-cache", &[dato("datos.tex", None)]);
         assert_eq!(todas.len(), 4);
         assert!(invalidar_por_datos(r, "figuras-cache", &[]).is_empty());
@@ -853,6 +895,70 @@ mod tests {
         }
         assert!(r.join("figuras-cache/LEEME.txt").is_file());
         assert!(!r.join("figuras-cache/A1B2C3-a-0.pdf").exists());
+    }
+
+    #[test]
+    fn el_md5_de_un_dato_se_calcula_solo_si_cambio_su_tamano_o_su_fecha_y_el_formato_viejo_se_migra() {
+        let d = tempfile::tempdir().unwrap();
+        let r = d.path();
+        escribir(r, "figuras-cache/AAAAAA-cap-0.pdf", "pdf");
+        escribir(r, "figuras-cache/AAAAAA-cap-0.md5", "md5");
+        escribir(r, "datos.tex", "contenido");
+        let datos = [dato("datos.tex", Some(&["cap"]))];
+        invalidar_por_datos(r, "figuras-cache", &datos);
+        let guardado = leer_datos_guardados(r);
+        let g = &guardado["datos.tex"];
+        assert_eq!(g.tamano, "contenido".len() as u64);
+        assert_eq!(g.md5, format!("{:X}", Md5::digest(b"contenido")));
+        // Con el mismo tamaño y la misma fecha no se lee el archivo: un md5 guardado de mentira sigue valiendo (prueba de que no se recalculó).
+        let mut m = guardado.clone();
+        m.get_mut("datos.tex").unwrap().md5 = "NO-SE-RECALCULA".into();
+        fs::write(r.join(DATOS_FILE), serde_json::to_string(&m).unwrap()).unwrap();
+        escribir(r, "figuras-cache/AAAAAA-cap-0.md5", "md5");
+        assert!(invalidar_por_datos(r, "figuras-cache", &datos).is_empty(), "mismo tamaño y fecha: no se mira el contenido");
+        assert!(r.join("figuras-cache/AAAAAA-cap-0.md5").is_file());
+        // Si cambia el tamaño sí se calcula (y se ve que el md5 ya no es el guardado).
+        escribir(r, "datos.tex", "contenido más largo");
+        assert_eq!(invalidar_por_datos(r, "figuras-cache", &datos), ["AAAAAA-cap-0"]);
+        assert_eq!(leer_datos_guardados(r)["datos.tex"].md5, format!("{:X}", Md5::digest("contenido más largo".as_bytes())));
+        // El formato anterior (sólo el md5 como texto): con el md5 igual no invalida nada y se reescribe en el formato nuevo.
+        let md5 = format!("{:X}", Md5::digest("contenido más largo".as_bytes()));
+        fs::write(r.join(DATOS_FILE), format!("{{ \"datos.tex\": \"{md5}\" }}")).unwrap();
+        escribir(r, "figuras-cache/AAAAAA-cap-0.md5", "md5");
+        assert!(invalidar_por_datos(r, "figuras-cache", &datos).is_empty());
+        assert!(r.join("figuras-cache/AAAAAA-cap-0.md5").is_file());
+        assert_eq!(leer_datos_guardados(r)["datos.tex"].md5, md5);
+        assert!(fs::read_to_string(r.join(DATOS_FILE)).unwrap().contains("tamano"));
+    }
+
+    #[test]
+    fn el_run_xml_de_biblatex_no_es_una_figura_ni_impide_el_disparo_y_la_limpieza_lo_borra() {
+        let d = tempfile::tempdir().unwrap();
+        let r = d.path();
+        // Cuatro figuras del sello anterior y, del sello nuevo, sólo lo que dejó una subcompilación: el `.run.xml` de biblatex.
+        for n in ["AAAAAA-a-0", "AAAAAA-a-1", "AAAAAA-b-0", "AAAAAA-b-1"] {
+            escribir(r, &format!("figuras-cache/{n}.pdf"), "pdf");
+            escribir(r, &format!("figuras-cache/{n}.md5"), "md5");
+        }
+        escribir(r, "figuras-cache/BBBBBB-a-0.run.xml", "<xml/>");
+        let figs = escanear(r, "figuras-cache");
+        assert_eq!(figs.len(), 4, "el run.xml no es una figura: {figs:?}");
+        let e = estado_del_cache(&figs, Some("BBBBBB"));
+        assert_eq!((e.actuales, e.viejas), (0, 4));
+        assert_eq!(e.bytes, figs.iter().map(|f| f.bytes).sum::<u64>(), "ni cuenta en los tamaños");
+        let c = cfg_con(r#"{ "mode": "project", "stampFiles": ["estilo.tex"] }"#);
+        assert!(necesita_cocer(&c, &e), "con el run.xml del sello nuevo como única huella, hay que cocinar igual");
+        // La limpieza contra una lista completa del sello nuevo se lleva el run.xml (de una figura viva o no) y no cuenta como figura.
+        escribir(r, "figuras-cache/BBBBBB-a-0.pdf", "pdf");
+        escribir(r, "figuras-cache/BBBBBB-a-0.md5", "md5");
+        escribir(r, "figuras-cache/CCCCCC-z-0.run.xml", "<xml/>");
+        let f = Figlist { sello: "BBBBBB".into(), completa: true, nombres: vec!["figuras-cache/BBBBBB-a-0".into()], ..Default::default() };
+        let p = limpieza_preview(r, "figuras-cache", "BBBBBB", Some(&f)).unwrap();
+        assert!(p.archivos.contains(&"figuras-cache/BBBBBB-a-0.run.xml".to_string()) && p.archivos.contains(&"figuras-cache/CCCCCC-z-0.run.xml".to_string()), "{:?}", p.archivos);
+        assert_eq!(p.figuras, 4, "las 4 del sello anterior; un run.xml solo no es una figura");
+        limpiar(r, "figuras-cache", "BBBBBB", Some(&f)).unwrap();
+        let quedan: Vec<String> = fs::read_dir(r.join("figuras-cache")).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
+        assert_eq!(quedan.len(), 2, "{quedan:?}");
     }
 
     #[test]

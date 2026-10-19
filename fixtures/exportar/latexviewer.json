@@ -1,0 +1,13 @@
+{
+  "root": "main.tex",
+  "parts": { "commands": ["include"] },
+  "figureCache": { "mode": "app", "dir": "figuras-cache", "stampFiles": ["estilo.tex"], "onlyInFigureEnv": true, "parallelJobs": 2 },
+  "variables": {
+    "OpcionPie": { "label": "Pie de pagina", "choices": ["completo", "autor", "ninguno"], "default": "completo" }
+  },
+  "profiles": {
+    "parcial": { "partial": true, "externalize": true, "parts": "selection", "label": "Partes elegidas" },
+    "rapido":  { "partial": true, "externalize": true, "parts": "all", "label": "Todas las partes" }
+  },
+  "export": { "dir": "salida/pdf", "pattern": "{num:02} - {name}.pdf" }
+}

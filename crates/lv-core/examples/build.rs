@@ -1,6 +1,6 @@
 //! Compila un proyecto sin interfaz, con el mismo motor que la app (perfiles, partes, sembrado, reparación, cocción de figuras):
 //!
-//!   cargo run -p lv-core --example build -- <carpeta> [perfil] [--root <raíz.tex>] [--parts "A,B"] [--figuras | --limpiar]
+//!   cargo run -p lv-core --example build -- <carpeta> [perfil] [--root <raíz.tex>] [--parts "A,B"] [--figuras | --limpiar | --exportar "A,B"|todas | --fragmento <archivo.tex>]
 //!
 //! Sin `--root` usa la de `latexviewer.json` o `.lv/state.json`; sin perfil, el activo (o `completo`). Imprime el log
 //! crudo tal como llega y sale con 0 si el build fue ok. Con `--figuras` no compila: cocina las figuras del documento entero
@@ -26,10 +26,12 @@ fn main() {
     };
     let root = tomar("--root");
     let parts = tomar("--parts");
+    let exportar = tomar("--exportar");
+    let fragmento = tomar("--fragmento");
     let figuras = args.iter().position(|a| a == "--figuras").map(|i| args.remove(i)).is_some();
     let limpiar = args.iter().position(|a| a == "--limpiar").map(|i| args.remove(i)).is_some();
     if args.is_empty() || args.len() > 2 {
-        eprintln!("uso: build <carpeta> [perfil] [--root <raíz.tex>] [--parts \"A,B\"] [--figuras | --limpiar]");
+        eprintln!("uso: build <carpeta> [perfil] [--root <raíz.tex>] [--parts \"A,B\"] [--figuras | --limpiar | --exportar \"A,B\"|todas | --fragmento <archivo.tex>]");
         std::process::exit(2);
     }
     let (tx, rx) = mpsc::channel();
@@ -47,7 +49,12 @@ fn main() {
         BuildEvent::BakeListing { fase, .. } => eprintln!("== listando las figuras ({fase})"),
         BuildEvent::BakeStarted { fase, total, listed, listing_ms, .. } => eprintln!("== cocinando ({fase}): {total} de {listed} (listado en {:.1} s)", listing_ms as f64 / 1000.0),
         BuildEvent::BakeProgress { done, total, name, ok, .. } => eprintln!("   {done}/{total} {name}{}", if ok { "" } else { "  FALLÓ" }),
-        fin @ (BuildEvent::Finished { .. } | BuildEvent::BakeFinished { .. }) => {
+        BuildEvent::ExportQueued => eprintln!("== exportación en cola"),
+        BuildEvent::ExportStarted { total, .. } => eprintln!("== exportando {total} parte(s)"),
+        BuildEvent::ExportProgress { done, total, part, num, file, ok, .. } => {
+            eprintln!("   {done}/{total} {part} (n.º {}) -> {}{}", num.unwrap_or_else(|| "?".into()), file.unwrap_or_else(|| "-".into()), if ok { "" } else { "  FALLÓ" })
+        }
+        fin @ (BuildEvent::Finished { .. } | BuildEvent::BakeFinished { .. } | BuildEvent::ExportFinished { .. }) => {
             let _ = tx.lock().unwrap().send(fin);
         }
     });
@@ -78,7 +85,13 @@ fn main() {
         if let Some(p) = &parts {
             sesion.set_state(StatePatch { selection: Some(p.split(',').map(|s| s.trim().to_string()).collect()), ..Default::default() })?;
         }
-        if figuras {
+        if let Some(e) = &exportar {
+            let partes = if e == "todas" { None } else { Some(e.split(',').map(|s| s.trim().to_string()).collect()) };
+            sesion.request_export(partes).map(|_| ())
+        } else if let Some(f) = &fragmento {
+            let texto = std::fs::read_to_string(f).map_err(|e| lv_core::error::Error::Io(format!("{f}: {e}")))?;
+            sesion.request_fragment(texto).map(|_| ())
+        } else if figuras {
             sesion.request_bake().map(|_| ())
         } else {
             sesion.request_build(args.get(1).map(String::as_str)).map(|_| ())
@@ -90,7 +103,12 @@ fn main() {
     }
     let mut salida = 0;
     // El primer aviso de lo pedido (un build o una cocción) fija el código de salida; después se espera a que la cola se vacíe.
-    let esperado = |ev: &BuildEvent| matches!((figuras, ev), (false, BuildEvent::Finished { .. }) | (true, BuildEvent::BakeFinished { .. }));
+    let esperado = |ev: &BuildEvent| {
+        matches!(
+            (figuras, exportar.is_some(), ev),
+            (false, false, BuildEvent::Finished { .. }) | (true, false, BuildEvent::BakeFinished { .. }) | (false, true, BuildEvent::ExportFinished { .. })
+        )
+    };
     loop {
         let ev = match rx.recv_timeout(std::time::Duration::from_millis(400)) {
             Ok(ev) => ev,
@@ -111,6 +129,16 @@ fn main() {
             BuildEvent::BakeFinished { ok, cancelled, ceded, cooked, failed, remaining, ms, error, .. } => {
                 eprintln!(
                     "== cocción terminada: ok={ok} cocidas={cooked} fallidas={failed} pendientes={remaining} cancelada={cancelled} cedió={ceded} {:.1} s{}",
+                    *ms as f64 / 1000.0,
+                    error.as_ref().map(|e| format!(" error: {e}")).unwrap_or_default()
+                );
+                if esperado(&ev) {
+                    salida = if *ok { 0 } else { 1 };
+                }
+            }
+            BuildEvent::ExportFinished { ok, cancelled, exported, failed, ms, dir, error, .. } => {
+                eprintln!(
+                    "== exportación terminada: ok={ok} exportadas={exported} fallidas={failed} cancelada={cancelled} {:.1} s en {dir}{}",
                     *ms as f64 / 1000.0,
                     error.as_ref().map(|e| format!(" error: {e}")).unwrap_or_default()
                 );

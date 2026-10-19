@@ -1,0 +1,21 @@
+\documentclass[11pt]{book}
+\usepackage[utf8]{inputenc}
+\usepackage{tikz}
+\usepackage{fancyhdr}
+\input{estilo}
+% Con guardia: el valor que elige el menú de compilación (el driver lo define antes de cargar esta raíz) tiene que ganar.
+\ifdefined\OpcionPie\else\def\OpcionPie{completo}\fi
+\pagestyle{fancy}
+\fancyhf{}
+\fancyfoot[L]{Pie:\OpcionPie}
+% La primera página de un capítulo va en estilo `plain`.
+\fancypagestyle{plain}{\fancyhf{}\fancyfoot[L]{Pie:\OpcionPie}}
+
+% El libro de estos ejemplos arranca en el capítulo 5: el número impreso no es la posición de la parte.
+\setcounter{chapter}{4}
+
+\begin{document}
+\include{Cap/uno}
+\include{Cap/dos}
+\include{Cap/roto}
+\end{document}

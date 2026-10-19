@@ -27,6 +27,17 @@
     "onlyInFigureEnv": true,
     "parallelJobs": "auto"
   },
+  "variables": {
+    "OpcionPie": {
+      "label": "Pie de página",
+      "choices": [
+        "completo",
+        "autor",
+        "ninguno"
+      ],
+      "default": "completo"
+    }
+  },
   "profiles": {
     "parcial": {
       "label": "Partes elegidas",
@@ -57,5 +68,9 @@
     "names": {
       "entrega": "Funciones de Aproximación.pdf"
     }
+  },
+  "export": {
+    "dir": "../PDF/Capítulos",
+    "pattern": "{num:02} - {name}.pdf"
   }
 }

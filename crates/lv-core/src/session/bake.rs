@@ -238,6 +238,7 @@ impl Session {
             draft_images: false,
             figuras,
             solo_cache: false,
+            fragmento: false,
         })?;
         let opciones = Opciones { root: self.root.clone(), engine: cfg.engine.clone(), dir: fcfg.dir.clone(), jobs: fcfg.jobs };
         let huella = if completa { self.huella_actual(&ix, &fcfg) } else { None };
