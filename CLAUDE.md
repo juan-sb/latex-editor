@@ -46,7 +46,7 @@ Si un spike o la implementación contradicen el plan, se actualiza `plan.md` y s
 - `scripts/aceptacion-f4.ps1`: el smoke de F4, SyncTeX sobre el libro (`LV_SMOKE=f4`, ~1 minuto: compila el rápido y mide 50 saltos). Necesita el cache de figuras tibio.
 - `scripts/aceptacion-f5.ps1`: el smoke de F5 sobre `fixtures/editor` (`LV_SMOKE=f5`, segundos, sin TeX): formato, autocompletado, F12, Ctrl+P, paleta, esquema, búsqueda y reemplazo con bytes exactos, lint y keybindings.
 - `scripts/aceptacion-f6.ps1`: el smoke de F6 sobre una copia de `fixtures/figuras-app` (`LV_SMOKE=f6`, ~25 s, con TeX real): panel Figuras, Cocinar con progreso, disparo automático al cambiar el estilo, Limpiar con vista previa, una figura rota y Cancelar a mitad de una cocción.
-- `cargo run --release -p lv-core --example figuras -- <carpeta>`: estado del cache de figuras (sello, figuras por sello, MB) y lo que cuesta el chequeo previo a cada build (criterio de F6: < 20 ms). `--example build -- <carpeta> [perfil] --figuras` lista y cocina con el mismo motor que la app.
+- `cargo run --release -p lv-core --example figuras -- <carpeta>`: estado del cache de figuras (sello, figuras por sello, MB) y lo que cuesta el chequeo previo a cada build (criterio de F6: < 20 ms). `--example build -- <carpeta> [perfil] --figuras` lista y cocina con el mismo motor que la app, y `--limpiar` corre la limpieza del panel (borra del cache lo que el último listado completo no nombra).
 - `scripts/bench-figuras.ps1 [-Trabajos 16,12,8,16]`: cocción completa de las 158 figuras del libro con distinta cantidad de subcompilaciones (copia del libro en `spikes/work/f6-libro`, ver el encabezado del script).
 - **Los tests con TeX real (`--features tex`) se corren desde PowerShell**, no desde Git Bash: el `PATH` de Git Bash trae el perl de MSYS y latexmk se rompe.
 - `cargo run --release -p lv-core --example simbolos -- <carpeta> [--root x.tex] [--search texto [--regex]]`: lo que indexa el core y cuánto tarda (índice y búsqueda). Para el libro hay que copiar antes `fixtures/configs/libro-tc.latexviewer.json` a `fixtures/libro-tc/latexviewer.json` (y borrarlo después).
@@ -95,7 +95,7 @@ inspo/         referencia, intocable, no se versiona
 - Con la subcompilación corriendo con `\tikzexternalrealjob` biblatex deja un `<job>.run.xml` en la raíz del proyecto: se borra al terminar la cocción y el build.
 - **La limpieza del cache sólo se autoriza con una figlist COMPLETA del sello de hoy** (la del listado de todas las partes), nunca con la de un parcial, y sólo borra extensiones de figura.
 - En el modo `app` la clave de cada archivo para su slug es `\CurrentFilePath/\CurrentFile` (con `\include{Secciones/cap-b}`, `\CurrentFile` es sólo `cap-b.tex`).
-- Un perfil con `cacheOnly` (spike S5, `docs/spikes/S5.md`) compila sin `-shell-escape` y pgf no mira el md5: la app cocina el documento entero antes de cada build.
+- Un perfil con `cacheOnly` (spike S5, `docs/spikes/S5.md`; el `completo` del libro) compila sin `-shell-escape` y pgf no mira el md5: la app cocina el documento entero antes de cada build, salvo que la huella de las figuras (`figcache::huella_de_figuras`, en `.lv/figlist.json`) no haya cambiado. No publica: lo que se entrega sale del perfil `entrega`, sin cache.
 
 ## Trampas de las herramientas de esta máquina
 

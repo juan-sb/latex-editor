@@ -114,7 +114,7 @@ export async function correrSmokeF6(opts: LaunchOptions): Promise<void> {
       if (s.join() !== 'build(completo),fin(completo,ok)') throw new Error(`secuencia ${s.join()}`);
     });
 
-    await paso('cambiar el estilo y compilar: la cocción de las figuras del perfil va antes del build, y el resto después', async () => {
+    await paso('cambiar el estilo y compilar: la cocción de las figuras del perfil va antes del build (y como es de todas las partes, no hay resto)', async () => {
       await guardarCambio('estilo.tex', (t) => `${t}% cambio\n`);
       await store().cargarFiguras();
       if (!store().figuras!.necesitaCocer) throw new Error('el panel no avisa que hay que cocinar antes de compilar');
@@ -124,11 +124,12 @@ export async function correrSmokeF6(opts: LaunchOptions): Promise<void> {
         if (document.querySelector('.figuras-barra')) vistoEnBarra = true;
       }, 20);
       await store().compilar('completo', { guardar: false });
-      await esperarHasta(() => secuencia(desde).filter((e) => e.startsWith('cocido(')).length === 2, LIMITE_MS, 'las dos cocciones');
+      await esperarHasta(() => secuencia(desde).includes('fin(completo,ok)'), LIMITE_MS, 'el build');
       await esperarOcioso('el final');
       clearInterval(observar);
       const s = secuencia(desde);
-      const esperada = ['listando(perfil completo)', 'cocinar(4)', 'cocido(ok,4)', 'build(completo)', 'fin(completo,ok)', 'listando(todo)', 'cocinar(0)', 'cocido(ok,0)'];
+      // El perfil `completo` es de todas las partes: su listado ya fue el del documento entero y no hay un resto que cocinar después.
+      const esperada = ['listando(perfil completo)', 'cocinar(4)', 'cocido(ok,4)', 'build(completo)', 'fin(completo,ok)'];
       if (s.join() !== esperada.join()) throw new Error(`secuencia ${s.join()}`);
       detalle(`barra de progreso vista: ${vistoEnBarra}`);
       datos.barraVista = vistoEnBarra;

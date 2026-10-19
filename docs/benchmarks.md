@@ -332,7 +332,7 @@ F1 (`articulo-simple`), F3, F4 (49/50 y 49/50, mediana 8 ms), F5 y F2 siguen pas
 
 | | Cantidad | Qué cubren |
 |---|---|---|
-| `cargo test -p lv-core` | 101 de biblioteca y 79 de integración con procesos falsos | la cola (7), el sello, la clasificación del cache, los pendientes por contenido, la limpieza, el cocinero con un pdflatex falso (máximo de paralelismo, falla que no corta, cancelar mata hijos), la inyección del modo `app`, la verificación de figuras, `ensure_cache_dirs` y `move_md5` con rename y las sesiones con cocción (orden, ceder el paso, disparo, cancelación, limpieza) |
+| `cargo test -p lv-core` | 102 de biblioteca y 82 de integración con procesos falsos | la cola (7), el sello, la clasificación del cache, los pendientes por contenido, la limpieza, el cocinero con un pdflatex falso (máximo de paralelismo, falla que no corta, cancelar mata hijos), la inyección del modo `app`, la verificación de figuras, `ensure_cache_dirs` y `move_md5` con rename y las sesiones con cocción (orden, ceder el paso, disparo, cancelación, limpieza) |
 | `cargo test -p lv-core --features tex` | todos pasan: 2 de la figura rota y 4 del modo `app`, más los de F1 a F4 con TeX real | la figura rota real (`\comandoQueNoExiste`: reproducida con MiKTeX antes de arreglarla), la cancelación con TeX real y el modo `app` sobre `fixtures/figuras-app` |
 | `npx vitest run` | 192 | lo de F5 (177) más el store de figuras y el filtro por archivo del panel |
 
@@ -342,5 +342,27 @@ F1 (`articulo-simple`), F3, F4 (49/50 y 49/50, mediana 8 ms), F5 y F2 siguen pas
 - **latexmk no cuenta como cambio un archivo de figura borrado**: para que el build siguiente reintente hay que borrar también el `.fdb_latexmk` del perfil.
 - **Los logs de las subcompilaciones de figuras salen cortados a 79 columnas**: el archivo y la línea del error se reconstruyen desarrollando el log (`figures::desenvolver`).
 - **El parcial se ve mucho antes que el resto**: 34 s contra 118 s para dejar todo el cache al día. Sin partir la cocción en "las del perfil" y "el resto" el primer build habría esperado ~125 s.
-- **Cada cocción del resto repite un listado de 8 s** aunque el perfil sea de todas las partes (el listado del perfil ya era el del documento): optimización posible con un indicador de lista completa (saltear la continuación `Todo` cuando el listado del perfil ya fue el del documento entero); no se hizo.
-- **Un perfil que sólo consume el cache** hace el completo del libro en 36 s contra 330 s, pero su diff rasterizado contra el completo sin cache no da cero (spike S5, `docs/spikes/S5.md`).
+- **Cada cocción del resto repetía un listado de 8 s** aunque el perfil fuera de todas las partes (el listado del perfil ya era el del documento): al cierre de F6 el perfil con todas las partes no pide la continuación `Todo` (test `un_perfil_de_todas_las_partes_no_pide_un_segundo_listado_del_resto`).
+- **Un perfil que sólo consume el cache** hace el completo del libro en 36 s contra 330 s (9 s con un cambio de texto); el diff rasterizado contra el completo sin cache no da cero (89 de 198 páginas, 0,03 % de los píxeles) pero la paginación y el texto por página coinciden. Decisión de Juan: `completo` con cache para revisar (no publica) y `entrega` sin cache para publicar (spike S5, `docs/spikes/S5.md`).
+
+### Cierre de F6, después de S5
+
+Sobre `spikes/work/f6-libro` con el `latexviewer.json` nuevo (`completo` con `cacheOnly`, `entrega`).
+
+| Escenario del `completo` con cache | latexmk | Reloj del proceso | Objetivo |
+|---|---|---|---|
+| Sin cambios (dos corridas) | 0,6 s | **1,1 s** (con ~0,4 s de arranque del ejemplo) | ≤ 1 s |
+| Cambio de texto en un capítulo (dos corridas) | 9,1 y 9,0 s | **9,6 y 9,5 s** | ≈ 9 s |
+| Una figura editada: listado + 1 figura + build | 9,1 s | 22,1 s (7,4 + 12,4 de cocción + 9,1) | |
+| Comprobación para saltear el listado (grafo + huella + PDF de la figlist) | | **28 ms** | |
+
+**Limpieza del cache** (el comando Limpiar del panel, desde `--example build -- <carpeta> --limpiar`): sobre la copia, 5 769 archivos de 1 455 figuras de sellos viejos (los de los benchmarks), 261,1 MB; quedan las 159 del sello de hoy (27,9 MB).
+
+**El smoke de F2 con la máquina quieta** (CPU 3 a 12 % antes de empezar, dos corridas seguidas, cache limpio): parcial 5,4 y 5,2 s de guardar a PDF visible (latexmk 5,0 y 4,9 s), rápido 10,2 y 9,9 s (latexmk 9,7 y 9,5 s). Antes de F6 había dado 4,93 y 9,25 s. Para descartar una regresión del motor se corrió el mismo escenario (cambio de una palabra en un capítulo) con el ejemplo `build` de F5 (`9c6ed40`, en un worktree aparte) y con el de F6, **intercalados**, seis veces cada uno sobre la misma copia, midiendo el tiempo que informa el motor:
+
+| Perfil | Motor de F5 (s) | Motor de F6 (s) |
+|---|---|---|
+| Parcial | 4,6 4,7 4,6 4,6 4,7 4,7 (mediana **4,70**) | 4,7 4,7 4,6 4,7 4,7 4,7 (mediana **4,70**) |
+| Rápido | 9,2 8,8 9,8 8,8 8,8 9,1 (mediana **9,10**) | 8,8 8,8 8,9 8,8 9,4 9,2 (mediana **8,90**) |
+
+Iguales. La diferencia con las cifras de antes es de la máquina (el parcial hoy da 4,7 s en los dos motores; 4,9 a 5,0 s dentro de la app, que suma 313 a 467 ms: en el rango de los 312 a 442 ms de F2). No es una regresión de F6.

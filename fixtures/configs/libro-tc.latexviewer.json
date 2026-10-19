@@ -41,7 +41,13 @@
       "parts": "all"
     },
     "completo": {
-      "label": "Libro completo",
+      "label": "Libro completo (revisión, con cache)",
+      "externalize": true,
+      "cacheOnly": true,
+      "autoCompile": false
+    },
+    "entrega": {
+      "label": "Entrega (sin cache)",
       "cleanBefore": true,
       "autoCompile": false
     }
@@ -49,7 +55,7 @@
   "publish": {
     "dir": "../PDF",
     "names": {
-      "completo": "Funciones de Aproximación.pdf"
+      "entrega": "Funciones de Aproximación.pdf"
     }
   }
 }

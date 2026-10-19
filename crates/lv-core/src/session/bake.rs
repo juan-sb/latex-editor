@@ -75,6 +75,10 @@ pub(super) struct PlanBake {
     dirs: BTreeSet<String>,
     opciones: Opciones,
     root_rel: String,
+    /// El listado es del documento entero (sin `\includeonly`): la lista sirve para limpiar y no hace falta un `Todo` después.
+    completa: bool,
+    /// `figcache::huella_de_figuras` al armar el plan (sólo con un listado completo).
+    huella: Option<String>,
 }
 
 // --- lo que ve la interfaz ---------------------------------------------------------------------------------------------------------
@@ -209,6 +213,7 @@ impl Session {
             }
             FaseBake::Todo => None,
         };
+        let completa = includeonly.is_none();
         // Los flags de la cocción son los de `partial` (omite portada e índices), `externalize` y el de listado de pgf.
         let flags: Vec<String> = cfg.flags.partial.iter().chain(&cfg.flags.externalize).chain(&cfg.flags.figure_list).cloned().collect();
         if cfg.flags.figure_list.is_empty() && fcfg.modo == Modo::Project {
@@ -232,7 +237,42 @@ impl Session {
             solo_cache: false,
         })?;
         let opciones = Opciones { root: self.root.clone(), engine: cfg.engine.clone(), dir: fcfg.dir.clone(), jobs: fcfg.jobs };
-        Ok(PlanBake { driver, dirs: ix.include_dirs(&cfg.parts.commands), opciones, root_rel: rf })
+        let huella = if completa { self.huella_actual(&ix, &fcfg) } else { None };
+        Ok(PlanBake { driver, dirs: ix.include_dirs(&cfg.parts.commands), opciones, root_rel: rf, completa, huella })
+    }
+
+    /// `figcache::huella_de_figuras` del proyecto tal como está en el disco (`None` si falta un archivo del sello).
+    fn huella_actual(&self, ix: &ProjectIndex, f: &FigureCfg) -> Option<String> {
+        let sello = figcache::sello(&self.root, &f.stamp_files)?;
+        Some(figcache::huella_de_figuras(&self.root, &ix.reachable, &|rel| ix.part_of(rel).is_some(), &sello))
+    }
+
+    /// ¿Se puede saltear el listado previo de un perfil que sólo consume el cache? Sí si el último listado fue del documento entero,
+    /// quedó cocido del todo (ninguna pendiente ni fallida, con su PDF en el cache) y desde entonces no cambió nada que pueda cambiar
+    /// una figura: mismo sello y misma huella (`huella_de_figuras`). Ninguna figura rota sin arreglar. Cuesta lo que un grafo del
+    /// proyecto (≈ 10 ms en el libro) y un chequeo de los PDF.
+    pub(super) fn cache_al_dia(&self) -> bool {
+        let Ok(d) = self.lock() else { return false };
+        let (Some(cfg), Some(rf)) = (d.config.as_ref(), d.root_file.as_ref()) else { return false };
+        let f = FigureCfg::de(cfg);
+        if f.modo == Modo::Off {
+            return false;
+        }
+        if self.bake.rotas.lock().map(|r| !r.is_empty()).unwrap_or(true) {
+            return false;
+        }
+        let Some(lista) = figcache::leer_figlist(&self.root) else { return false };
+        let Some(guardada) = lista.huella.as_deref() else { return false };
+        if !lista.completa || !lista.pendientes.is_empty() || !lista.fallidas.is_empty() {
+            return false;
+        }
+        let Some(sello) = figcache::sello(&self.root, &f.stamp_files) else { return false };
+        if lista.sello != sello {
+            return false;
+        }
+        let ix = ProjectIndex::build(&self.root, rf, &cfg.parts.commands);
+        let hoy = figcache::huella_de_figuras(&self.root, &ix.reachable, &|rel| ix.part_of(rel).is_some(), &sello);
+        hoy == guardada && lista.nombres.iter().all(|n| self.root.join(format!("{n}.pdf")).is_file())
     }
 
     // --- pedir ---------------------------------------------------------------------------------------------------------------------
@@ -260,7 +300,8 @@ impl Session {
     pub(super) fn pedir_con_cocina(self: &Arc<Self>, perfil: String) -> Result<BuildAck> {
         // Un perfil que sólo consume el cache cocina SIEMPRE el documento entero antes (sin importar el 60 %), y un error al armar
         // la cocción corta el pedido: compilar igual sería publicar figuras que pgf no revisó.
-        let solo_cache = self.solo_cache(&perfil);
+        // Salvo que nada haya cambiado desde que el cache quedó cocido (`cache_al_dia`): ahí se saltea hasta el listado.
+        let solo_cache = self.solo_cache(&perfil) && !self.cache_al_dia();
         let fase = if solo_cache { FaseBake::Todo } else { FaseBake::Perfil(perfil.clone()) };
         if solo_cache {
             self.plan_bake(&fase)?;
@@ -341,7 +382,9 @@ impl Session {
                     // Los errores de las figuras que no salieron se pueden ver igual que los de un build.
                     m.insert(PERFIL_COCINA.to_string(), res.rotas.iter().flat_map(|f| f.problemas.clone()).collect());
                 }
-                let continuar = !res.cancelado && (res.cedio || matches!(b.fase, FaseBake::Perfil(_)));
+                // Después de las figuras de un perfil sigue el resto, salvo que el listado del perfil ya haya sido el del documento
+                // entero (un perfil de todas las partes): no hay resto y se ahorra otro listado.
+                let continuar = !res.cancelado && (res.cedio || (matches!(b.fase, FaseBake::Perfil(_)) && !plan.completa));
                 (
                     BuildEvent::BakeFinished {
                         id,
@@ -398,8 +441,8 @@ impl Session {
             (figcache::sello(root, &f.stamp_files), f.usa_sello())
         };
         let pend = figcache::pendientes(root, &nombres);
-        let completa = matches!(b.fase, FaseBake::Todo);
-        self.guardar_lista(&nombres, &pend, &[], completa, stamp.as_deref());
+        let completa = plan.completa;
+        self.guardar_lista(&nombres, &pend, &[], completa, stamp.as_deref(), None);
         let total = pend.len() as u32;
         if let Ok(mut g) = self.bake.cocinando.lock() {
             if let Some(c) = g.as_mut() {
@@ -427,13 +470,15 @@ impl Session {
         figures::quitar_residuos_de_subcompilacion(root, cocinero::JOB_COCINA);
         let sin_cocer: Vec<String> = res.restantes.iter().cloned().chain(res.rotas.iter().map(|f| f.nombre.clone())).collect();
         let fallidas: Vec<String> = res.rotas.iter().map(|f| f.nombre.clone()).collect();
-        self.guardar_lista(&nombres, &sin_cocer, &fallidas, completa, stamp.as_deref());
+        // La huella sólo se guarda con todo cocido y verificado: es lo que autoriza a saltear el listado la próxima vez.
+        let huella = if completa && sin_cocer.is_empty() && !res.cancelado { plan.huella.clone() } else { None };
+        self.guardar_lista(&nombres, &sin_cocer, &fallidas, completa, stamp.as_deref(), huella);
         Ok(res)
     }
 
     /// Escribe `.lv/figlist.json`. La lista de un perfil parcial no pisa a una completa del mismo sello (la limpieza sólo se
     /// autoriza con la completa): se limita a actualizar qué falta.
-    fn guardar_lista(&self, nombres: &[String], pendientes: &[String], fallidas: &[String], completa: bool, sello: Option<&str>) {
+    fn guardar_lista(&self, nombres: &[String], pendientes: &[String], fallidas: &[String], completa: bool, sello: Option<&str>, huella: Option<String>) {
         let sello = sello.unwrap_or("").to_string();
         let previa = figcache::leer_figlist(&self.root);
         let nueva = match previa {
@@ -453,7 +498,7 @@ impl Session {
                 p.fecha_ms = ahora_ms();
                 p
             }
-            _ => Figlist { sello, completa, fecha_ms: ahora_ms(), nombres: nombres.to_vec(), pendientes: pendientes.to_vec(), fallidas: fallidas.to_vec() },
+            _ => Figlist { sello, completa, fecha_ms: ahora_ms(), nombres: nombres.to_vec(), pendientes: pendientes.to_vec(), fallidas: fallidas.to_vec(), huella },
         };
         let _ = figcache::guardar_figlist(&self.root, &nueva);
     }

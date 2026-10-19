@@ -796,8 +796,13 @@ impl Session {
         let Some(pubcfg) = &cfg.publish else {
             return Err(otro("el proyecto no define `publish.dir` en latexviewer.json"));
         };
-        if !cfg.profiles.contains_key(perfil) {
+        let Some(pc) = cfg.profiles.get(perfil) else {
             return Err(otro(format!("no existe el perfil {perfil:?}")));
+        };
+        // Un perfil que sólo consume el cache es para revisar: su PDF depende del estado del cache y trae las fuentes de cada
+        // figura (S5). Lo que se entrega sale de un perfil sin cache.
+        if pc.externalize && pc.cache_only {
+            return Err(otro(format!("el perfil {perfil:?} consume el cache de figuras y no publica: publicá el de un perfil sin cache (el de entrega)")));
         }
         if aux::is_suspect(&self.root, perfil) {
             return Err(otro(format!("el último build de {perfil:?} no terminó bien: el PDF puede estar desactualizado. Compilá de nuevo antes de publicar")));

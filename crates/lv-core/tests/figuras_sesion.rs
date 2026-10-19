@@ -25,7 +25,8 @@ const CONFIG: &str = r#"{
   "profiles": {
     "parcial":  { "partial": true, "externalize": true, "parts": "selection" },
     "rapido":   { "partial": true, "externalize": true, "parts": "all" },
-    "completo": { "cleanBefore": true, "autoCompile": false }
+    "completo": { "cleanBefore": true, "autoCompile": false },
+    "revision": { "externalize": true, "cacheOnly": true, "autoCompile": false }
   }
 }"#;
 
@@ -247,6 +248,82 @@ fn un_cambio_de_estilo_cocina_primero_las_figuras_del_perfil_despues_el_build_y_
     assert!(!parcial.contains("includeonly"), "el último listado fue el de todo el documento: {parcial}");
     let st = c.s.figures_status().unwrap();
     assert_eq!((st.actuales, st.viejas), (4, 4), "las 4 del sello nuevo y las 4 viejas, todavía sin limpiar");
+}
+
+#[test]
+fn un_perfil_de_todas_las_partes_no_pide_un_segundo_listado_del_resto() {
+    let c = caso();
+    c.s.request_bake().unwrap();
+    c.esperar("la primera cocción", 60, |c| c.ocioso() && c.secuencia().len() == 3);
+    c.cambiar_estilo(2);
+    assert!(matches!(c.s.request_build(Some("rapido")).unwrap(), BuildAck::Started { .. }));
+    c.esperar("el ciclo", 90, |c| c.ocioso() && c.secuencia().len() >= 8);
+    std::thread::sleep(Duration::from_millis(400));
+    assert_eq!(
+        c.secuencia()[3..],
+        ["listando(perfil rapido)", "cocinar(4)", "cocido(ok=true,canc=false,cedio=false)", "build(rapido)", "fin(rapido)"],
+        "el listado del perfil ya fue el del documento entero: no hay resto"
+    );
+    assert!(c.s.figures_status().unwrap().figlist.is_some_and(|f| f.completa), "y esa lista autoriza a limpiar, como la de todo");
+}
+
+#[test]
+fn un_perfil_que_solo_consume_el_cache_cocina_antes_y_saltea_el_listado_mientras_nada_cambie() {
+    let c = caso();
+    let secuencia = |c: &Caso| c.secuencia();
+    // La primera vez no hay lista: lista, cocina todo y después compila.
+    assert!(matches!(c.s.request_build(Some("revision")).unwrap(), BuildAck::Started { .. }));
+    c.esperar("el primer ciclo", 60, |c| c.ocioso() && secuencia(c).len() >= 5);
+    assert_eq!(secuencia(&c), ["listando(todo)", "cocinar(4)", "cocido(ok=true,canc=false,cedio=false)", "build(revision)", "fin(revision)"]);
+    let driver = fs::read_to_string(c.d.path().join(".lv/drivers/lv-revision.tex")).unwrap();
+    assert!(driver.contains("external/mode=graphics if exists"), "{driver}");
+
+    // Sin cambios, y con un cambio de texto en un capítulo: ni listado ni cocción, sólo el build.
+    c.s.request_build(Some("revision")).unwrap();
+    c.esperar("el build sin cambios", 60, |c| c.ocioso() && secuencia(c).len() >= 7);
+    c.escribir("Secciones/Uno.tex", "\\FigurasDe{uno}\nuno, con una palabra más\n");
+    c.s.request_build(Some("revision")).unwrap();
+    c.esperar("el build con un cambio de texto", 60, |c| c.ocioso() && secuencia(c).len() >= 9);
+    assert_eq!(secuencia(&c)[5..], ["build(revision)", "fin(revision)", "build(revision)", "fin(revision)"]);
+    assert_eq!(c.lanzadas().iter().filter(|l| l.starts_with("LISTADO")).count(), 1, "un solo listado en todo el recorrido");
+
+    // Una figura nueva (o editada) en un capítulo cambia la huella: vuelve a listar antes de compilar.
+    c.escribir("Secciones/Uno.tex", "\\FigurasDe{uno}\n\\begin{figure}\\begin{tikzpicture}\\draw (0,0)--(1,1);\\end{tikzpicture}\\end{figure}\n");
+    c.s.request_build(Some("revision")).unwrap();
+    c.esperar("el ciclo con la figura", 60, |c| c.ocioso() && secuencia(c).len() >= 14);
+    assert_eq!(secuencia(&c)[9..], ["listando(todo)", "cocinar(0)", "cocido(ok=true,canc=false,cedio=false)", "build(revision)", "fin(revision)"]);
+    // Y con la lista otra vez cocida del todo, se saltea de nuevo.
+    c.s.request_build(Some("revision")).unwrap();
+    c.esperar("el build que sigue", 60, |c| c.ocioso() && secuencia(c).len() >= 16);
+    assert_eq!(secuencia(&c)[14..], ["build(revision)", "fin(revision)"]);
+
+    // Un cambio de estilo cambia el sello: lista de nuevo. Un PDF borrado del cache, también.
+    c.cambiar_estilo(2);
+    c.s.request_build(Some("revision")).unwrap();
+    c.esperar("el ciclo del estilo", 90, |c| c.ocioso() && secuencia(c).len() >= 21);
+    assert_eq!(secuencia(&c)[16], "listando(todo)");
+    c.s.request_build(Some("revision")).unwrap();
+    c.esperar("el build sin cambios", 60, |c| c.ocioso() && secuencia(c).len() >= 23);
+    fs::remove_file(c.figura("uno-0", "pdf")).unwrap();
+    c.s.request_build(Some("revision")).unwrap();
+    c.esperar("el ciclo con el PDF borrado", 90, |c| c.ocioso() && secuencia(c).len() >= 28);
+    assert_eq!(secuencia(&c)[23..], ["listando(todo)", "cocinar(1)", "cocido(ok=true,canc=false,cedio=false)", "build(revision)", "fin(revision)"]);
+    assert!(c.figura("uno-0", "pdf").is_file());
+}
+
+#[test]
+fn un_perfil_que_consume_el_cache_no_publica() {
+    let c = caso();
+    c.escribir("latexviewer.json", &CONFIG.replace("\"parallelJobs\": 2 }", "\"parallelJobs\": 2 },\n  \"publish\": { \"dir\": \"PDF\" }"));
+    let s = Session::open_with_cocinero(
+        c.d.path(),
+        c.r.sink.clone(),
+        Builder::con_programa("powershell", args_de(&script(OK))),
+        Cocinero::con_programa("powershell", args_de(&script(MOTOR_FALSO))),
+    )
+    .unwrap();
+    let e = s.publish("revision").unwrap_err().to_string();
+    assert!(e.contains("no publica"), "{e}");
 }
 
 #[test]

@@ -53,4 +53,26 @@ fn main() {
         std::hint::black_box(chequeo());
     }
     println!("chequeo previo al build: {:.2} ms (promedio de {n})", t.elapsed().as_secs_f64() * 1000.0 / n as f64);
+
+    // Lo que cuesta saltear el listado de un perfil que sólo consume el cache: el grafo del proyecto, la huella de las figuras
+    // (lee los `.tex` alcanzados) y el chequeo de los PDF de la figlist (`Session::cache_al_dia`).
+    let sello = figcache::sello(root, &f.stamp_files).unwrap_or_default();
+    let lista = figcache::leer_figlist(root);
+    let m = 50;
+    let t = Instant::now();
+    let mut huella = String::new();
+    let mut archivos = 0;
+    for _ in 0..m {
+        let ix = lv_core::graph::ProjectIndex::build(root, &cfg.root, &cfg.parts.commands);
+        huella = figcache::huella_de_figuras(root, &ix.reachable, &|rel| ix.part_of(rel).is_some(), &sello);
+        archivos = ix.reachable.len();
+        if let Some(l) = &lista {
+            std::hint::black_box(l.nombres.iter().all(|n| root.join(format!("{n}.pdf")).is_file()));
+        }
+    }
+    println!(
+        "saltear el listado (grafo + huella de figuras + PDF de la figlist): {:.2} ms (promedio de {m}; {archivos} archivos alcanzados; huella {huella}; guardada {:?})",
+        t.elapsed().as_secs_f64() * 1000.0 / m as f64,
+        lista.and_then(|l| l.huella)
+    );
 }

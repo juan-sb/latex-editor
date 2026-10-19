@@ -229,6 +229,10 @@ pub struct Figlist {
     pub nombres: Vec<String>,
     pub pendientes: Vec<String>,
     pub fallidas: Vec<String>,
+    /// `huella_de_figuras` del proyecto cuando esta lista quedó cocida del todo (completa, sin pendientes ni fallidas). Si es la
+    /// misma que la de ahora, no cambió nada que pueda cambiar una figura y el listado previo a un build se saltea.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub huella: Option<String>,
 }
 
 pub fn leer_figlist(root: &Path) -> Option<Figlist> {
@@ -278,6 +282,79 @@ pub fn pendientes(root: &Path, nombres: &[String]) -> Vec<String> {
         })
         .cloned()
         .collect()
+}
+
+// --- huella de las figuras ---------------------------------------------------------------------------------------------------------------
+
+/// Los trozos de `t` entre `ini` y su cierre `fin` (el cierre de `\begin{figure}` también acepta `figure*`). Un `\begin` sin cierre
+/// toma hasta el final del archivo: de más es seguro (la huella cambia con cualquier edición de ahí en adelante), de menos no.
+fn trozos<'a>(t: &'a str, ini: &str, fin: &str, fuera: &mut Vec<&'a str>) {
+    let mut pos = 0;
+    while let Some(i) = t[pos..].find(ini) {
+        let desde = pos + i;
+        let fin_de = match t[desde..].find(fin) {
+            Some(j) => {
+                let e = desde + j + fin.len();
+                t[e..].find('}').map_or(t.len(), |k| e + k + 1)
+            }
+            None => t.len(),
+        };
+        fuera.push(&t[desde..fin_de]);
+        pos = fin_de;
+    }
+}
+
+/// Todo lo que, escrito en un archivo de una parte, puede cambiar una figura sin que el estilo (el sello) cambie: los entornos
+/// `figure` y `tikzpicture` y las líneas que definen cosas (`\def`, `\newcommand`, `\tikzset`, `\setlength`, `\FigurasDe`...: una
+/// macro que define un capítulo y usa la figura de otro). El texto corrido no entra.
+fn lo_que_toca_una_figura(t: &str) -> Vec<&str> {
+    static R: OnceLock<Regex> = OnceLock::new();
+    let re = R.get_or_init(|| {
+        Regex::new(
+            r"(?m)^[ \t]*\\(?:[gex]?def|newcommand|renewcommand|providecommand|DeclareRobustCommand|tikzset|tikzstyle|pgfkeys|usetikzlibrary|usepackage|RequirePackage|newlength|setlength|newcounter|setcounter|pgfmath\w+|FigurasDe)\b[^\n]*",
+        )
+        .expect("patrón válido")
+    });
+    let mut v = Vec::new();
+    trozos(t, "\\begin{figure", "\\end{figure", &mut v);
+    trozos(t, "\\begin{tikzpicture}", "\\end{tikzpicture}", &mut v);
+    v.extend(re.find_iter(t).map(|m| m.as_str()));
+    v
+}
+
+/// md5 (hex) de lo que puede cambiar una figura: el sello, el conjunto de archivos que tienen algo que toca una figura y su
+/// contenido (`lo_que_toca_una_figura`) en los archivos de una parte, y el archivo entero en los que no son de ninguna parte (el
+/// preámbulo, la raíz, `structure.tex`: ahí se definen las macros que usan las figuras). Un cambio de texto en un capítulo no la
+/// cambia; agregar, quitar o editar una figura, sí.
+///
+/// Es lo que permite a un perfil que sólo consume el cache saltear el listado previo (8 s en el libro) cuando nada cambió. No
+/// detecta lo que cambie por afuera de los archivos del grafo (un `.sty` propio, una imagen que una figura incluye): ahí vale
+/// el botón Cocinar, que lista siempre.
+pub fn huella_de_figuras(root: &Path, archivos: &BTreeSet<String>, es_de_parte: &dyn Fn(&str) -> bool, sello: &str) -> String {
+    let mut h = Md5::new();
+    h.update(sello.as_bytes());
+    for rel in archivos.iter().filter(|r| r.to_ascii_lowercase().ends_with(".tex")) {
+        let Ok(bytes) = fs::read(root.join(rel)) else {
+            h.update(format!("\0falta\0{rel}").as_bytes());
+            continue;
+        };
+        if !es_de_parte(rel) {
+            h.update(format!("\0entero\0{rel}\0").as_bytes());
+            h.update(&bytes);
+            continue;
+        }
+        let texto = String::from_utf8_lossy(&bytes);
+        let piezas = lo_que_toca_una_figura(&texto);
+        if piezas.is_empty() {
+            continue;
+        }
+        h.update(format!("\0parte\0{rel}\0").as_bytes());
+        for p in piezas {
+            h.update(p.as_bytes());
+            h.update(b"\0");
+        }
+    }
+    format!("{:X}", h.finalize())
 }
 
 // --- slug y archivo -------------------------------------------------------------------------------------------------------------------
@@ -448,6 +525,56 @@ mod tests {
         escribir(d.path(), "otro.tex", "x");
         let dos = sello(d.path(), &["estilo.tex".into(), "otro.tex".into()]).unwrap();
         assert_ne!(Some(dos), sello(d.path(), &["otro.tex".into(), "estilo.tex".into()]), "el orden cuenta");
+    }
+
+    #[test]
+    fn la_huella_ignora_el_texto_de_un_capitulo_y_sigue_a_sus_figuras_y_al_preambulo() {
+        let d = tempfile::tempdir().unwrap();
+        let r = d.path();
+        let archivos: BTreeSet<String> = ["main.tex", "cap.tex", "texto.tex", "fig_x.tex", "imagen.png"].iter().map(|s| s.to_string()).collect();
+        let de_parte = |rel: &str| rel != "main.tex";
+        let huella = |sello: &str| huella_de_figuras(r, &archivos, &de_parte, sello);
+        escribir(r, "main.tex", "\\def\\wp{1}\n\\input{cap}\n");
+        escribir(r, "cap.tex", "\\FigurasDe{cap}\nTexto uno.\n\\begin{figure}[H]\n\\begin{tikzpicture}\\draw (0,0)--(1,1);\\end{tikzpicture}\n\\end{figure}\nTexto dos.\n");
+        escribir(r, "texto.tex", "Sólo texto.\n");
+        escribir(r, "fig_x.tex", "\\begin{tikzpicture}\\draw (0,0) circle (1);\\end{tikzpicture}\n");
+        let base = huella("AAAAAA");
+        assert_eq!(base, huella("AAAAAA"), "estable");
+        assert_ne!(base, huella("BBBBBB"), "el sello cuenta");
+
+        // Texto corrido de un capítulo, en cualquier lugar (también entre figuras): no cambia nada.
+        escribir(r, "cap.tex", "\\FigurasDe{cap}\nTexto UNO, más largo.\n\\begin{figure}[H]\n\\begin{tikzpicture}\\draw (0,0)--(1,1);\\end{tikzpicture}\n\\end{figure}\nOtro texto.\n");
+        escribir(r, "texto.tex", "Otro texto que no toca figuras.\n");
+        assert_eq!(base, huella("AAAAAA"), "un cambio de texto no invalida la huella");
+        // Un archivo de una parte sin nada que toque una figura no cuenta aunque se escriba o se borre.
+        // Una figura editada, en un archivo de capítulo y en uno de figura suelto: cambia.
+        escribir(r, "cap.tex", "\\FigurasDe{cap}\nTexto uno.\n\\begin{figure}[H]\n\\begin{tikzpicture}\\draw (0,0)--(2,2);\\end{tikzpicture}\n\\end{figure}\nTexto dos.\n");
+        let editada = huella("AAAAAA");
+        assert_ne!(base, editada);
+        escribir(r, "cap.tex", "\\FigurasDe{cap}\nTexto uno.\n\\begin{figure}[H]\n\\begin{tikzpicture}\\draw (0,0)--(1,1);\\end{tikzpicture}\n\\end{figure}\nTexto dos.\n");
+        assert_eq!(base, huella("AAAAAA"), "deshacerlo devuelve la misma huella");
+        escribir(r, "fig_x.tex", "\\begin{tikzpicture}\\draw (0,0) circle (2);\\end{tikzpicture}\n");
+        assert_ne!(base, huella("AAAAAA"), "una figura de un archivo `\\input`");
+        escribir(r, "fig_x.tex", "\\begin{tikzpicture}\\draw (0,0) circle (1);\\end{tikzpicture}\n");
+        // Una macro de un capítulo y otra del preámbulo (archivo que no es de ninguna parte, entero).
+        escribir(r, "texto.tex", "\\newcommand{\\wp}{3}\nTexto.\n");
+        assert_ne!(base, huella("AAAAAA"), "una definición en un capítulo");
+        escribir(r, "texto.tex", "Sólo texto.\n");
+        escribir(r, "main.tex", "\\def\\wp{1}\n\\input{cap}\nuna línea más\n");
+        assert_ne!(base, huella("AAAAAA"), "el preámbulo entra entero");
+        // Una figura nueva en un archivo que no tenía.
+        escribir(r, "main.tex", "\\def\\wp{1}\n\\input{cap}\n");
+        escribir(r, "texto.tex", "\\begin{figure}\\begin{tikzpicture}\\end{tikzpicture}\\end{figure}\n");
+        assert_ne!(base, huella("AAAAAA"), "figura nueva en un archivo sin figuras");
+        // Un `\begin{figure}` sin cierre toma hasta el final: lo que sigue ya cuenta.
+        escribir(r, "texto.tex", "\\begin{figure}\nabierta\n");
+        let abierta = huella("AAAAAA");
+        escribir(r, "texto.tex", "\\begin{figure}\nabierta y más\n");
+        assert_ne!(abierta, huella("AAAAAA"));
+        // El conjunto de archivos del grafo también es parte de la huella: un archivo menos, otra huella.
+        let sin: BTreeSet<String> = archivos.iter().filter(|a| *a != "fig_x.tex").cloned().collect();
+        escribir(r, "texto.tex", "Sólo texto.\n");
+        assert_ne!(base, huella_de_figuras(r, &sin, &de_parte, "AAAAAA"));
     }
 
     #[test]

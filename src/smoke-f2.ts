@@ -99,7 +99,7 @@ export async function correrSmokeF2(opts: LaunchOptions): Promise<void> {
       if (!p) throw new Error('no hay proyecto abierto (¿LV_OPEN?)');
       if (!p.configSaved) throw new Error('el proyecto no tiene latexviewer.json (el script lo copia: ¿falló?)');
       const ids = p.config?.profiles.map((x) => x.id).join(',');
-      if (ids !== 'parcial,rapido,completo') throw new Error(`perfiles inesperados: ${ids}`);
+      if (ids !== 'parcial,rapido,completo,entrega') throw new Error(`perfiles inesperados: ${ids}`);
       if (p.parts.length !== 8) throw new Error(`se esperaban 8 partes y hay ${p.parts.length}: ${p.parts.map((x) => x.name).join(' | ')}`);
       if (!p.parts.some((x) => x.name === PARTE)) throw new Error(`falta la parte ${PARTE}`);
       datos.partes = p.parts.length;

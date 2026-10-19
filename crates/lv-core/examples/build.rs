@@ -1,6 +1,6 @@
 //! Compila un proyecto sin interfaz, con el mismo motor que la app (perfiles, partes, sembrado, reparación, cocción de figuras):
 //!
-//!   cargo run -p lv-core --example build -- <carpeta> [perfil] [--root <raíz.tex>] [--parts "A,B"] [--figuras]
+//!   cargo run -p lv-core --example build -- <carpeta> [perfil] [--root <raíz.tex>] [--parts "A,B"] [--figuras | --limpiar]
 //!
 //! Sin `--root` usa la de `latexviewer.json` o `.lv/state.json`; sin perfil, el activo (o `completo`). Imprime el log
 //! crudo tal como llega y sale con 0 si el build fue ok. Con `--figuras` no compila: cocina las figuras del documento entero
@@ -27,8 +27,9 @@ fn main() {
     let root = tomar("--root");
     let parts = tomar("--parts");
     let figuras = args.iter().position(|a| a == "--figuras").map(|i| args.remove(i)).is_some();
+    let limpiar = args.iter().position(|a| a == "--limpiar").map(|i| args.remove(i)).is_some();
     if args.is_empty() || args.len() > 2 {
-        eprintln!("uso: build <carpeta> [perfil] [--root <raíz.tex>] [--parts \"A,B\"] [--figuras]");
+        eprintln!("uso: build <carpeta> [perfil] [--root <raíz.tex>] [--parts \"A,B\"] [--figuras | --limpiar]");
         std::process::exit(2);
     }
     let (tx, rx) = mpsc::channel();
@@ -57,6 +58,19 @@ fn main() {
             std::process::exit(2);
         }
     };
+    if limpiar {
+        // La limpieza del panel Figuras: borra del cache lo que el último listado completo no nombra.
+        match sesion.figures_clean_preview().and_then(|p| sesion.figures_clean().map(|h| (p, h))) {
+            Ok((p, h)) => {
+                eprintln!("== limpieza: {} archivos de {} figuras, {:.1} MB (borrados: {}, {:.1} MB)", p.archivos.len(), p.figuras, p.bytes as f64 / 1048576.0, h.archivos.len(), h.bytes as f64 / 1048576.0);
+                return;
+            }
+            Err(e) => {
+                eprintln!("no se pudo limpiar: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
     let ok = (|| -> lv_core::error::Result<()> {
         if let Some(r) = &root {
             sesion.set_root(r)?;
