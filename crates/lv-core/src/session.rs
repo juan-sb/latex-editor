@@ -16,6 +16,7 @@ use crate::build::{render_driver_spec, BuildEvent, Builder, DriverSpec, RunSpec,
 use crate::cola::{Clase, Cola, Pedido, Trabajo};
 use crate::config::{self, comandos_por_defecto, infer_config, PartsSel, ProjectConfig, State, StatePatch};
 use crate::error::{Error, Result};
+use crate::cocinero::Cocinero;
 use crate::figures;
 use crate::fsio;
 use crate::graph::{Affects, ProjectIndex};
@@ -28,6 +29,9 @@ use serde::Serialize;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+
+mod bake;
+pub use bake::{Cocinando, ErrorFigura, FiglistView, FiguraView, FiguresStatus};
 
 // --- lo que ve la interfaz ----------------------------------------------------------------------------------------------
 
@@ -152,6 +156,9 @@ pub struct Session {
     datos: Mutex<Datos>,
     /// El único ejecutor de la sesión: quién corre y quién espera (`cola.rs`).
     cola: Cola<Job>,
+    /// Lo que lanza las subcompilaciones de la cocción de figuras (los tests le ponen un motor falso).
+    cocinero: Cocinero,
+    bake: bake::EstadoBake,
     /// Las partes que la interfaz vio por última vez (`view`/`refresh`): `file_info` avisa cuando ya no coinciden.
     partes_vistas: Mutex<Vec<String>>,
     /// Los problemas del último build de cada perfil (`logparse`), para que la interfaz los pida sin releer el log.
@@ -164,12 +171,15 @@ pub struct Session {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Job {
     Build { perfil: String },
+    /// La cocción de figuras en paralelo (`session/bake.rs`).
+    Bake(bake::BakeJob),
 }
 
 impl Trabajo for Job {
     fn clase(&self) -> Clase {
         match self {
             Job::Build { .. } => Clase::Build,
+            Job::Bake(_) => Clase::Bake,
         }
     }
 }
@@ -204,6 +214,10 @@ impl Session {
 
     /// Los tests le pasan un `Builder` que corre un script en lugar de latexmk.
     pub fn open_with(path: &Path, sink: Sink, builder: Builder) -> Result<Arc<Session>> {
+        Self::open_with_cocinero(path, sink, builder, Cocinero::new())
+    }
+
+    pub fn open_with_cocinero(path: &Path, sink: Sink, builder: Builder, cocinero: Cocinero) -> Result<Arc<Session>> {
         let p = project::open_project(path)?;
         let (config, config_error) = match config::read_config(&p.root) {
             Ok(c) => (c, None),
@@ -225,6 +239,8 @@ impl Session {
             builder,
             datos: Mutex::new(Datos { root_file, config_saved: config.is_some(), config, config_error, state, index: None }),
             cola: Cola::new(),
+            cocinero,
+            bake: bake::EstadoBake::nuevo(),
             partes_vistas: Mutex::new(vec![]),
             problemas: Mutex::new(Default::default()),
             synctex: Mutex::new(Default::default()),
@@ -525,26 +541,15 @@ impl Session {
             Some(p) => p.to_string(),
             None => self.lock()?.state.active_profile.clone().ok_or_else(|| otro("no hay perfil activo"))?,
         };
-        match self.cola.pedir(Job::Build { perfil: perfil.clone() }) {
-            Pedido::Correr(trabajo) => match self.ejecutar(&trabajo, false) {
-                Ok(id) => Ok(BuildAck::Started { id }),
-                Err(e) => {
-                    // No arrancó: el ejecutor vuelve a estar libre (nadie pudo dejar un pendiente en el medio).
-                    self.cola.liberar();
-                    Err(e)
-                }
-            },
-            Pedido::Encolado => {
-                (self.sink)(BuildEvent::Queued { perfil });
-                Ok(BuildAck::Queued)
-            }
-        }
+        // Si el sello de las figuras cambió, primero se cocinan las del perfil (`session/bake.rs`).
+        self.pedir_con_cocina(perfil)
     }
 
     /// Lanza un trabajo que la cola ya le dio al ejecutor.
     fn ejecutar(self: &Arc<Self>, trabajo: &Job, retry: bool) -> Result<u64> {
         match trabajo {
             Job::Build { perfil } => self.lanzar(perfil, retry),
+            Job::Bake(b) => self.lanzar_bake(b),
         }
     }
 
@@ -643,6 +648,7 @@ impl Session {
                 Err(e) => {
                     let cual = match &trabajo {
                         Job::Build { perfil } => format!("el build pendiente ({perfil})"),
+                        Job::Bake(_) => "la cocción de figuras pendiente".to_string(),
                     };
                     (self.sink)(BuildEvent::Error { message: format!("no se pudo lanzar {cual}: {e}") });
                     actual = self.cola.liberar();
@@ -659,7 +665,9 @@ impl Session {
     /// Cancela el trabajo en curso y descarta los pendientes. Devuelve si había algo corriendo.
     pub fn cancel(&self) -> bool {
         self.cola.descartar();
-        self.builder.cancel()
+        let hay_build = self.builder.cancel();
+        // Si lo que corre es una cocción de figuras, se la mata a ella (y a sus subcompilaciones).
+        self.cancelar_bake() || hay_build
     }
 
     // --- símbolos, búsqueda y reemplazo -----------------------------------------------------------------------------------------

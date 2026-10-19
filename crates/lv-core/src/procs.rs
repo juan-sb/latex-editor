@@ -67,8 +67,9 @@ mod imp {
 mod imp {
     pub struct Job;
     impl Job {
+        /// Sin Job Objects: existe para que el código común compile; `assign` dice que no y quien llama mata los hijos a mano.
         pub fn new() -> Option<Job> {
-            None
+            Some(Job)
         }
         pub fn assign(&self, _: &std::process::Child) -> bool {
             false

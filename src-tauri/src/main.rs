@@ -131,6 +131,11 @@ fn sink_de(app: AppHandle) -> Sink {
             BuildEvent::Finished { .. } => "build:finished",
             BuildEvent::Queued { .. } => "build:queued",
             BuildEvent::Error { .. } => "build:error",
+            BuildEvent::BakeQueued => "figures:queued",
+            BuildEvent::BakeListing { .. } => "figures:listing",
+            BuildEvent::BakeStarted { .. } => "figures:started",
+            BuildEvent::BakeProgress { .. } => "figures:progress",
+            BuildEvent::BakeFinished { .. } => "figures:finished",
         };
         let _ = app.emit(nombre, &ev);
     })
