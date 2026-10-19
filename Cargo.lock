@@ -1758,6 +1758,7 @@ name = "lv-core"
 version = "0.1.0"
 dependencies = [
  "dunce",
+ "flate2",
  "indexmap 2.14.2",
  "md-5",
  "regex",

@@ -9,7 +9,7 @@ use lv_core::error::{Error, ErrorInfo};
 use lv_core::fsio::{self, FileRead, WriteOutcome};
 use lv_core::logparse::Problem;
 use lv_core::project::{self, DirEntry};
-use lv_core::session::{BuildAck, FileInfo, ProjectView, Published, Session};
+use lv_core::session::{BuildAck, FileInfo, ProjectView, Published, Session, SyncForward, SyncInverse};
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -40,7 +40,7 @@ struct LaunchOptions {
     open: Option<String>,
     root: Option<String>,
     smoke: bool,
-    /// `f1` (por defecto), `f2` o `f3`: qué smoke de aceptación corre la interfaz con `LV_SMOKE`.
+    /// `f1` (por defecto), `f2`, `f3` o `f4`: qué smoke de aceptación corre la interfaz con `LV_SMOKE`.
     smoke_mode: String,
     smoke_file: Option<String>,
     smoke_pausa_ms: u64,
@@ -62,6 +62,7 @@ async fn launch_options() -> LaunchOptions {
         smoke_mode: match smoke.as_deref() {
             Some("f2") => "f2".into(),
             Some("f3") => "f3".into(),
+            Some("f4") => "f4".into(),
             _ => "f1".into(),
         },
         smoke_file: var("LV_SMOKE_FILE"),
@@ -210,6 +211,20 @@ async fn problems(state: TauriState<'_, AppState>, profile: String) -> Res<Vec<P
     tauri::async_runtime::spawn_blocking(move || s.problems(&profile)).await.map_err(|e| otro(&e.to_string()))
 }
 
+/// Del cursor al PDF: elige el PDF por especificidad y devuelve las cajas de la línea.
+#[tauri::command]
+async fn synctex_forward(state: TauriState<'_, AppState>, rel: String, line: u32) -> Res<Option<SyncForward>> {
+    let s = sesion(&state)?;
+    tauri::async_runtime::spawn_blocking(move || s.synctex_forward(&rel, line)).await.map_err(|e| otro(&e.to_string()))?.map_err(|e| e.info())
+}
+
+/// Del PDF al código: `(page, x, y)` en bp desde arriba a la izquierda.
+#[tauri::command]
+async fn synctex_inverse(state: TauriState<'_, AppState>, profile: String, page: u32, x: f64, y: f64) -> Res<Option<SyncInverse>> {
+    let s = sesion(&state)?;
+    tauri::async_runtime::spawn_blocking(move || s.synctex_inverse(&profile, page, x, y)).await.map_err(|e| otro(&e.to_string()))?.map_err(|e| e.info())
+}
+
 #[tauri::command]
 async fn cancel_build(state: TauriState<'_, AppState>) -> Res<bool> {
     Ok(sesion(&state)?.cancel())
@@ -248,6 +263,8 @@ fn main() {
             build,
             cancel_build,
             problems,
+            synctex_forward,
+            synctex_inverse,
             publish,
         ])
         .build(tauri::generate_context!())

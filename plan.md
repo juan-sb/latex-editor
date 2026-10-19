@@ -539,12 +539,16 @@ Aceptación: el smoke `scripts/aceptacion-f3.ps1` (dentro de la app real sobre `
 
 ### F4. SyncTeX
 
-- [ ] Parser e índice en Rust, tests contra el CLI como oráculo.
-- [ ] Forward e inverse con refinamiento por palabra, resaltado, botones y atajos.
-- [ ] Elección de PDF por especificidad.
-- [ ] "Seguir al cursor".
+- [x] Parser e índice en Rust (`lv-core::synctex`, cacheado por mtime en la sesión), tests contra el CLI como oráculo (`fixtures/sync`: 9/9 y 27/27 en párrafos, 6/6 en líneas especiales).
+- [x] Forward e inverse con refinamiento por palabra (`src/sync/`), resaltado que se desvanece, botones → PDF y ← Código en la barra del visor, Ctrl+Alt+J, doble clic o Ctrl+clic en el PDF.
+- [x] Elección de PDF por especificidad (`Session::elegir_pdf`, con tests de las tres reglas); si cambia el PDF que se muestra, se cambia y se avisa.
+- [x] "Seguir al cursor" (botón Seguir en la barra del visor; debounce de 200 ms; apagado por defecto; sólo desplaza y no cambia de PDF por su cuenta).
 
 Aceptación: ≤ 150 ms por salto sobre el PDF completo; en 50 párrafos largos al azar del libro, el forward cae en la palabra correcta en ≥ 90 % y el inverse deja el cursor a ≤ 1 palabra de distancia en ≥ 90 %.
+
+> **Resultado de F4 (`scripts/aceptacion-f4.ps1`, dentro de la app real sobre el libro, cuatro corridas iguales).** Forward **49/50**, inverse **49/50**, salto con mediana 7 a 8 ms, p95 14 a 18 ms y máximo 50 a 54 ms (el primero, que carga el SyncTeX). Se midió sobre el rápido (183 páginas) y no sobre el completo: el parser trabaja igual (S2: 47 ms de carga con el completo) y el rápido es el PDF con el que se trabaja. Detalle en `docs/benchmarks.md`.
+>
+> **Lo que no se implementó y se dice:** el **CLI `synctex` como fallback si el parser falla** (6.1) no está: el parser ya concuerda con el CLI en el 100 % de lo medido y un SyncTeX ilegible se avisa con un error claro (`Synctex::load` falla en un gz roto o cortado, con test); el CLI queda sólo como oráculo de los tests. Y la búsqueda en los archivos de la parte cuando SyncTeX devuelve un archivo del preámbulo (6.3, punto 4) tampoco: en ese caso el salto lleva a esa línea del preámbulo. Las dos cosas se retoman si el uso real las pide.
 
 ### F5. Editor y navegación
 

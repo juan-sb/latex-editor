@@ -1,0 +1,53 @@
+\documentclass[11pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish]{babel}
+\usepackage{amsmath}
+\usepackage{lmodern}
+
+% Fixture de SyncTeX (F4): párrafos largos de una sola línea fuente (como el libro), una ecuación display, una tabla, una
+% nota al pie y una lista. Los tests comparan el parser propio con `synctex view` y `synctex edit` línea por línea.
+\begin{document}
+
+\section{Aproximación de funciones}
+
+La aproximación de Butterworth maximiza la planicie de la respuesta en la banda de paso a costa de una transición lenta entre las bandas, de modo que el orden necesario para cumplir una plantilla exigente crece más rápido que con las otras familias clásicas, pero a cambio no hay ninguna ondulación que compensar ni ceros de transmisión que realizar con elementos adicionales en el circuito.
+
+La aproximación de Chebyshev acepta una ondulación constante en la banda de paso y obtiene a cambio una transición más abrupta para el mismo orden; la elección entre una y otra depende de cuánto error de magnitud tolere la aplicación dentro de la banda útil y de cuánto cuesta, en componentes y en sensibilidad, agregar un polo más a la función transferencia que se quiere sintetizar con una escalera pasiva.
+
+Una ecuación importante es la del módulo cuadrado de Butterworth, que se escribe como
+\begin{equation}
+  |H(j\omega)|^2 = \frac{1}{1+\left(\frac{\omega}{\omega_c}\right)^{2n}}
+\end{equation}
+y de la que se obtienen los polos sobre una semicircunferencia del semiplano izquierdo, equiespaciados en ángulo, lo que permite escribirlos todos en una sola línea sin resolver ningún sistema de ecuaciones.
+
+La desnormalización transforma una función normalizada en una que cumple la plantilla real, y lo hace con un cambio de variable en la frecuencia y otro en la impedancia, de modo que los valores de los elementos de la escalera se multiplican por factores que dependen únicamente de la frecuencia de corte y de la resistencia de carga elegidas para el diseño final del filtro\footnote{La escala de impedancia no modifica la respuesta en frecuencia, sólo los niveles de tensión y corriente.} que se va a construir.
+
+\begin{itemize}
+  \item Primer elemento de una lista con un texto algo más largo que una línea para que el motor tenga que cortarlo en dos líneas del PDF y se pueda comprobar el salto desde adentro de un entorno.
+  \item Segundo elemento, también extenso, con una referencia a la frecuencia de corte y a la resistencia de carga que aparecen en el párrafo anterior de este documento de prueba.
+\end{itemize}
+
+\begin{table}[h]
+  \centering
+  \begin{tabular}{lcc}
+    Familia & Ondulación & Orden \\
+    Butterworth & ninguna & 7 \\
+    Chebyshev & 1 dB & 5 \\
+  \end{tabular}
+  \caption{Comparación de dos familias para una misma plantilla.}
+\end{table}
+
+La síntesis de Cauer parte de una función de inmitancia y la desarrolla en fracciones continuas, quitando en cada paso un elemento que se identifica con un inductor serie o un capacitor paralelo, de manera que el resultado es una escalera cuyos valores salen directamente de los cocientes parciales sin necesidad de ajustar nada a mano ni de iterar sobre ninguna variable auxiliar.
+
+El método de la desnormalización en frecuencia reemplaza la variable compleja por su cociente con la frecuencia de corte, y en la práctica alcanza con dividir cada capacitor y cada inductor por esa frecuencia expresada en radianes por segundo para obtener los valores que se van a comprar en el negocio de componentes del barrio.
+
+Las aproximaciones de fase lineal sacrifican la selectividad en magnitud para conservar un retardo de grupo casi constante en la banda de paso, y por eso se prefieren cuando el filtro forma parte de un sistema de comunicaciones digitales donde la distorsión de la forma de onda importa más que el rechazo fuera de banda de las señales vecinas.
+
+Cuando la plantilla impone atenuaciones muy diferentes en las dos bandas conviene comparar el orden que resulta de cada familia antes de elegir, porque la diferencia puede ser de dos o tres polos y cada polo adicional en una escalera pasiva significa un componente más, con su tolerancia, su costo y su espacio en la plaqueta del prototipo.
+
+\section{Cierre}
+
+El último párrafo cierra el documento con una frase suficientemente larga como para ocupar más de una línea del PDF resultante, de modo que el salto del código al PDF tenga que elegir entre varias cajas de línea que pertenecen al mismo párrafo y el salto inverso tenga que decidir en cuál de ellas cayó el clic del usuario sobre la página.
+
+\end{document}

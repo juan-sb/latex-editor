@@ -9,6 +9,8 @@ import {
   type Eol,
   type FileInfo,
   type Problema,
+  type SyncForward,
+  type SyncInverse,
   type ProfileInfo,
   type ProjectInfo,
   type StatePatch,
@@ -16,6 +18,7 @@ import {
 import { cerrarTodos, editarDoc, getDoc } from '../editor/docs';
 import { BUILD_INICIAL, useApp } from './app';
 import { logBuffer } from './logbuffer';
+import { pdfApi } from '../pdf/api';
 import { FILTRO_INICIAL } from './problemas';
 
 interface Archivo {
@@ -87,6 +90,8 @@ function falso(archivos: Record<string, Partial<Archivo> & { text: string }>, pr
     fileInfo: ((): FileInfo => ({ part: null, affects: 'yes', profileAuto: true, partsChanged: false })) as (rel: string) => FileInfo,
     ack: { kind: 'started', id: 1 } as BuildAck,
     problemas: [] as Problema[],
+    forward: null as SyncForward | null,
+    inverse: null as SyncInverse | null,
   };
   const vista = (o: Partial<ProjectInfo> = {}) => infoDe({ ...proyecto, state: { ...estado }, ...o });
   const b: Backend = {
@@ -144,6 +149,14 @@ function falso(archivos: Record<string, Partial<Archivo> & { text: string }>, pr
     problems: async (p) => {
       llamadas.push(`problems ${p}`);
       return control.problemas;
+    },
+    synctexForward: async (rel, line) => {
+      llamadas.push(`forward ${rel}:${line}`);
+      return control.forward;
+    },
+    synctexInverse: async (perfil, page, x, y) => {
+      llamadas.push(`inverse ${perfil} ${page} ${Math.round(x)},${Math.round(y)}`);
+      return control.inverse;
     },
     publish: async (p) => {
       llamadas.push(`publish ${p}`);
@@ -874,5 +887,170 @@ describe('problemas del build', () => {
     await st().abrirProyecto('/otro');
     expect(st().problems).toEqual([]);
     expect(st().problemaIdx).toBe(-1);
+  });
+});
+
+describe('SyncTeX', () => {
+  const rect = (x: number, y: number, w = 40, h = 10, page = 1) => ({ page, x, y, w, h });
+  /** Un renglón de PDF: palabras de ancho proporcional, desde la izquierda. */
+  const renglon = (texto: string, y: number, x0 = 72) => {
+    let x = x0;
+    return texto.split(' ').map((t) => {
+      const w = t.length * 5;
+      const p = { texto: t, clave: t.toLowerCase().normalize('NFD').replace(/\p{M}/gu, ''), page: 1, x, y, w, h: 10 };
+      x += w + 3;
+      return p;
+    });
+  };
+  const anfitrion = (palabras = renglon('La desnormalización transforma una función', 100)) => {
+    const llamadas: string[] = [];
+    const host = {
+      get etiqueta() {
+        return `${st().pdfRel}#${st().pdfEpoch}`;
+      },
+      palabrasDePagina: async () => palabras,
+      resaltar: (pagina: number, rects: unknown[]) => void llamadas.push(`resaltar ${pagina} ${JSON.stringify(rects)}`),
+      mostrar: (pagina: number) => void llamadas.push(`mostrar ${pagina}`),
+      esVisible: () => true,
+      centroVisible: () => ({ page: 1, x: 100, y: 105 }),
+    };
+    pdfApi.host = host;
+    return llamadas;
+  };
+  const respuesta = (o: Partial<SyncForward> = {}): SyncForward => ({
+    perfil: 'parcial',
+    pdf: '.lv/build/parcial/lv-parcial.pdf',
+    page: 1,
+    rects: [rect(60, 98, 480, 12)],
+    line_used: 1,
+    ...o,
+  });
+  beforeEach(() => {
+    useApp.setState({ pdfRel: '.lv/build/parcial/lv-parcial.pdf', pdfEpoch: 1, seguir: false });
+  });
+  afterEach(() => {
+    pdfApi.host = null;
+  });
+
+  it('del cursor al PDF: resalta la palabra del cursor adentro de las cajas', async () => {
+    const f = falso({ 'a.tex': { text: 'La desnormalización transforma una función\n' } });
+    f.control.forward = respuesta();
+    const v = anfitrion();
+    await st().abrirArchivo('a.tex');
+    await vi.waitFor(() => expect(f.llamadas).toContain('info a.tex'));
+    // El cursor dentro de "transforma" (columna 20).
+    getDoc('a.tex')!.state = getDoc('a.tex')!.state.update({ selection: { anchor: 20 } }).state;
+    expect(await st().irAlPdf()).toBe(true);
+    expect(f.llamadas).toContain('forward a.tex:1');
+    const r = v.find((x) => x.startsWith('resaltar'))!;
+    const rects = JSON.parse(r.slice(r.indexOf('['))) as { x: number; w: number }[];
+    expect(rects).toHaveLength(1);
+    expect(rects[0].w).toBe('transforma'.length * 5); // la palabra, no toda la caja de 480
+    expect(v).toContain('mostrar 1');
+  });
+
+  it('si la palabra no aparece resalta las cajas de la línea', async () => {
+    const f = falso({ 'a.tex': { text: 'zzzzzzzz\n' } });
+    f.control.forward = respuesta();
+    const v = anfitrion();
+    await st().abrirArchivo('a.tex');
+    expect(await st().irAlPdf()).toBe(true);
+    const r = v.find((x) => x.startsWith('resaltar'))!;
+    expect(JSON.parse(r.slice(r.indexOf('[')))[0].w).toBe(480);
+  });
+
+  it('si el PDF elegido no es el que se muestra, lo cambia, avisa y espera a que cargue', async () => {
+    const f = falso({ 'a.tex': { text: 'La desnormalización\n' } });
+    f.control.forward = respuesta({ perfil: 'rapido', pdf: '.lv/build/rapido/lv-rapido.pdf' });
+    anfitrion();
+    await st().abrirArchivo('a.tex');
+    expect(await st().irAlPdf()).toBe(true);
+    expect(st().pdfRel).toBe('.lv/build/rapido/lv-rapido.pdf');
+    expect(st().pdfEpoch).toBe(2);
+    expect(st().notice?.texto).toContain('«rapido»');
+  });
+
+  it('sin cajas para el archivo o con un error del core avisa; en silencio no dice nada', async () => {
+    const f = falso({ 'a.tex': { text: 'hola\n' } });
+    anfitrion();
+    await st().abrirArchivo('a.tex');
+    expect(await st().irAlPdf()).toBe(false);
+    expect(st().notice?.texto).toContain('compilá');
+    useApp.setState({ notice: null });
+    expect(await st().irAlPdf({ silencioso: true })).toBe(false);
+    expect(st().notice).toBeNull();
+    const b = (await import('../backend')).getBackend();
+    b.synctexForward = async () => {
+      throw new BackendError('other', 'No hay ningún PDF con SyncTeX para este archivo: compilá antes.');
+    };
+    expect(await st().irAlPdf()).toBe(false);
+    expect(st().notice?.nivel).toBe('error');
+    expect(f.llamadas.filter((l) => l.startsWith('forward'))).toHaveLength(2);
+  });
+
+  it('en silencio no cambia de PDF por su cuenta', async () => {
+    const f = falso({ 'a.tex': { text: 'hola\n' } });
+    f.control.forward = respuesta({ perfil: 'rapido', pdf: '.lv/build/rapido/lv-rapido.pdf' });
+    anfitrion();
+    await st().abrirArchivo('a.tex');
+    expect(await st().irAlPdf({ silencioso: true })).toBe(false);
+    expect(st().pdfRel).toBe('.lv/build/parcial/lv-parcial.pdf');
+  });
+
+  it('del PDF al código: abre el archivo y pide seleccionar la palabra clickeada', async () => {
+    const f = falso({ 'Secciones/uno.tex': { text: 'primera línea\nLa desnormalización transforma una función\notra más\n' } });
+    f.control.inverse = { file: 'Secciones/uno.tex', line: 2, inside: true };
+    anfitrion();
+    const palabras = renglon('La desnormalización transforma una función', 100);
+    const t = palabras.find((p) => p.texto === 'transforma')!;
+    expect(await st().irAlCodigo({ page: 1, x: t.x + 3, y: 105 })).toBe(true);
+    expect(f.llamadas).toContain(`inverse parcial 1 ${Math.round(t.x + 3)},105`);
+    expect(st().activeRel).toBe('Secciones/uno.tex');
+    const ir = st().irA!;
+    expect(ir.line).toBe(2);
+    expect('La desnormalización transforma una función'.slice(ir.inicio, ir.fin)).toBe('transforma');
+  });
+
+  it('si el texto no viene de un archivo del proyecto avisa; sin PDF también', async () => {
+    const f = falso({});
+    f.control.inverse = { file: null, line: 5, inside: true };
+    anfitrion();
+    expect(await st().irAlCodigo({ page: 1, x: 80, y: 105 })).toBe(false);
+    expect(st().notice?.texto).toContain('no viene de un archivo');
+    useApp.setState({ pdfRel: null });
+    expect(await st().irAlCodigo()).toBe(false);
+  });
+
+  it('sin punto usa el centro de lo que se ve', async () => {
+    const f = falso({ 'a.tex': { text: 'La desnormalización\n' } });
+    f.control.inverse = { file: 'a.tex', line: 1, inside: false };
+    anfitrion();
+    await st().irAlCodigo();
+    expect(f.llamadas).toContain('inverse parcial 1 100,105');
+  });
+
+  it('seguir al cursor: se mueve el cursor y 200 ms después el PDF acompaña, sin resaltar y sin avisar', async () => {
+    vi.useFakeTimers();
+    const f = falso({ 'a.tex': { text: 'La desnormalización transforma\n' } });
+    f.control.forward = respuesta();
+    const v = anfitrion();
+    await st().abrirArchivo('a.tex');
+    f.llamadas.length = 0;
+    st().alMoverCursor('a.tex'); // apagado: no hace nada
+    await vi.advanceTimersByTimeAsync(500);
+    expect(f.llamadas).toEqual([]);
+    st().setSeguir(true); // al prenderlo ya acompaña
+    await vi.advanceTimersByTimeAsync(10);
+    expect(f.llamadas).toContain('forward a.tex:1');
+    f.llamadas.length = 0;
+    st().alMoverCursor('a.tex');
+    st().alMoverCursor('a.tex');
+    await vi.advanceTimersByTimeAsync(150);
+    expect(f.llamadas).toEqual([]);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(f.llamadas.filter((l) => l.startsWith('forward'))).toHaveLength(1);
+    expect(v.some((x) => x.startsWith('resaltar'))).toBe(false);
+    expect(v).toContain('mostrar 1');
+    expect(st().notice).toBeNull();
   });
 });

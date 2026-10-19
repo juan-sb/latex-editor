@@ -43,6 +43,8 @@ Si un spike o la implementación contradicen el plan, se actualiza `plan.md` y s
 - `scripts/aceptacion-f1.ps1 -Proyecto libro-tc|libro-include|articulo-simple`: el smoke de F1 dentro de la app real (`LV_SMOKE=1`).
 - `scripts/aceptacion-f2.ps1`: el smoke de F2 sobre una copia tibia del libro (`LV_SMOKE=f2`, unos 6 minutos): perfiles, sembrado, guardar a PDF visible, cola, cancelar, recarga sin parpadeo, publicar. Necesita el cache de figuras tibio de `fixtures\libro-tc`.
 - `scripts/aceptacion-f3.ps1`: el smoke de F3 sobre `fixtures/errores` (`LV_SMOKE=f3`, medio minuto): problemas, gutter, F8, panel.
+- `scripts/aceptacion-f4.ps1`: el smoke de F4, SyncTeX sobre el libro (`LV_SMOKE=f4`, ~1 minuto: compila el rápido y mide 50 saltos). Necesita el cache de figuras tibio.
+- `cargo test -p lv-core --features tex --test synctex_oraculo`: el parser de SyncTeX contra el CLI `synctex`, sobre `fixtures/sync`.
 - `cargo run -p lv-core --example problemas -- <raíz> <log|blg|ilg>`: lo que el parser saca de un log, para mirar uno nuevo antes de escribir su prueba. Los logs de `fixtures/logs/` se generan con `--example build` sobre `fixtures/errores` (copiado a `spikes/work`).
 - `scripts/compilar-fixtures.ps1`: compila los fixtures con latexmk a secas.
 - Variables de entorno de la app: `LV_OPEN` (carpeta a abrir), `LV_ROOT` (raíz del documento), `LV_SMOKE` (`1` o `f2`), `LV_SMOKE_FILE`, `LV_SMOKE_OUT`, `LV_LATEXMK` (otro ejecutable en lugar de latexmk).
@@ -56,7 +58,9 @@ fixtures/      proyectos chicos de prueba; libro-tc/ es la copia del libro (igno
 scripts/       copiar-libro, bench-base, compilar-fixtures, aceptacion-f1, aceptacion-f2, bom-ps1
 spikes/        código de los spikes de F0, de referencia (work/ ignorada)
 crates/lv-core core en Rust (sin Tauri): fsio, project, config (latexviewer.json y estado), graph (inclusión y partes),
-               auxiliares (aislamiento de los .aux), build (driver, latexmk, streaming), procs (Job Objects), session (cola y motor)
+               auxiliares (aislamiento de los .aux), build (driver, latexmk, streaming), procs (Job Objects), session (cola y motor),
+               logparse (log de TeX, biber y makeindex a problemas), synctex (parser del .synctex.gz y las dos consultas)
+               En el frontend, `src/sync/` tiene la lógica pura de SyncTeX (texto plano, búsqueda de palabras, los dos saltos).
 src-tauri/     capa fina de Tauri (comandos y eventos)
 src/           frontend: backend/ (interfaz y única implementación Tauri), store/, editor/, pdf/, panels/
 inspo/         referencia, intocable, no se versiona

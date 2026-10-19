@@ -206,3 +206,45 @@ El libro está limpio de errores y avisos; lo único que hay son cajas mal llena
 - **latexmk no corre biber ni makeindex con errores de LaTeX**: sus problemas aparecen recién cuando los de LaTeX están resueltos (ver 5.8).
 - **Un nombre de módulo `aux` no se puede versionar en Windows** (nombre reservado): se descubrió al commitear F2 y se renombró a `auxiliares`.
 - Una captura de pantalla de la ventana para revisar el aspecto tomó el programa que estaba encima y no la app: se borró de inmediato y quedó escrito en `CLAUDE.md` que no se hacen capturas ni se mueve el mouse para probar.
+
+## F4: SyncTeX
+
+### Criterio de aceptación del plan, sobre el libro
+
+`scripts/aceptacion-f4.ps1` (dentro de la app real): compila el rápido (183 páginas), elige **50 párrafos largos al azar** de las 8 partes (semilla fija; hay 181 candidatos de al menos 300 caracteres y 40 palabras en una sola línea fuente), toma una palabra al azar de al menos 4 letras de cada uno y recorre el camino que usa el usuario. Cuatro corridas iguales.
+
+| Criterio | Umbral | Medido |
+|---|---|---|
+| Forward: el resaltado cae en la palabra elegida | ≥ 90 % | **49/50** (98 %) |
+| Inverse, desde el centro de ese resaltado: el cursor queda a ≤ 1 palabra y en la misma línea | ≥ 90 % | **49/50** (98 %) |
+| Tiempo de cada salto (core + capa de texto + búsqueda) | ≤ 150 ms | mediana **7 a 8 ms**, p95 **14 a 18 ms**, máximo **50 a 54 ms** (el máximo es el primer salto, que carga el SyncTeX del libro: ~45 ms) |
+| El resaltado coincide con las letras que se ven (capa de texto de PDF.js, 10 muestras) | | 9/10 |
+| Un doble clic real (evento del DOM) sobre el resaltado lleva a la misma palabra del fuente | | 5/5 |
+
+La única falla de las 50 es una palabra ("mismo", en `Aproximación de Cauer.tex:1705`) de un párrafo con matemática en casi cada frase: el forward no la encontró entre las palabras de las cajas y cayó en las cajas de la línea (que es lo que hace cualquier SyncTeX), y el inverse del paso siguiente no se midió.
+
+### El parser propio contra el CLI como oráculo
+
+`cargo test -p lv-core --features tex --test synctex_oraculo`, sobre un PDF que compila el propio motor (`fixtures/sync`: 9 párrafos largos, una ecuación display, una tabla, una nota al pie y una lista):
+
+| | Resultado |
+|---|---|
+| Forward en párrafos: mismas páginas que el CLI / la primera caja del CLI está entre las propias (±2 bp) | **9/9** y **9/9** |
+| Inverse, ida y vuelta por tres puntos de cada párrafo: misma línea y mismo archivo que el CLI | **27/27** |
+| Forward en líneas especiales (ecuación, tabla, nota al pie, `\item`): la primera caja coincide | 6/6 (S2 había medido desacuerdos en figuras y ecuaciones con el libro; en este fixture no aparecen) |
+
+### Pruebas
+
+| | Cantidad | Qué cubren |
+|---|---|---|
+| `cargo test -p lv-core` | 106 | lo de F3 (96) más el parser de SyncTeX (7: `Input:` a mitad del contenido, rutas del driver y de afuera, hijos contra caja de párrafo, registros `x`, cajas de tamaño cero, gz de verdad y roto, archivo cortado) y la sesión (elección del PDF por especificidad con las tres reglas, ida y vuelta con rutas relativas, invalidación del cache por mtime) |
+| `cargo test -p lv-core --features tex` | +7 | los 5 de antes más los 2 del oráculo |
+| `npx vitest run` | 96 | lo de F3 (69) más texto plano con el mapa de offsets (18 pruebas de la búsqueda: palabras repetidas, guiones al final de línea, matemática, tolerancia de una letra) y el store de SyncTeX (cambio de PDF, silencioso, seguir al cursor con relojes falsos) |
+
+### Hallazgos de F4
+
+- **`irA` se aplicaba de nuevo al volver a una pestaña**: el pedido de "ir a esta línea" quedaba en el store y el editor lo repetía cada vez que esa pestaña volvía a estar activa, moviendo el cursor. Lo encontró el smoke (el forward salía de una posición vieja). Ahora cada pedido se atiende una sola vez (`n`).
+- **El smoke también tuvo una carrera propia**: asignar `doc.state` por la espalda de la vista dejaba a CodeMirror con el cursor viejo; ahora el cursor se mueve con `moverCursor`, que pasa por la vista como lo haría el usuario.
+- **PDF.js restaura "la página actual" al cambiar el tamaño del panel**: `mostrar` le dice primero cuál es la página (`currentPageNumber`) y después ajusta el desplazamiento fino.
+- **Una caja con alto pero sin ancho** (un puntal, una regla de ancho cero) no sirve para resaltar: el forward la reemplaza por la contenedora que tiene los dos tamaños.
+- **El tiempo absoluto de F2 depende de la carga de la máquina**: con otro proceso ocupando CPU, el parcial pasó de 4,6 a 4,9 s de latexmk y el rápido de 8,9 a 10,9 s. El smoke de F2 ahora falla por lo que la app agrega a latexmk (312 a 442 ms con el libro; límite 700 ms) y sólo informa el umbral absoluto de 5,0 y 9,6 s.

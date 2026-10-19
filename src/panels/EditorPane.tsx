@@ -77,6 +77,8 @@ function Editor() {
   const activeRel = useApp((s) => s.activeRel);
   const epoch = useApp((s) => s.tabs.find((t) => t.rel === s.activeRel)?.epoch ?? 0);
   const irA = useApp((s) => s.irA);
+  // Cada pedido de `irA` se atiende una sola vez: sin esto, volver más tarde a esa pestaña lo repetía y movía el cursor.
+  const irAAplicado = useRef(0);
 
   useEffect(() => {
     const view = new EditorView({ parent: ref.current! });
@@ -112,9 +114,13 @@ function Editor() {
   // Un pedido de ir a una línea (un clic en el panel de problemas, F8): se atiende cuando la pestaña ya está en la vista.
   useEffect(() => {
     const view = viewRef.current;
-    if (!view || !irA || irA.rel !== activeRel) return;
+    if (!view || !irA || irA.rel !== activeRel || irA.n === irAAplicado.current) return;
+    irAAplicado.current = irA.n;
     const linea = view.state.doc.line(Math.min(Math.max(1, irA.line), view.state.doc.lines));
-    view.dispatch({ selection: { anchor: linea.from }, effects: EditorView.scrollIntoView(linea.from, { y: 'center' }) });
+    // Con `inicio` y `fin` (SyncTeX inverso) se selecciona la palabra; sin ellos, el cursor va al principio de la línea.
+    const desde = irA.inicio === undefined ? linea.from : Math.min(linea.from + irA.inicio, linea.to);
+    const hasta = irA.fin === undefined ? desde : Math.min(linea.from + irA.fin, linea.to);
+    view.dispatch({ selection: { anchor: desde, head: hasta }, effects: EditorView.scrollIntoView(desde, { y: 'center' }) });
     view.focus();
   }, [irA, activeRel, epoch]);
 

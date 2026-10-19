@@ -18,6 +18,7 @@ use crate::fsio;
 use crate::graph::{Affects, ProjectIndex};
 use crate::logparse::{self, Problem};
 use crate::project;
+use crate::synctex::{Rect, Synctex};
 use serde::Serialize;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -102,6 +103,24 @@ pub struct FileInfo {
     pub parts_changed: bool,
 }
 
+/// Del cursor al PDF: en qué perfil, qué PDF, y las cajas de línea (en bp desde arriba a la izquierda).
+#[derive(Debug, Clone, Serialize)]
+pub struct SyncForward {
+    pub perfil: String,
+    pub pdf: String,
+    pub page: u32,
+    pub rects: Vec<Rect>,
+    pub line_used: u32,
+}
+
+/// Del PDF al código. `file` es `None` si el texto viene de un archivo del sistema o del driver.
+#[derive(Debug, Clone, Serialize)]
+pub struct SyncInverse {
+    pub file: Option<String>,
+    pub line: u32,
+    pub inside: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Published {
     pub pdf: String,
@@ -131,6 +150,8 @@ pub struct Session {
     partes_vistas: Mutex<Vec<String>>,
     /// Los problemas del último build de cada perfil (`logparse`), para que la interfaz los pida sin releer el log.
     problemas: Mutex<std::collections::HashMap<String, Vec<Problem>>>,
+    /// El `.synctex.gz` cargado de cada perfil, con el mtime con el que se leyó: un build nuevo lo invalida.
+    synctex: Mutex<std::collections::HashMap<String, (std::time::SystemTime, Arc<Synctex>)>>,
 }
 
 /// Todo lo que hace falta para lanzar un build, resuelto bajo el candado de los datos.
@@ -186,6 +207,7 @@ impl Session {
             pendiente: Mutex::new(None),
             partes_vistas: Mutex::new(vec![]),
             problemas: Mutex::new(Default::default()),
+            synctex: Mutex::new(Default::default()),
         };
         {
             let mut d = s.datos.lock().map_err(|_| otro("estado envenenado"))?;
@@ -590,6 +612,83 @@ impl Session {
             p.take();
         }
         self.builder.cancel()
+    }
+
+    // --- SyncTeX ----------------------------------------------------------------------------------------------------------
+
+    fn synctex_gz(&self, perfil: &str) -> PathBuf {
+        self.root.join(format!(".lv/build/{perfil}/lv-{perfil}.synctex.gz"))
+    }
+
+    /// Qué PDF usar para un archivo (6.4 del plan, la regla de `synctex_pdf.ps1` generalizada): el perfil de partes elegidas
+    /// que incluye la parte del archivo, si tiene SyncTeX, aunque otro PDF sea más nuevo (el activo si hay varios); si no, el
+    /// más reciente entre los perfiles que la contienen. Los perfiles ocultos y el de exportación no participan.
+    pub fn elegir_pdf(&self, rel: &str) -> Result<Option<String>> {
+        let d = self.lock()?;
+        let cfg = d.config.as_ref().ok_or_else(|| otro("no hay configuración"))?;
+        let parte = d.index.as_ref().and_then(|ix| ix.part_of(rel).map(|k| ix.parts[k].name.clone()));
+        let mut candidatos: Vec<(String, PartsSel, std::time::SystemTime)> = Vec::new();
+        for (id, p) in &cfg.profiles {
+            if p.hidden || p.parts == PartsSel::One {
+                continue;
+            }
+            let Ok(m) = std::fs::metadata(self.synctex_gz(id)).and_then(|m| m.modified()) else { continue };
+            let contiene = match p.parts {
+                PartsSel::All => true,
+                // Un archivo que no es de ninguna parte (el preámbulo) está en todos los perfiles.
+                PartsSel::Selection => parte.as_ref().is_none_or(|n| d.state.selection.contains(n)),
+                PartsSel::One => false,
+            };
+            if contiene {
+                candidatos.push((id.clone(), p.parts, m));
+            }
+        }
+        let elegidos: Vec<&(String, PartsSel, std::time::SystemTime)> = candidatos.iter().filter(|c| c.1 == PartsSel::Selection).collect();
+        if let Some(c) = elegidos.iter().find(|c| Some(&c.0) == d.state.active_profile.as_ref()).or(elegidos.first()) {
+            return Ok(Some(c.0.clone()));
+        }
+        Ok(candidatos.iter().max_by_key(|c| c.2).map(|c| c.0.clone()))
+    }
+
+    /// El SyncTeX de un perfil, cargado una vez por build (47 ms con el libro completo) y cacheado por mtime.
+    fn cargar_synctex(&self, perfil: &str) -> Result<Arc<Synctex>> {
+        let ruta = self.synctex_gz(perfil);
+        let mtime = std::fs::metadata(&ruta)
+            .and_then(|m| m.modified())
+            .map_err(|_| Error::NotFound(format!("el SyncTeX del perfil {perfil:?}: compilá antes")))?;
+        if let Some((m, s)) = self.synctex.lock().map_err(|_| otro("cache envenenado"))?.get(perfil) {
+            if *m == mtime {
+                return Ok(s.clone());
+            }
+        }
+        let s = Arc::new(Synctex::load(&ruta).map_err(|e| Error::Io(format!("{}: {e}", ruta.display())))?);
+        self.synctex.lock().map_err(|_| otro("cache envenenado"))?.insert(perfil.to_string(), (mtime, s.clone()));
+        Ok(s)
+    }
+
+    /// Del cursor al PDF. `Ok(None)` si el archivo no figura en el SyncTeX del PDF elegido (todavía no se compiló con él).
+    pub fn synctex_forward(&self, rel: &str, line: u32) -> Result<Option<SyncForward>> {
+        let Some(perfil) = self.elegir_pdf(rel)? else {
+            return Err(otro("No hay ningún PDF con SyncTeX para este archivo: compilá antes."));
+        };
+        let sx = self.cargar_synctex(&perfil)?;
+        let Some(tag) = sx.tag_of(&self.root, rel) else { return Ok(None) };
+        Ok(sx.forward(tag, line).map(|f| SyncForward {
+            pdf: crate::build::pdf_rel(&perfil),
+            page: f.rects[0].page,
+            rects: f.rects,
+            line_used: f.line_used,
+            perfil,
+        }))
+    }
+
+    /// Del PDF al código. `(page, x, y)` en bp desde arriba a la izquierda.
+    pub fn synctex_inverse(&self, perfil: &str, page: u32, x: f64, y: f64) -> Result<Option<SyncInverse>> {
+        if !self.lock()?.config.as_ref().is_some_and(|c| c.profiles.contains_key(perfil)) {
+            return Err(otro(format!("no existe el perfil {perfil:?}")));
+        }
+        let sx = self.cargar_synctex(perfil)?;
+        Ok(sx.inverse(page, x, y).map(|i| SyncInverse { file: sx.rel_of_tag(&self.root, i.tag), line: i.line, inside: i.inside }))
     }
 
     // --- publicar ---------------------------------------------------------------------------------------------------------

@@ -27,7 +27,10 @@ import {
   marcarGuardado,
   setDirtyListener,
   setEditListener,
+  setSelectionListener,
 } from '../editor/docs';
+import { pdfApi } from '../pdf/api';
+import { refinarForward, refinarInverse } from '../sync/saltos';
 import { logBuffer } from './logbuffer';
 import { FILTRO_INICIAL, siguiente, visibles, type FiltroProblemas } from './problemas';
 
@@ -108,8 +111,10 @@ interface AppState {
   filtro: FiltroProblemas;
   problemaIdx: number;
   panelInferior: PanelInferior;
-  /** Pedido de ir a una línea de un archivo: lo atiende el editor cuando la pestaña ya está activa. */
-  irA: { rel: string; line: number; n: number } | null;
+  /** Pedido de ir a una línea de un archivo (y, si trae `inicio` y `fin`, a seleccionar esa palabra): lo atiende el editor cuando la pestaña ya está activa. */
+  irA: { rel: string; line: number; n: number; inicio?: number; fin?: number } | null;
+  /** "Seguir al cursor": el PDF acompaña al cursor del editor (6.5 del plan). Apagado por defecto. */
+  seguir: boolean;
   notice: Notice | null;
   dialog: DialogState | null;
 
@@ -144,6 +149,10 @@ interface AppState {
   cargarProblemas(perfil: string, abrirPanel?: boolean): Promise<void>;
   setFiltro(cambios: Partial<FiltroProblemas>): void;
   irAProblema(i: number): Promise<void>;
+  irAlPdf(opciones?: { resaltar?: boolean; silencioso?: boolean }): Promise<boolean>;
+  irAlCodigo(punto?: { page: number; x: number; y: number }): Promise<boolean>;
+  setSeguir(valor: boolean): void;
+  alMoverCursor(rel: string): void;
   saltarProblema(dir: 1 | -1): Promise<void>;
   alEditar(rel: string): void;
   despuesDeGuardar(rel: string): Promise<void>;
@@ -178,6 +187,8 @@ let colaDePreguntas: Promise<unknown> = Promise.resolve();
 /** Autoguardado "al dejar de tipear": un solo temporizador para todo el proyecto. */
 let temporizadorIdle: ReturnType<typeof setTimeout> | null = null;
 let ultimoEditado: string | null = null;
+/** "Seguir al cursor": el salto se pide 200 ms después del último movimiento del cursor. */
+let temporizadorSeguir: ReturnType<typeof setTimeout> | null = null;
 
 export const perfilActivo = (p: ProjectInfo | null): ProfileInfo | undefined =>
   p?.config?.profiles.find((x) => x.id === p.state.activeProfile);
@@ -203,6 +214,7 @@ export const useApp = create<AppState>()((set, get) => {
   // El registro de documentos avisa cuando una pestaña pasa de limpia a modificada o al revés, y en cada edición.
   setDirtyListener((rel, dirty) => actualizarTab(rel, { dirty }));
   setEditListener((rel) => get().alEditar(rel));
+  setSelectionListener((rel) => get().alMoverCursor(rel));
 
   return {
     project: null,
@@ -220,6 +232,7 @@ export const useApp = create<AppState>()((set, get) => {
     problemaIdx: -1,
     panelInferior: 'log',
     irA: null,
+    seguir: false,
     notice: null,
     dialog: null,
 
@@ -663,6 +676,93 @@ export const useApp = create<AppState>()((set, get) => {
       }
       await get().abrirArchivo(p.file);
       if (getDoc(p.file)) set({ irA: { rel: p.file, line: p.line, n: Date.now() } });
+    },
+
+    // --- SyncTeX ----------------------------------------------------------------------------------------------------
+
+    /**
+     * Del cursor al PDF (6.2 del plan). SyncTeX da las cajas de la línea; la palabra del cursor (con contexto) se busca en
+     * la capa de texto del PDF adentro de esas cajas y se resalta; si no aparece, se resaltan las cajas de la línea. Si el
+     * PDF elegido por especificidad no es el que se muestra, se cambia y se avisa.
+     */
+    async irAlPdf(opciones) {
+      const resaltar = opciones?.resaltar ?? true;
+      const silencioso = opciones?.silencioso ?? false;
+      const rel = get().activeRel;
+      const doc = rel ? getDoc(rel) : undefined;
+      if (!rel || !doc) {
+        if (!silencioso) get().avisar('Abrí un archivo y poné el cursor donde quieras ir en el PDF.');
+        return false;
+      }
+      const cabeza = doc.state.selection.main.head;
+      const linea = doc.state.doc.lineAt(cabeza);
+      let res;
+      try {
+        res = await getBackend().synctexForward(rel, linea.number);
+      } catch (e) {
+        if (!silencioso) get().avisar(mensajeDe(e), 'error');
+        return false;
+      }
+      if (!res) {
+        if (!silencioso) get().avisar('Este archivo todavía no está en el PDF: compilá con un perfil que lo incluya.');
+        return false;
+      }
+      if (res.pdf !== get().pdfRel) {
+        // En "seguir al cursor" no se cambia de PDF por la libre: sólo con un salto pedido.
+        if (silencioso) return false;
+        set((s) => ({ pdfRel: res.pdf, pdfEpoch: s.pdfEpoch + 1, pdfStale: false }));
+        get().avisar(`Mostrando el PDF del perfil «${res.perfil}»: es el que tiene este archivo.`);
+        const etiqueta = () => `${get().pdfRel}#${get().pdfEpoch}`;
+        for (let i = 0; i < 400 && pdfApi.host?.etiqueta !== etiqueta(); i++) await new Promise((r) => setTimeout(r, 50));
+      }
+      const host = pdfApi.host;
+      if (!host) return false;
+      const { rects } = await refinarForward(host, res, linea.text, cabeza - linea.from);
+      host.mostrar(rects[0].page, rects[0]);
+      if (resaltar) host.resaltar(rects[0].page, rects);
+      return true;
+    },
+
+    /** Del PDF al código (6.3 del plan): `punto` es lo clickeado (o, sin él, el centro de lo que se ve). */
+    async irAlCodigo(punto) {
+      const host = pdfApi.host;
+      const p = punto ?? host?.centroVisible();
+      const perfil = get().pdfRel?.split('/')[2];
+      if (!host || !p || !perfil) {
+        get().avisar('Todavía no hay un PDF para saltar al código.');
+        return false;
+      }
+      let res;
+      try {
+        res = await getBackend().synctexInverse(perfil, p.page, p.x, p.y);
+      } catch (e) {
+        get().avisar(mensajeDe(e), 'error');
+        return false;
+      }
+      if (!res || !res.file) {
+        get().avisar('Ese texto no viene de un archivo de tu proyecto (puede ser de una macro o del sistema).');
+        return false;
+      }
+      await get().abrirArchivo(res.file);
+      const doc = getDoc(res.file);
+      if (!doc) return false;
+      const ubic = await refinarInverse(host, p, res, { lineas: doc.state.doc.lines, texto: (n) => doc.state.doc.line(n).text });
+      set({ irA: { rel: res.file, line: ubic.line, n: Date.now(), inicio: ubic.inicio, fin: ubic.fin } });
+      return true;
+    },
+
+    setSeguir(valor) {
+      set({ seguir: valor });
+      if (valor) void get().irAlPdf({ resaltar: false, silencioso: true });
+    },
+
+    alMoverCursor(rel) {
+      if (!get().seguir || rel !== get().activeRel) return;
+      if (temporizadorSeguir) clearTimeout(temporizadorSeguir);
+      temporizadorSeguir = setTimeout(() => {
+        temporizadorSeguir = null;
+        void get().irAlPdf({ resaltar: false, silencioso: true });
+      }, 200);
     },
 
     async saltarProblema(dir) {

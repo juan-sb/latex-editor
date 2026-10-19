@@ -12,3 +12,4 @@ pub mod logparse;
 pub mod procs;
 pub mod project;
 pub mod session;
+pub mod synctex;

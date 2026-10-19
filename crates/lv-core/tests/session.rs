@@ -345,6 +345,94 @@ fn el_finished_trae_el_conteo_de_problemas_del_log_y_la_lista_se_pide_aparte() {
     assert_eq!(s2.problems("rapido").len(), 3, "se lee del log que dejó el build");
 }
 
+/// Un `.synctex.gz` mínimo: una página con una caja de línea (línea 3 de `main.tex`) y otra de `Secciones/Uno.tex` (línea 1).
+fn escribir_synctex(root: &Path, perfil: &str) {
+    use flate2::write::GzEncoder;
+    use flate2::Compression;
+    use std::io::Write;
+    let r = root.display().to_string().replace('\\', "/");
+    let texto = format!(
+        "SyncTeX Version:1\nInput:1:{r}/main.tex\nInput:2:{r}/Secciones/Uno.tex\nInput:3:{r}/.lv/drivers/lv-{perfil}.tex\nOutput:pdf\nMagnification:1000\nUnit:1\nContent:\n{{1\n[1,1:4736286,4736286:30000000,40000000,0\n(1,3:4736286,9000000:30000000,500000,100000\nk1,3:4736286,9000000:100000\n)\n(2,1:4736286,12000000:30000000,500000,100000\nk2,1:4736286,12000000:100000\n)\n]\n}}1\nPostamble:\n"
+    );
+    let mut e = GzEncoder::new(Vec::new(), Compression::default());
+    e.write_all(texto.as_bytes()).unwrap();
+    let dir = root.join(format!(".lv/build/{perfil}"));
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join(format!("lv-{perfil}.synctex.gz")), e.finish().unwrap()).unwrap();
+}
+
+fn pausa_mtime() {
+    std::thread::sleep(Duration::from_millis(40));
+}
+
+#[test]
+fn el_pdf_para_un_salto_se_elige_por_especificidad_y_no_por_fecha() {
+    let d = proyecto();
+    let (s, _) = abrir(&d, OK);
+    // Sin ningún SyncTeX no hay a dónde saltar.
+    assert!(s.elegir_pdf("Secciones/Dos.tex").unwrap().is_none());
+    assert!(s.synctex_forward("main.tex", 3).unwrap_err().to_string().contains("compilá"));
+
+    escribir_synctex(&s.root, "rapido");
+    assert_eq!(s.elegir_pdf("Secciones/Dos.tex").unwrap().as_deref(), Some("rapido"), "el único con synctex");
+
+    // El parcial incluye Uno (la selección por defecto) y es más viejo que el rápido que se compila después.
+    escribir_synctex(&s.root, "parcial");
+    pausa_mtime();
+    escribir_synctex(&s.root, "rapido");
+    assert_eq!(s.elegir_pdf("Secciones/Uno.tex").unwrap().as_deref(), Some("parcial"), "el parcial gana aunque el rápido sea más nuevo");
+    assert_eq!(s.elegir_pdf("Secciones/Dos.tex").unwrap().as_deref(), Some("rapido"), "Dos no está en el parcial: el que la contiene");
+    assert_eq!(s.elegir_pdf("main.tex").unwrap().as_deref(), Some("parcial"), "un archivo global está en todos: el de partes elegidas");
+
+    // Entre los que no son de partes elegidas, el más reciente.
+    pausa_mtime();
+    escribir_synctex(&s.root, "completo");
+    assert_eq!(s.elegir_pdf("Secciones/Dos.tex").unwrap().as_deref(), Some("completo"));
+    // Con otra selección, el parcial deja de contener a Uno.
+    s.set_state(StatePatch { selection: Some(vec!["Secciones/Dos".into()]), ..Default::default() }).unwrap();
+    assert_eq!(s.elegir_pdf("Secciones/Dos.tex").unwrap().as_deref(), Some("parcial"));
+    assert_eq!(s.elegir_pdf("Secciones/Uno.tex").unwrap().as_deref(), Some("completo"));
+}
+
+#[test]
+fn el_salto_va_y_vuelve_con_las_rutas_relativas_a_la_raiz() {
+    let d = proyecto();
+    let (s, _) = abrir(&d, OK);
+    escribir_synctex(&s.root, "rapido");
+    let f = s.synctex_forward("main.tex", 3).unwrap().expect("la línea 3 tiene caja");
+    assert_eq!((f.perfil.as_str(), f.pdf.as_str(), f.page), ("rapido", ".lv/build/rapido/lv-rapido.pdf", 1));
+    assert_eq!((f.line_used, f.rects.len()), (3, 1));
+    // Ida y vuelta por el centro de la caja.
+    let r = f.rects[0];
+    let v = s.synctex_inverse("rapido", f.page, r.x + r.w / 2.0, r.y + r.h / 2.0).unwrap().unwrap();
+    assert_eq!((v.file.as_deref(), v.line, v.inside), (Some("main.tex"), 3, true));
+    // Otro archivo del proyecto, en subcarpeta.
+    let u = s.synctex_forward("Secciones/Uno.tex", 1).unwrap().unwrap();
+    let r = u.rects[0];
+    assert_eq!(s.synctex_inverse("rapido", 1, r.x + 5.0, r.y + 1.0).unwrap().unwrap().file.as_deref(), Some("Secciones/Uno.tex"));
+    // Un archivo que no figura en el SyncTeX no es un error: no hay a dónde saltar.
+    assert!(s.synctex_forward("Secciones/Dos.tex", 1).unwrap().is_none());
+    // Perfiles que no existen o sin SyncTeX sí lo son.
+    assert!(s.synctex_inverse("no-existe", 1, 0.0, 0.0).is_err());
+    assert!(s.synctex_inverse("completo", 1, 0.0, 0.0).is_err());
+}
+
+#[test]
+fn un_build_nuevo_invalida_el_synctex_cacheado() {
+    let d = proyecto();
+    let (s, _) = abrir(&d, OK);
+    escribir_synctex(&s.root, "rapido");
+    assert!(s.synctex_forward("main.tex", 3).unwrap().is_some());
+    // Se reemplaza por uno sin `main.tex` (otro contenido, otro mtime): el cache no puede devolver el viejo.
+    pausa_mtime();
+    let dir = s.root.join(".lv/build/rapido");
+    fs::write(dir.join("lv-rapido.synctex.gz"), b"").unwrap();
+    assert!(s.synctex_forward("main.tex", 3).is_err(), "un gz vacío no es un SyncTeX válido");
+    pausa_mtime();
+    escribir_synctex(&s.root, "rapido");
+    assert!(s.synctex_forward("main.tex", 3).unwrap().is_some());
+}
+
 #[test]
 fn mueve_los_md5_del_perfil_al_cache_compartido_al_terminar() {
     let d = proyecto();

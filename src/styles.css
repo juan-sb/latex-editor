@@ -249,3 +249,8 @@ button, input, select { font: inherit; color: inherit; }
 .problemas-resumen { background: none; border: 1px solid currentColor; border-radius: 10px; padding: 1px 9px; cursor: pointer; font-size: 12px; }
 .problemas-resumen.error { color: var(--peligro); }
 .problemas-resumen.warning { color: var(--aviso); }
+
+/* SyncTeX: resaltado de lo que se salta en el PDF */
+.lv-resaltados { position: absolute; inset: 0; pointer-events: none; z-index: 6; }
+.lv-resaltado { position: absolute; background: rgba(255, 200, 0, 0.5); border-radius: 2px; box-shadow: 0 0 0 1px rgba(255, 170, 0, 0.8); animation: lv-desvanecer 1500ms ease-out forwards; }
+@keyframes lv-desvanecer { 0%, 55% { opacity: 1; } 100% { opacity: 0; } }

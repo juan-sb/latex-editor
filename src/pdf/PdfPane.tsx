@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { getBackend } from '../backend';
 import { useApp } from '../store/app';
+import { pdfApi } from './api';
 import { pdfActual, PdfViewerHost, type PdfEstado } from './viewer';
 
 const VACIO: PdfEstado = { pagina: 0, paginas: 0, escala: 1, modo: 'ancho' };
@@ -18,15 +19,21 @@ export function PdfPane() {
   const status = useApp((s) => s.build.status);
   const stale = useApp((s) => s.pdfStale);
   const avisar = useApp((s) => s.avisar);
+  const seguir = useApp((s) => s.seguir);
+  const irAlPdf = useApp((s) => s.irAlPdf);
+  const irAlCodigo = useApp((s) => s.irAlCodigo);
+  const setSeguir = useApp((s) => s.setSeguir);
 
   useEffect(() => {
     const host = new PdfViewerHost(areaRef.current!);
     hostRef.current = host;
     pdfActual.host = host;
+    pdfApi.host = host;
     const baja = host.suscribir((e) => setEstado(e));
     return () => {
       baja();
       pdfActual.host = null;
+      pdfApi.host = null;
       hostRef.current = null;
       void host.destruir();
     };
@@ -101,12 +108,36 @@ export function PdfPane() {
         <button className="icono-boton" disabled={!hayPdf} onClick={() => h?.zoomMenos()} title="Alejar (Ctrl+-)">−</button>
         <span className="zoom">{Math.round(estado.escala * 100)} %</span>
         <button className="icono-boton" disabled={!hayPdf} onClick={() => h?.zoomMas()} title="Acercar (Ctrl+=)">+</button>
+        <span className="sep" />
+        <button className="boton chico" onClick={() => void irAlPdf()} title="Ir al PDF desde el cursor (Ctrl+Alt+J)">
+          → PDF
+        </button>
+        <button className="boton chico" disabled={!hayPdf} onClick={() => void irAlCodigo()} title="Ir al código desde el centro de lo que se ve (o doble clic en el PDF)">
+          ← Código
+        </button>
+        <button className={`boton chico${seguir ? ' activo' : ''}`} onClick={() => setSeguir(!seguir)} title="Seguir al cursor: el PDF acompaña al cursor del editor">
+          Seguir
+        </button>
+        <span className="sep" />
         <button className={`boton chico${estado.modo === 'ancho' ? ' activo' : ''}`} disabled={!hayPdf} onClick={() => h?.ajustarAncho()} title="Ajustar al ancho de la página (W)">
           Ancho
         </button>
         {cargando && <span className="cargando">Cargando…</span>}
       </div>
-      <div className={`pdf-area${stale ? ' desactualizado' : ''}`} ref={areaRef} tabIndex={0} onKeyDown={teclas}>
+      <div className={`pdf-area${stale ? ' desactualizado' : ''}`} ref={areaRef}
+        tabIndex={0}
+        onKeyDown={teclas}
+        // Doble clic (o Ctrl+clic) en el PDF: al código (6.3 del plan).
+        onDoubleClick={(e) => {
+          const p = hostRef.current?.puntoDeEvento(e.nativeEvent);
+          if (p) void irAlCodigo(p);
+        }}
+        onClick={(e) => {
+          if (!e.ctrlKey) return;
+          const p = hostRef.current?.puntoDeEvento(e.nativeEvent);
+          if (p) void irAlCodigo(p);
+        }}
+      >
         {/* Los contenedores de cada visor los arma `PdfViewerHost` adentro de este elemento. */}
         {!hayPdf && !cargando && (
           <div className="vacio">{status === 'running' ? 'Compilando…' : 'Todavía no hay PDF. Compilá con Ctrl+Enter.'}</div>

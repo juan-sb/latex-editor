@@ -104,6 +104,31 @@ export interface Problema {
   context: string;
 }
 
+/** Un rectángulo del PDF en bp, con el origen arriba a la izquierda (el espacio de SyncTeX). */
+export interface RectBp {
+  page: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** Del cursor al PDF: en qué perfil está el PDF elegido y las cajas de línea de esa línea del fuente. */
+export interface SyncForward {
+  perfil: string;
+  pdf: string;
+  page: number;
+  rects: RectBp[];
+  line_used: number;
+}
+
+/** Del PDF al código. `file` es `null` si el texto viene de un archivo del sistema o de una macro del driver. */
+export interface SyncInverse {
+  file: string | null;
+  line: number;
+  inside: boolean;
+}
+
 export interface DirEntry {
   name: string;
   rel: string;
@@ -153,8 +178,8 @@ export interface LaunchOptions {
   open: string | null;
   root: string | null;
   smoke: boolean;
-  /** Qué smoke de aceptación corre la interfaz con `LV_SMOKE`: el de F1, el de F2 o el de F3. */
-  smokeMode: 'f1' | 'f2' | 'f3';
+  /** Qué smoke de aceptación corre la interfaz con `LV_SMOKE`: el de F1, F2, F3 o F4. */
+  smokeMode: 'f1' | 'f2' | 'f3' | 'f4';
   smokeFile: string | null;
   /** Milisegundos que el smoke deja la interfaz abierta al terminar (para sacarle una captura). */
   smokePausaMs: number;
@@ -200,6 +225,10 @@ export interface Backend {
   cancelBuild(): Promise<boolean>;
   /** Los problemas del último build del perfil. */
   problems(profile: string): Promise<Problema[]>;
+  /** Del cursor al PDF. `null` si el archivo todavía no figura en el SyncTeX del PDF elegido. */
+  synctexForward(rel: string, line: number): Promise<SyncForward | null>;
+  /** Del PDF al código: `(page, x, y)` en bp desde arriba a la izquierda. */
+  synctexInverse(profile: string, page: number, x: number, y: number): Promise<SyncInverse | null>;
   /** Copia el PDF del perfil a `publish.dir`. */
   publish(profile: string): Promise<Published>;
   /** Devuelve la función que deja de escuchar. */

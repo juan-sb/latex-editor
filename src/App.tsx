@@ -32,6 +32,11 @@ function useAtajosGlobales() {
         e.preventDefault();
         e.stopPropagation();
         void store.compilarParteActiva();
+      } else if (ctrl && e.altKey && !e.shiftKey && k === 'j') {
+        // Del cursor al PDF (SyncTeX).
+        e.preventDefault();
+        e.stopPropagation();
+        void store.irAlPdf();
       } else if (e.key === 'F8' && !ctrl && !e.altKey) {
         // Recorrer los problemas del último build (F8 siguiente, Mayús+F8 anterior).
         e.preventDefault();
@@ -61,7 +66,9 @@ export default function App() {
         // El smoke de aceptación sólo se carga cuando se pide: no entra en el uso normal.
         if (opts.smoke && !smokeIniciado) {
           smokeIniciado = true;
-          void (opts.smokeMode === 'f3'
+          void (opts.smokeMode === 'f4'
+            ? import('./smoke-f4').then((m) => m.correrSmokeF4(opts))
+            : opts.smokeMode === 'f3'
             ? import('./smoke-f3').then((m) => m.correrSmokeF3(opts))
             : opts.smokeMode === 'f2'
               ? import('./smoke-f2').then((m) => m.correrSmokeF2(opts))

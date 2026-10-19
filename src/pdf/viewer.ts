@@ -14,6 +14,9 @@ import * as pdfjsLib from 'pdfjs-dist';
 import { EventBus, PDFLinkService, PDFViewer, RenderingStates } from 'pdfjs-dist/web/pdf_viewer.mjs';
 import 'pdfjs-dist/web/pdf_viewer.css';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+import type { PdfApi } from './api';
+import { clave } from '../sync/texto';
+import type { PalabraPdf, Rect } from '../sync/buscar';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
 
@@ -67,12 +70,14 @@ async function esperarVisibles(v: Visor, limiteMs: number): Promise<void> {
   while (!visiblesListos(v) && performance.now() - t0 < limiteMs) await frame();
 }
 
-export class PdfViewerHost {
+export class PdfViewerHost implements PdfApi {
   private actual: Visor | null = null;
   private modo: 'ancho' | 'manual' = 'ancho';
   private readonly oyentes = new Set<(e: PdfEstado) => void>();
   private readonly observador: ResizeObserver;
   private temporizador: ReturnType<typeof setTimeout> | null = null;
+  /** Las palabras de cada página, por documento: se arman una vez y se tiran con el documento. */
+  private readonly palabras = new WeakMap<object, Map<number, PalabraPdf[]>>();
   /** Las cargas se encolan: dos recargas seguidas no pueden pisarse a mitad de armar o de desarmar. */
   private cola: Promise<unknown> = Promise.resolve();
 
@@ -313,6 +318,126 @@ export class PdfViewerHost {
 
   anterior(): void {
     this.irA(this.estado().pagina - 1);
+  }
+
+  // --- SyncTeX: palabras, resaltado y desplazamiento -------------------------------------------------------------------
+
+  /**
+   * Las palabras de la capa de texto de una página, con su rectángulo en bp desde arriba a la izquierda (el espacio de
+   * SyncTeX). PDF.js entrega una cadena por tramo de texto con su posición y su ancho; las palabras se sacan repartiendo
+   * el ancho en proporción a los caracteres, que alcanza para ubicar un clic y para resaltar.
+   */
+  async palabrasDePagina(n: number): Promise<PalabraPdf[]> {
+    const doc = this.actual?.doc;
+    if (!doc || n < 1 || n > doc.numPages) return [];
+    let porPagina = this.palabras.get(doc);
+    if (!porPagina) this.palabras.set(doc, (porPagina = new Map()));
+    const hecho = porPagina.get(n);
+    if (hecho) return hecho;
+    const pagina = await doc.getPage(n);
+    const [x0, y0, , y1] = pagina.view as number[];
+    const alto = y1 - y0;
+    const contenido = await pagina.getTextContent();
+    const out: PalabraPdf[] = [];
+    for (const it of contenido.items as any[]) {
+      const str: string | undefined = it.str;
+      if (!str || !str.trim() || !it.transform) continue;
+      const [, , c, d, e, f] = it.transform as number[];
+      const tam = Math.hypot(c, d) || it.height || 10; // tamaño de la letra
+      const ancho: number = it.width || tam * 0.5 * str.length;
+      const baseX = e - x0;
+      const baseY = alto - (f - y0); // la línea de base, medida desde arriba
+      for (const m of str.matchAll(/\S+/g)) {
+        const k = clave(m[0]);
+        if (!k) continue;
+        const ini = m.index ?? 0;
+        out.push({
+          texto: m[0],
+          clave: k,
+          page: n,
+          x: baseX + (ancho * ini) / str.length,
+          y: baseY - tam * 0.78,
+          w: (ancho * m[0].length) / str.length,
+          h: tam,
+        });
+      }
+    }
+    porPagina.set(n, out);
+    return out;
+  }
+
+  private vistaDePagina(n: number): { pv: any; escala: number } | null {
+    const pv = this.actual?.viewer.getPageView(n - 1);
+    return pv ? { pv, escala: pv.viewport.scale } : null;
+  }
+
+  /** Resalta rectángulos (bp) de una página con una capa que se desvanece sola (6.2 del plan: ~1,5 s). */
+  resaltar(pagina: number, rects: Rect[], ms = 1500): void {
+    const v = this.vistaDePagina(pagina);
+    if (!v) return;
+    this.area.querySelectorAll('.lv-resaltados').forEach((e) => e.remove());
+    const capa = document.createElement('div');
+    capa.className = 'lv-resaltados';
+    for (const r of rects.filter((x) => x.page === pagina)) {
+      const el = document.createElement('div');
+      el.className = 'lv-resaltado';
+      Object.assign(el.style, { left: `${r.x * v.escala}px`, top: `${r.y * v.escala}px`, width: `${Math.max(r.w, 2) * v.escala}px`, height: `${r.h * v.escala}px`, animationDuration: `${ms}ms` });
+      capa.appendChild(el);
+    }
+    v.pv.div.appendChild(capa);
+    setTimeout(() => capa.remove(), ms + 100);
+  }
+
+  esVisible(pagina: number, rect: Rect): boolean {
+    const v = this.vistaDePagina(pagina);
+    const cont = this.actual?.cont;
+    if (!v || !cont) return false;
+    const arriba = v.pv.div.offsetTop + rect.y * v.escala;
+    const izq = v.pv.div.offsetLeft + rect.x * v.escala;
+    return (
+      arriba >= cont.scrollTop + 16 &&
+      arriba + rect.h * v.escala <= cont.scrollTop + cont.clientHeight - 16 &&
+      izq >= cont.scrollLeft &&
+      izq + rect.w * v.escala <= cont.scrollLeft + cont.clientWidth
+    );
+  }
+
+  /** Desplaza el PDF sólo si el rectángulo no estaba a la vista, y lo deja a un tercio de la altura. */
+  mostrar(pagina: number, rect: Rect): void {
+    const v = this.vistaDePagina(pagina);
+    const cont = this.actual?.cont;
+    if (!v || !cont || this.esVisible(pagina, rect)) return;
+    // Primero se le dice a PDF.js cuál es la página actual: si sólo se movía `scrollTop`, un cambio de tamaño del panel (que
+    // reaplica el zoom y restaura "la página actual") devolvía el visor a donde estaba antes del salto (medido en el smoke de F4).
+    if (this.actual?.viewer.currentPageNumber !== pagina) this.actual!.viewer.currentPageNumber = pagina;
+    cont.scrollTop = Math.max(0, v.pv.div.offsetTop + rect.y * v.escala - cont.clientHeight / 3);
+    const izq = v.pv.div.offsetLeft + rect.x * v.escala;
+    if (izq < cont.scrollLeft || izq + rect.w * v.escala > cont.scrollLeft + cont.clientWidth) cont.scrollLeft = Math.max(0, izq - cont.clientWidth / 3);
+  }
+
+  /** La página y el punto (bp) de un evento del mouse sobre el visor. `null` si no cayó sobre una página. */
+  puntoDeEvento(ev: MouseEvent): { page: number; x: number; y: number } | null {
+    const pagina = (ev.target as HTMLElement | null)?.closest?.('.page') as HTMLElement | null;
+    if (!pagina) return null;
+    const n = Number(pagina.dataset.pageNumber);
+    const v = this.vistaDePagina(n);
+    if (!v) return null;
+    const r = pagina.getBoundingClientRect();
+    return { page: n, x: (ev.clientX - (r.left + pagina.clientLeft)) / v.escala, y: (ev.clientY - (r.top + pagina.clientTop)) / v.escala };
+  }
+
+  centroVisible(): { page: number; x: number; y: number } | null {
+    const cont = this.actual?.cont;
+    if (!cont) return null;
+    const r = cont.getBoundingClientRect();
+    const centro = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    const pagina = (centro as HTMLElement | null)?.closest?.('.page') as HTMLElement | null;
+    if (!pagina) return null;
+    const n = Number(pagina.dataset.pageNumber);
+    const v = this.vistaDePagina(n);
+    if (!v) return null;
+    const rp = pagina.getBoundingClientRect();
+    return { page: n, x: (r.left + r.width / 2 - (rp.left + pagina.clientLeft)) / v.escala, y: (r.top + r.height / 2 - (rp.top + pagina.clientTop)) / v.escala };
   }
 
   // --- para los smokes de aceptación -----------------------------------------------------------------------------------

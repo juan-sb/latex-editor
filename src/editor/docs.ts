@@ -32,6 +32,12 @@ export function setDirtyListener(fn: (rel: string, dirty: boolean) => void): voi
 }
 
 let alEditar: (rel: string) => void = () => {};
+let alMoverSeleccion: (rel: string) => void = () => {};
+
+/** El store se entera de cada cambio de selección o de cursor por acá ("seguir al cursor" de SyncTeX). */
+export function setSelectionListener(fn: (rel: string) => void): void {
+  alMoverSeleccion = fn;
+}
 
 /** El store se entera de cada edición por acá (el autoguardado "al dejar de tipear" la usa). */
 export function setEditListener(fn: (rel: string) => void): void {
@@ -46,6 +52,7 @@ function construirEstado(entry: DocEntry, doc: string | Text, selection?: Editor
     entry.state = u.state;
     if (u.docChanged && estaModificado(entry) !== antes) alCambiarDirty(entry.rel, estaModificado(entry));
     if (u.docChanged) alEditar(entry.rel);
+    if (u.selectionSet) alMoverSeleccion(entry.rel);
   });
   return EditorState.create({
     doc,
@@ -133,4 +140,15 @@ function aplicarProblemasA(e: DocEntry): void {
 export function aplicarProblemas(lista: Problema[]): void {
   problemasVigentes = lista;
   docs.forEach(aplicarProblemasA);
+}
+
+/** Mueve el cursor (como lo haría el usuario): por la vista si el documento está en ella, y si no, sobre el estado guardado. */
+export function moverCursor(rel: string, anchor: number): void {
+  const e = docs.get(rel);
+  if (!e) throw new Error(`el documento ${rel} no está abierto`);
+  if (vistaActiva && vistaActiva.rel === rel) {
+    vistaActiva.view.dispatch({ selection: { anchor } });
+    return;
+  }
+  e.state = e.state.update({ selection: { anchor } }).state;
 }
