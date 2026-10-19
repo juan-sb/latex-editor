@@ -120,9 +120,9 @@ latex-viewer-2/
 
 ### 3.4 API core ↔ UI (borrador, ajustar al implementar)
 
-Comandos: `open_project(path)` → vista del proyecto (raíz, configuración, estado, partes), `get_project()` (relee el disco), `set_root_file(rel)`, `read_file(rel)` → `{text (normalizado a \n), eol, bom, mixed, version}`, `write_file(rel, text, expected_version)` (restaura el EOL y el BOM **del archivo en disco**; `version` es el md5 del contenido; si el disco ya tiene otra, error `conflict`; no escribe si el contenido es idéntico), `set_state(patch)` (perfil activo, partes elegidas, variables, modo de auto-compilación; reemplaza a `set_selection` y `set_variable`), `save_config()`, `file_info(rel)` (a qué parte pertenece un archivo y si el perfil activo lo usa), `build(profile?)` → `started | queued`, `cancel_build()`, `publish(profile)`, `synctex_forward(rel, line, col)`, `synctex_inverse(profile, page, x, y)`, `search(query, opts)`, `replace(...)`, `bake_figures()`, `clean_figure_cache()`, `export_parts(parts[] | "all")`, `preview_fragment(rel, from, to)`, `doctor()`.
+Comandos: `open_project(path)` → vista del proyecto (raíz, configuración, estado, partes), `get_project()` (relee el disco), `set_root_file(rel)`, `read_file(rel)` → `{text (normalizado a \n), eol, bom, mixed, version}`, `write_file(rel, text, expected_version)` (restaura el EOL y el BOM **del archivo en disco**; `version` es el md5 del contenido; si el disco ya tiene otra, error `conflict`; no escribe si el contenido es idéntico), `set_state(patch)` (perfil activo, partes elegidas, variables, modo de auto-compilación; reemplaza a `set_selection` y `set_variable`), `save_config()`, `file_info(rel)` (a qué parte pertenece un archivo y si el perfil activo lo usa), `build(profile?)` → `started | queued`, `cancel_build()`, `publish(profile)`, `synctex_forward(rel, line, col)`, `synctex_inverse(profile, page, x, y)`, `search(query, opts)`, `replace(...)`, `bake_figures()`, `clean_figure_cache()`, `export_parts(parts[] | "all")`, `preview_fragment(text)` (F7: el texto viaja desde el editor, que lo elige; no `rel, from, to`), `doctor()`.
 
-Eventos: `build:queued|started|log|finished|error` (en F2; `pass` y los demás vienen con sus fases), `figures:progress`, `fs:changed`, `index:updated`.
+Eventos: `build:queued|started|log|finished|error` (en F2; `pass` y los demás vienen con sus fases), `figures:progress`, `export:queued|started|progress|finished` (F7), `fs:changed` (F7: `{ files }`), `index:updated`.
 
 ---
 
@@ -391,6 +391,7 @@ Panel "Figuras": figuras por archivo, estado (al día / pendiente / falló), tam
 - Exportar la parte del archivo abierto, una lista o todas, cada una a `export.dir` con `export.pattern`.
 - Usa el perfil `export`: no toca la selección ni el PDF del parcial.
 - `{num}` es el número de capítulo impreso, leído del `.aux` de la parte (`\numberline {8}`), no de la posición.
+- **Hecho en F7.** `export.dir` (relativo a la raíz, puede salir de ella como `publish.dir`; `export` por defecto) y `export.pattern` con `{num}`, `{num:02}` y `{name}` (el nombre de la parte sin carpeta; lo que Windows no admite en un nombre se cambia por `-`). Es un trabajo `Export` de la cola (6 del plan, prioridad detrás del build y del fragmento): un build por parte, uno atrás de otro, con `\includeonly{<parte>}` y los `.aux` de las demás sembrados como en 5.4; al terminar cada uno se copia `.lv/build/export/lv-export.pdf` al destino. Eventos `export:queued|started|progress|finished`. Se puede exportar desde el panel Partes (⇩ por parte, «Elegidas», «Todas»), el menú de compilación y la paleta.
 
 ### 8.2 Vista previa de fragmento
 
@@ -399,12 +400,14 @@ Para iterar sobre una figura, una ecuación o una sección sin compilar la parte
 - Comando "Vista previa del entorno actual" (o de la selección). La app escribe el fragmento en `.lv/fragment/frag.tex` y un driver con flags parciales, `\includeonly{}` (no entra ninguna parte) y `\AddToHook{begindocument/end}{\input{.lv/fragment/frag}}`.
 - Referencias resueltas sembrando los `.aux` como en 5.4. Comparte el cache de figuras.
 - Se muestra en una pestaña "Fragmento" del visor, o en una ventana flotante.
+- **Hecho en F7** (pestaña, sin ventana flotante). Ctrl+Alt+F compila la selección o, sin selección, el entorno más interno que rodea al cursor (un `tikzpicture` dentro de un `figure` o `table` compila el flotante entero, con su `\caption`; fuera de todo entorno, el párrafo). El texto viaja desde el editor (puede tener cambios sin guardar); el resto del contexto sale del disco. Es un trabajo `Fragment` de la cola con el perfil de servicio `fragmento`; el PDF queda en `.lv/build/fragmento/lv-fragmento.pdf`, cada visor conserva su página y su zoom mientras se mira el otro, y el estado del build y el PDF del documento no se tocan. Las figuras del fragmento llevan su propio slug (`<sello>-frag-<n>`, con `\FigurasDe{frag}` en el modo `project` y la tabla de slugs en el modo `app`): comparten el cache, el sello y la cocción pero no pisan las del capítulo.
 
 ### 8.3 Variables
 
 - Cada variable de `latexviewer.json` aparece como selector en el menú de compilación y se escribe en el driver como `\def\<nombre>{<valor>}`.
 - El valor vive en `.lv/state.json` (es de esta máquina, como el `opciones.tex` de inspo).
 - Para que el driver gane, el proyecto tiene que definir su default con guardia (`\ifdefined\X\else\def\X{...}\fi`). El doctor detecta un `\def` incondicional de una variable declarada y lo avisa.
+- **Hecho en F7** (el doctor es de F8): las variables están en el menú de compilación (Ctrl+Alt+T) y en el ⋯ de la barra, y un cambio de variable recompila al siguiente build porque cambia el driver. El libro define `\OpcionPie` sin guardia en `structure.tex`; `scripts/parchear-libro-f7.ps1` se la pone a la copia de prueba (`\ifdefined\OpcionPie\else\def\OpcionPie{completo}\fi`) y el libro real se corrige en F9. Con la guardia puesta, `OpcionPie=ninguno` saca el pie del parcial y `completo` lo devuelve (test con TeX real y smoke).
 
 ---
 
@@ -436,8 +439,9 @@ Para iterar sobre una figura, una ecuación o una sección sin compilar la parte
 ```
 
 - Barra superior: perfil activo y partes, botón Compilar con menú (perfiles, variables, auto-compilación, detenerse en el primer error, publicar, exportar, cancelar), duración y resultado del último build, spinner mientras compila con "pasada 2 · cocinando 3 figuras".
-- Layouts: editor + PDF (default), sólo editor, sólo PDF, PDF en ventana aparte (segundo monitor). Ctrl+\ alterna.
+- Layouts: editor + PDF (default), sólo editor, sólo PDF, PDF en ventana aparte (segundo monitor). Ctrl+\ alterna. **Hecho en F7: los tres primeros** (el panel que no se ve se colapsa y conserva su estado); la ventana aparte queda para F10.
 - Pestañas de editor, pestaña modificada marcada, archivos cambiados afuera recargados solos si no hay cambios locales (si los hay: diálogo).
+- **Archivos cambiados afuera [F7].** El core observa el árbol (`notify`, ráfagas de 250 ms de silencio o 2 s desde la primera) y emite `fs:changed` con las rutas que cambiaron. **Ignora todo lo que escribe la propia compilación**, o cada build dispararía otro: `.lv/`, `.git/`, el cache de figuras, la carpeta de exportación y la de publicación si están dentro del proyecto, los auxiliares por extensión (`.aux`, `.log`, `.toc`, `.fdb_latexmk`, `.bbl`, `.synctex.gz`, `.md5`, `.dpth`...), el `<job>.run.xml` de la raíz y los temporales de la escritura atómica. La interfaz: una pestaña sin cambios se recarga sola (con un aviso); una con cambios avisa y, al guardar, el conflicto de versión pregunta qué queda; lo que acaba de escribir la propia app se reconoce porque la versión del disco es la que la pestaña ya conoce; el árbol y el índice de partes y símbolos se refrescan; y si algún archivo entra en lo que compila el perfil activo (y la auto-compilación no es manual) se compila una sola vez. Un archivo que no es `.tex` también cuenta si el grafo lo alcanza (una imagen, un `.bib`).
 - Esquema: capítulos/secciones/subsecciones de todo el proyecto siguiendo el grafo, con labels; las partes con checkbox; las que están en el perfil activo, resaltadas.
 - Tema claro y oscuro para la UI; el PDF queda en blanco (opción de invertir colores más adelante).
 - Textos de la UI en español.
@@ -475,7 +479,8 @@ Todos configurables desde un `keybindings.json` en la config de la app. Hay que 
 | Ctrl+S | guardar (y compilar si auto-compilación = al guardar) |
 | Ctrl+Enter | guardar todo y compilar el perfil activo |
 | Ctrl+Alt+C (y Ctrl+Mayús+Enter, el de F2) | compilar la parte del archivo abierto (pasa a ser la selección del parcial) |
-| Ctrl+Alt+T | menú de compilación: perfiles, variables, exportar, cocinar, limpiar (como el Ctrl+Alt+T de inspo) |
+| Ctrl+Alt+T | menú de compilación: perfiles, variables, exportar, cocinar, limpiar (como el Ctrl+Alt+T de inspo) [F7] |
+| Ctrl+Alt+F | vista previa del fragmento: la selección o el entorno actual [F7; no estaba en este plan] |
 | F8 / Shift+F8 | siguiente / anterior problema |
 
 **Navegación y sync**
@@ -622,10 +627,17 @@ Aceptación agregada en la revisión (en esta máquina):
 
 ### F7. Exportación, fragmentos y variables
 
-- [ ] Exportar una, varias o todas las partes con el número impreso.
-- [ ] Vista previa de fragmento.
-- [ ] Variables en el menú de compilación.
-- [ ] **Archivos cambiados afuera** (10.1, `fs:changed`; agregado en la revisión previa a F6: estaba en 3.1, 3.4 y 10.1 pero en ninguna fase). Watcher (`notify`) sobre el árbol del proyecto, sin `.lv/` ni el cache de figuras: una pestaña sin cambios se recarga sola, una con cambios avisa; el árbol de archivos y el índice se refrescan; un `.tex` que usa el perfil activo dispara la auto-compilación. Para el libro importa: los scripts de `Herramientas/` reescriben `Secciones/fig_*.tex`.
+- [x] Exportar una, varias o todas las partes con el número impreso (8.1). Un trabajo `Export` de la cola, con el perfil de servicio `export`; el número sale del `.aux` de la parte.
+- [x] Vista previa de fragmento (8.2). Un trabajo `Fragment` de la cola, con el perfil de servicio `fragmento` y su pestaña en el visor (Ctrl+Alt+F).
+- [x] Variables en el menú de compilación (8.3): el menú Ctrl+Alt+T y el ⋯ de la barra. En la copia del libro, `scripts/parchear-libro-f7.ps1` le pone la guardia a `\OpcionPie`; el libro real se corrige en F9.
+- [x] **Archivos cambiados afuera** (10.1, `fs:changed`; agregado en la revisión previa a F6: estaba en 3.1, 3.4 y 10.1 pero en ninguna fase). Watcher (`notify`) sobre el árbol del proyecto, sin `.lv/` ni el cache de figuras: una pestaña sin cambios se recarga sola, una con cambios avisa; el árbol de archivos y el índice se refrescan; un `.tex` que usa el perfil activo dispara la auto-compilación. Para el libro importa: los scripts de `Herramientas/` reescriben `Secciones/fig_*.tex`.
+- [x] Los atajos que quedaron de F5: Ctrl+Alt+T (menú de compilación) y Ctrl+\ (alternar layout).
+
+Aceptación: con la app abierta sobre el libro, correr `Herramientas/gen_engranajes.py` con otro parámetro actualiza la figura del anexo en el PDF sin tocar nada más (un solo build, sólo las 2 figuras de los engranajes recocinadas, una sola página del PDF distinta, la app quieta después); exportar dos partes deja `08 - …` y `09 - …` (los números impresos, no 1 y 2) sin tocar la selección ni el PDF del parcial; la variable `OpcionPie` cambia el pie del PDF.
+
+> **Resultado de F7 (`scripts/aceptacion-f7.ps1`, dentro de la app real sobre una copia tibia del libro, 7 pasos, 165 s; números en `docs/benchmarks.md`).** Archivos cambiados afuera: la app compila **una vez**, 385 ms después de que el script terminó, recocina **sólo** `anexocauer-0` y `-1` (las dos figuras de los engranajes, por la invalidación de F6), el PDF del rápido cambia en **1 página de 183** (la 96, 852 píxeles) y después de 6 s de espera no hay otro build: el observador no se ve a sí mismo. Exportar 2 partes: 29,9 s, números 8 y 9; las 8 partes del libro: 126 s (15,8 s cada una), números 8 a 15. Fragmento: 14,3 s la primera vez (con su figura), 0,84 s con el mismo texto; en el ciclo de edición, 3,1 s de sólo texto y 8,4 a 10,6 s si cambia la figura.
+>
+> **Lo que cambió respecto del plan, y se dice:** (1) El perfil de exportación y el del fragmento son de **servicio**: ids reservados `export` y `fragmento`; si `profiles` no los define la app los arma (ocultos, con los flags de `partial` y la externalización que use el proyecto). (2) La **cola** tiene cuatro clases con prioridad `Build > Fragment > Export > Bake`, una pendiente por clase (gana la última): un fragmento pedido mientras corre un build corre antes que una exportación en espera. (3) **Cancelar** corta la exportación entera (el build en curso y las partes que faltan); una parte que falla no corta las demás y deja su error en los problemas del perfil `export`. (4) Las figuras de un fragmento se nombran con su propio slug `frag` (`<sello>-frag-<n>`): con el de la parte que se edita pisarían, en el cache compartido, las del capítulo. Comparte el cache, el sello y la cocción, no los nombres; la limpieza se las lleva (no están en la figlist). (5) Los `Finished` de los builds de una exportación **no salen del core** (los reemplaza el progreso); los del fragmento sí, y la interfaz los distingue por el perfil. (6) El número impreso sale de `\numberline` de la línea del capítulo del `.aux` de la parte; sin capítulo numerado se usa el primer `\numberline` y, a falta de eso, la posición. (7) Se agrega **Ctrl+Alt+F** (vista previa del fragmento), que no estaba en 10.3, y los botones ⇩ (exportar una parte), «Elegidas» y «Todas» del panel Partes. (8) El layout rota entre editor y PDF, sólo el editor y sólo el PDF: **«PDF en ventana aparte» no se hizo** (es de F10: segundo monitor). (9) La interfaz ignora lo que acaba de escribir ella misma comparando la versión de la pestaña con la del disco; una ráfaga de más de 30 archivos (un `git checkout`) compila sin preguntar archivo por archivo. (10) Los 3 arreglos que se pidieron antes de F7: el `.run.xml` de biblatex ya no es una figura (y la limpieza lo borra), `tikz-datos.json` guarda tamaño y fecha y calcula el md5 sólo si cambiaron, y los scripts de aceptación frenan con una instancia de `lv-app.exe` abierta. (11) **Pendiente: repetir el smoke de F2 con el `lv-app.exe` normal** para la memoria comparable: sigue abierta la instancia de la persona (PID 33308, desde las 15:32), la compilación del exe normal falla al reemplazar el archivo y, con una segunda instancia, WebView2 comparte el proceso del navegador (la memoria sale de 36 MB). Los smokes de F1 a F7 corrieron con una copia del ejecutable nuevo (`LV_APP_EXE`).
 
 ### F8. Historial, doctor y procesos
 

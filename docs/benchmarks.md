@@ -368,3 +368,53 @@ Sobre `spikes/work/f6-libro` con el `latexviewer.json` nuevo (`completo` con `ca
 | Rápido | 9,2 8,8 9,8 8,8 8,8 9,1 (mediana **9,10**) | 8,8 8,8 8,9 8,8 9,4 9,2 (mediana **8,90**) |
 
 Iguales. La diferencia con las cifras de antes es de la máquina (el parcial hoy da 4,7 s en los dos motores; 4,9 a 5,0 s dentro de la app, que suma 313 a 467 ms: en el rango de los 312 a 442 ms de F2). No es una regresión de F6.
+
+
+## F7: exportar, fragmentos, variables y archivos cambiados afuera
+
+Todo sobre una copia tibia del libro (`scripts/aceptacion-f7.ps1`, con la guardia a `\OpcionPie` y `export.dir` adentro de la copia) y, para lo que mide el core solo, `spikes/work/f6-libro` con `--example build`. Máquina quieta; la instancia de la app de la persona estaba abierta (ver el hallazgo 6).
+
+### Smoke de aceptación de F7 (dentro de la app real, 7 pasos, 165 s)
+
+| Qué | Medido |
+|---|---|
+| Archivos cambiados afuera: del fin de `gen_engranajes.py` (con otro ángulo de presión) al inicio del build | **385 ms** |
+| …y hasta el PDF nuevo | 34,3 s (rápido: 2 figuras de los engranajes cocinadas por pgf, 12 a 13 s cada una, más la pasada) |
+| Builds lanzados por el cambio | **1**, y ninguno más en los 6 s que se esperaron después |
+| Figuras recocinadas | **2**: `anexocauer-0` y `anexocauer-1` (de 158) |
+| PDF del rápido, antes y después, rasterizado a 60 dpi | **1 página distinta de 183** (la 96: 852 píxeles, 86 fuertes) |
+| Variable `OpcionPie`: parcial con «ninguno» (primer build de la copia) / con «completo» | 16,1 s / 4,9 s; sin el pie / con el pie |
+| Ctrl+Alt+T con teclado real | abre el menú con 13 entradas |
+| Ctrl+\ con teclado real | `ambos:EP` → `editor:E-` → `pdf:-P` → `ambos:EP` (anchos medidos en el DOM) |
+| Vista previa de un fragmento (Ctrl+Alt+F): primera vez / mismo texto otra vez | 14,3 s (incluye cocinar su figura) / **0,84 s** (latexmk no ve nada nuevo) |
+| El fragmento no toca el PDF del documento ni el estado del build, y sólo cocinó figuras `frag` | sí |
+| Exportar 2 partes (`Funciones de Aproximación` y `Aproximación de Butterworth`) | 29,9 s; números impresos **8 y 9**; sin tocar la selección ni el PDF del parcial |
+
+### Exportar y fragmentos sobre el libro (`--example build`)
+
+| Escenario | Tiempo |
+|---|---|
+| Exportar las 8 partes (números 8 a 15, aux sembrados desde el rápido) | **126 s**: 15,8 s por parte |
+| Exportarlas otra vez, sin cambios | 120 s (cada parte cambia el `\includeonly` del driver: latexmk recompila siempre) |
+| Fragmento con una figura que cambia (2 pasadas: cocción de la figura y una más) | 8,4 a 10,6 s |
+| Fragmento de sólo texto, otro texto cada vez | 3,1 a 3,3 s |
+| Referencia de inspo (README del libro) | ~10 s por capítulo exportado |
+
+### Regresión y pruebas
+
+F1, F2, F3, F4, F5 y F6 siguen pasando (los del libro con el observador activo: ninguno vio un build de más). F2: parcial guardado a PDF visible 5,1 s y rápido 10,8 s. La memoria del WebView de F2 (36 a 37 MB) **no es comparable**: con la instancia de la persona abierta, WebView2 comparte el proceso del navegador y los procesos del smoke no quedan en el árbol del que se mide.
+
+| | Cantidad | Qué cubren |
+|---|---|---|
+| `cargo test -p lv-core` | 115 de biblioteca y 82 de integración con procesos falsos | lo de F6 más la cola con cuatro clases y su prioridad, el nombre de los PDF exportados, el número impreso del `.aux`, la configuración de `export` y los perfiles de servicio, el observador (lo que se ignora y las ráfagas, con eventos reales del sistema) |
+| `cargo test -p lv-core --features tex` | todos pasan | más `tests/exportar_tex.rs` (6: exportar con el número impreso, una parte rota que no corta las demás, cancelar, el orden de la cola, el fragmento con referencias y figuras en el cache, la variable en el documento) y `tests/figuras_datos.rs` |
+| `npx vitest run` | 215 | lo de F6 (192) más el fragmento del cursor (7) y el store de F7 (16: exportar, builds de servicio, fragmento, layouts, menú, archivos cambiados afuera) |
+
+### Hallazgos de F7
+
+1. **Windows avisa que una carpeta «cambió» cada vez que cambia un archivo de adentro**: sin descartar esos eventos de carpeta, cada ráfaga traía el nombre de la carpeta como si fuera un archivo.
+2. **Exportar todas no se acelera con el cache de figuras ni con nada «sin cambios»**: cada parte es un build con otro `\includeonly`, así que latexmk recompila siempre (120 s contra 126 s con el cache frío de los `.aux`). El costo es el de un parcial por parte (~15 s) y no los ~10 s del README, que es de otra máquina.
+3. **Las figuras de un fragmento con el slug de su capítulo pisarían las del capítulo** en el cache compartido (el índice dentro del fragmento no es el del capítulo): por eso llevan el slug `frag`.
+4. **La primera página de un capítulo va en el estilo `plain`**: un pie que sólo se define para `fancy` no sale en ella (el fixture de exportar y el libro lo repiten en `plain`).
+5. **El observador sin filtro entraría en un bucle**: el cache de figuras, `.lv/`, los auxiliares y el `run.xml` de biblatex se escriben en cada build. El test mide que una ráfaga con esos archivos da un solo aviso sin ellos, y el smoke que el build del cambio no dispara otro.
+6. **Una instancia abierta de la app estorba a los smokes**: impide reemplazar `target\release\lv-app.exe` y, con una segunda, WebView2 comparte el proceso del navegador. Los scripts frenan ahora; `LV_ACEPTAR_APP_ABIERTA=1` los deja pasar con otro ejecutable (`LV_APP_EXE`).

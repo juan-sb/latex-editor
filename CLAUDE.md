@@ -46,6 +46,10 @@ Si un spike o la implementación contradicen el plan, se actualiza `plan.md` y s
 - `scripts/aceptacion-f4.ps1`: el smoke de F4, SyncTeX sobre el libro (`LV_SMOKE=f4`, ~1 minuto: compila el rápido y mide 50 saltos). Necesita el cache de figuras tibio.
 - `scripts/aceptacion-f5.ps1`: el smoke de F5 sobre `fixtures/editor` (`LV_SMOKE=f5`, segundos, sin TeX): formato, autocompletado, F12, Ctrl+P, paleta, esquema, búsqueda y reemplazo con bytes exactos, lint y keybindings.
 - `scripts/aceptacion-f6.ps1`: el smoke de F6 sobre una copia de `fixtures/figuras-app` (`LV_SMOKE=f6`, ~25 s, con TeX real): panel Figuras, Cocinar con progreso, disparo automático al cambiar el estilo, Limpiar con vista previa, una figura rota y Cancelar a mitad de una cocción.
+- `scripts/aceptacion-f7.ps1`: el smoke de F7 sobre una copia tibia del libro (`LV_SMOKE=f7`, ~3 minutos, con TeX y Python): la variable `OpcionPie` en el documento, Ctrl+Alt+T y Ctrl+\ con teclado real, la vista previa de un fragmento, exportar dos partes con el número impreso (8 y 9) y archivos cambiados afuera (el script corre `gen_engranajes.py` con la app abierta y compara el PDF antes y después con `scripts/comparar-pdf.py`: tiene que cambiar una sola página). Necesita `scripts/parchear-libro-f7.ps1`, que le pone la guardia a `\OpcionPie` a la COPIA del libro (el real se corrige en F9).
+- `python scripts/comparar-pdf.py a.pdf b.pdf [dpi] [carpeta]`: diff rasterizado página a página (usa `pdftoppm` de MiKTeX); cuántas páginas difieren y dónde.
+- `cargo run --release -p lv-core --example build -- <carpeta> --exportar "A,B"|todas` y `--fragmento <archivo.tex>`: exportar partes y vista previa de un fragmento con el mismo motor que la app.
+- Los scripts de aceptación **frenan si hay una instancia de `lv-app.exe` abierta** (impide recompilar `target\release\lv-app.exe` y, con una segunda instancia, WebView2 comparte el proceso del navegador con la primera: la memoria que mide el smoke de F2 sale de 36 MB y no sirve). `LV_ACEPTAR_APP_ABIERTA=1` lo deja pasar.
 - `cargo run --release -p lv-core --example figuras -- <carpeta>`: estado del cache de figuras (sello, figuras por sello, MB) y lo que cuesta el chequeo previo a cada build (criterio de F6: < 20 ms). `--example build -- <carpeta> [perfil] --figuras` lista y cocina con el mismo motor que la app, y `--limpiar` corre la limpieza del panel (borra del cache lo que el último listado completo no nombra).
 - `scripts/bench-figuras.ps1 [-Trabajos 16,12,8,16]`: cocción completa de las 158 figuras del libro con distinta cantidad de subcompilaciones (copia del libro en `spikes/work/f6-libro`, ver el encabezado del script).
 - **Los tests con TeX real (`--features tex`) se corren desde PowerShell**, no desde Git Bash: el `PATH` de Git Bash trae el perl de MSYS y latexmk se rompe.
@@ -53,7 +57,7 @@ Si un spike o la implementación contradicen el plan, se actualiza `plan.md` y s
 - `cargo test -p lv-core --features tex --test synctex_oraculo`: el parser de SyncTeX contra el CLI `synctex`, sobre `fixtures/sync`.
 - `cargo run -p lv-core --example problemas -- <raíz> <log|blg|ilg>`: lo que el parser saca de un log, para mirar uno nuevo antes de escribir su prueba. Los logs de `fixtures/logs/` se generan con `--example build` sobre `fixtures/errores` (copiado a `spikes/work`).
 - `scripts/compilar-fixtures.ps1`: compila los fixtures con latexmk a secas.
-- Variables de entorno de la app: `LV_OPEN` (carpeta a abrir), `LV_ROOT` (raíz del documento), `LV_SMOKE` (`1` o `f2` a `f6`), `LV_SMOKE_FILE`, `LV_SMOKE_OUT`, `LV_LATEXMK` (otro ejecutable en lugar de latexmk), `LV_CONFIG_DIR` (otro directorio de configuración del usuario, para que los smokes no toquen el `keybindings.json` real).
+- Variables de entorno de la app: `LV_OPEN` (carpeta a abrir), `LV_ROOT` (raíz del documento), `LV_SMOKE` (`1` o `f2` a `f7`), `LV_SMOKE_FILE`, `LV_SMOKE_OUT`, `LV_LATEXMK` (otro ejecutable en lugar de latexmk), `LV_CONFIG_DIR` (otro directorio de configuración del usuario, para que los smokes no toquen el `keybindings.json` real).
 
 ## Estructura
 
@@ -61,13 +65,16 @@ Si un spike o la implementación contradicen el plan, se actualiza `plan.md` y s
 plan.md        diseño y fases
 docs/          benchmarks.md, spikes/Sx.md, decisiones
 fixtures/      proyectos chicos de prueba; libro-tc/ es la copia del libro (ignorada); configs/ trae el latexviewer.json del libro
-scripts/       copiar-libro, bench-base, bench-figuras, compilar-fixtures, aceptacion-f1 a f6, bom-ps1
+scripts/       copiar-libro, bench-base, bench-figuras, compilar-fixtures, aceptacion-f1 a f7, parchear-libro-f7, comparar-pdf.py, bom-ps1
 spikes/        código de los spikes de F0, de referencia (work/ ignorada)
 crates/lv-core core en Rust (sin Tauri): fsio, project, config (latexviewer.json y estado), graph (inclusión y partes),
                auxiliares (aislamiento de los .aux), build (driver, latexmk, streaming), procs (Job Objects), session (cola y motor),
                logparse (log de TeX, biber y makeindex a problemas), synctex (parser del .synctex.gz y las dos consultas),
                symbols (etiquetas, citas, secciones, definiciones y lint sin compilar), search (buscar y reemplazar en el proyecto),
-               cola (trabajos tipados Build/Bake con un solo ejecutor), figcache (sello, estado del cache, pendientes por contenido,
+               cola (trabajos tipados Build/Fragment/Export/Bake con un solo ejecutor y prioridad en ese orden), fswatch (archivos
+               cambiados afuera: `notify` y la lista de lo que escribe la propia compilación, que se ignora), session/export (exportar
+               partes con el número impreso del `.aux` y vista previa de fragmento: builds de los perfiles de servicio `export` y
+               `fragmento`), figcache (sello, estado del cache, pendientes por contenido,
                limpieza), figures (verificación de las figuras que fallan o se cortan), cocinero (cocción en paralelo y listado con el
                perfil oculto `cocina`), session/bake (el trabajo Bake: orden, disparo automático, estado y limpieza para el panel Figuras)
                En el frontend, `src/sync/` tiene la lógica pura de SyncTeX (texto plano, búsqueda de palabras, los dos saltos),
@@ -95,6 +102,8 @@ inspo/         referencia, intocable, no se versiona
 - Con la subcompilación corriendo con `\tikzexternalrealjob` biblatex deja un `<job>.run.xml` en la raíz del proyecto: se borra al terminar la cocción y el build.
 - **La limpieza del cache sólo se autoriza con una figlist COMPLETA del sello de hoy** (la del listado de todas las partes), nunca con la de un parcial, y sólo borra extensiones de figura.
 - En el modo `app` la clave de cada archivo para su slug es `\CurrentFilePath/\CurrentFile` (con `\include{Secciones/cap-b}`, `\CurrentFile` es sólo `cap-b.tex`).
+- **El observador de archivos (`fswatch.rs`) tiene que ignorar todo lo que escribe la compilación**: `.lv/`, el cache de figuras, la exportación y la publicación si están dentro del proyecto, los auxiliares de TeX por extensión (`.aux`, `.log`, `.toc`, `.fdb_latexmk`, `.bbl`, `.synctex.gz`, `.md5`, `.dpth`...), el `<job>.run.xml` de la raíz y los temporales de la escritura atómica (`.lvtmp-*.tmp`). Si no, cada build dispara otro. Windows avisa que una carpeta «cambió» cada vez que cambia un archivo de adentro: eso no cuenta. La interfaz decide qué hacer con cada archivo: lo que escribió la propia app tiene la versión que la pestaña ya conoce y se ignora.
+- Un build de un perfil de servicio (`export`, `fragmento`) no es «el build»: la interfaz no toca ni su barra ni el PDF del documento con sus `Started` y `Finished` (los `Finished` de la exportación ni siquiera salen del core).
 - **pgf no ve lo que una figura lee desde adentro de su `tikzpicture`** (`\input{datos}`, una imagen, `plot file`): hashea la línea escrita y no el archivo, y latexmk tampoco lo ve con la figura en el cache. El grafo los marca (`ProjectIndex.datos_de_tikz`) y `figcache::invalidar_por_datos` guarda su md5 en `.lv/tikz-datos.json` y, si cambió, borra los `.md5` de las figuras del archivo que lo incluye y los `.fdb_latexmk`. Con `onlyInFigureEnv` sólo cuentan los de un `figure` (los del template no se externalizan).
 - Para correr los smokes con otro ejecutable (hay una instancia de la app abierta y `target\release\lv-app.exe` no se puede reemplazar), `LV_APP_EXE`: `target\release\deps\lv_app.exe` es el que compiló cargo aunque falle el último paso.
 - Un perfil con `cacheOnly` (spike S5, `docs/spikes/S5.md`; el `completo` del libro) compila sin `-shell-escape` y pgf no mira el md5: la app cocina el documento entero antes de cada build, salvo que la huella de las figuras (`figcache::huella_de_figuras`, en `.lv/figlist.json`) no haya cambiado. No publica: lo que se entrega sale del perfil `entrega`, sin cache.
