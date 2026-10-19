@@ -433,14 +433,36 @@ fn mirar_dato(p: &Path, previo: Option<&DatoGuardado>) -> DatoGuardado {
 ///
 /// Devuelve los nombres de las figuras invalidadas. Se llama antes de cada build de un perfil que externaliza y antes de cada cocción.
 pub fn invalidar_por_datos(root: &Path, dir: &str, datos: &[DatoDeFigura]) -> Vec<String> {
+    invalidar_con_detalle(root, dir, datos).figuras
+}
+
+/// Lo que hizo `invalidar_por_datos`: las figuras cuyo `.md5` se borró, los archivos de datos que habían cambiado y los que la app veía por
+/// primera vez (sin registro previo no se sabe si cambiaron: por las dudas se invalidan igual). Para el historial.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Invalidacion {
+    pub figuras: Vec<String>,
+    pub datos: Vec<String>,
+    pub nuevos: Vec<String>,
+}
+
+pub fn invalidar_con_detalle(root: &Path, dir: &str, datos: &[DatoDeFigura]) -> Invalidacion {
     let guardado = leer_datos_guardados(root);
     let mut nuevo = BTreeMap::new();
     let mut cambiados: Vec<&DatoDeFigura> = Vec::new();
+    let (mut cambiados_nombres, mut nuevos_nombres): (Vec<String>, Vec<String>) = (vec![], vec![]);
     for d in datos {
         let previo = guardado.get(&d.dato);
         let ahora = mirar_dato(&root.join(&d.dato), previo);
-        if previo.map(|p| &p.md5) != Some(&ahora.md5) {
-            cambiados.push(d);
+        match previo {
+            None => {
+                cambiados.push(d);
+                nuevos_nombres.push(d.dato.clone());
+            }
+            Some(p) if p.md5 != ahora.md5 => {
+                cambiados.push(d);
+                cambiados_nombres.push(d.dato.clone());
+            }
+            Some(_) => {}
         }
         nuevo.insert(d.dato.clone(), ahora);
     }
@@ -476,7 +498,7 @@ pub fn invalidar_por_datos(root: &Path, dir: &str, datos: &[DatoDeFigura]) -> Ve
             let _ = crate::build::write_if_changed(&root.join(DATOS_FILE), &t);
         }
     }
-    borradas.into_iter().collect()
+    Invalidacion { figuras: borradas.into_iter().collect(), datos: cambiados_nombres, nuevos: nuevos_nombres }
 }
 
 // --- slug y archivo -------------------------------------------------------------------------------------------------------------------

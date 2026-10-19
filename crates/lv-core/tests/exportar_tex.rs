@@ -124,6 +124,31 @@ fn exportar_deja_un_pdf_por_parte_con_el_numero_impreso_y_no_toca_la_seleccion_n
     assert_eq!(c.mtime(parcial), antes);
     assert_eq!(ev.iter().filter(|e| e.starts_with("fin(export")).count(), 0, "{ev:?}");
     assert_eq!(ev.iter().filter(|e| *e == "build(export)").count(), 2, "un build por parte: {ev:?}");
+    // La exportación es UNA línea del historial (no una por parte), con el número y el tiempo de cada una.
+    let h = c.s.history(10);
+    let x = h.iter().find(|e| e.entrada.tipo == "export").expect("la línea de la exportación");
+    assert_eq!(h.iter().filter(|e| e.entrada.perfil.as_deref() == Some("export")).count(), 1, "{h:#?}");
+    assert_eq!(x.entrada.partes.iter().map(|p| (p.parte.as_str(), p.num.as_deref(), p.ok)).collect::<Vec<_>>(), [("Cap/uno", Some("5"), true), ("Cap/dos", Some("6"), true)]);
+    assert!(x.pistas.iter().any(|p| p.contains("2 de 2 partes exportadas")), "{:?}", x.pistas);
+}
+
+#[test]
+fn el_historial_registra_un_fragmento_y_un_build_real_con_sus_herramientas() {
+    let c = caso();
+    c.sembrar();
+    c.s.request_fragment("Un fragmento.".into()).unwrap();
+    c.esperar_ocioso();
+    let h = c.s.history(10);
+    // El primer build del perfil precisó cocinar sus figuras antes (el sello era nuevo): esa cocción tiene su propia línea.
+    assert_eq!(h.iter().map(|e| e.entrada.tipo.as_str()).collect::<Vec<_>>(), ["fragment", "bake", "build", "bake"], "{h:#?}");
+    assert_eq!(h[1].entrada.motivo, "el resto");
+    assert_eq!(h[3].entrada.motivo, "antes del build de parcial");
+    let h: Vec<_> = h.into_iter().filter(|e| e.entrada.tipo != "bake").collect();
+    let b = &h[1].entrada;
+    assert_eq!((b.perfil.as_deref(), b.ok, b.motivo.as_str()), (Some("parcial"), true, "manual"));
+    assert!(b.pasadas >= 2 && b.herramientas.iter().all(|x| x.nombre == "pdflatex" || x.nombre == "biber" || x.nombre == "makeindex"), "{b:?}");
+    assert!(b.aux_faltantes.contains(&"fdb_latexmk".to_string()) && b.aux_faltantes.contains(&"aux".to_string()), "el primer build del perfil: {b:?}");
+    assert_eq!(h[0].entrada.perfil.as_deref(), Some("fragmento"));
 }
 
 #[test]

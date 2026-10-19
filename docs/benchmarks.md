@@ -418,3 +418,57 @@ F1, F2, F3, F4, F5 y F6 siguen pasando (los del libro con el observador activo: 
 4. **La primera página de un capítulo va en el estilo `plain`**: un pie que sólo se define para `fancy` no sale en ella (el fixture de exportar y el libro lo repiten en `plain`).
 5. **El observador sin filtro entraría en un bucle**: el cache de figuras, `.lv/`, los auxiliares y el `run.xml` de biblatex se escriben en cada build. El test mide que una ráfaga con esos archivos da un solo aviso sin ellos, y el smoke que el build del cambio no dispara otro.
 6. **Una instancia abierta de la app estorba a los smokes**: impide reemplazar `target\release\lv-app.exe` y, con una segunda, WebView2 comparte el proceso del navegador. Los scripts frenan ahora; `LV_ACEPTAR_APP_ABIERTA=1` los deja pasar con otro ejecutable (`LV_APP_EXE`).
+
+## F8: historial, doctor y procesos
+
+Misma máquina (Ryzen 7 3700X). Lo de la app sale del smoke `scripts/aceptacion-f8.ps1` (copia tibia del libro sin la guardia a `\OpcionPie`, 84 a 102 s) y lo del core solo de `cargo run --release -p lv-core --example medidas_f8 -- <carpeta>`.
+
+### Lo que F8 le suma a la app
+
+| Qué | Medido |
+|---|---|
+| Tomar y soltar el candado `.lv/lock` (mediana de 100) | 6,3 ms (sale casi todo de averiguar el nombre del proceso del dueño) |
+| Buscar los procesos de TeX del proyecto (mediana de 20) / dentro de la app, al abrir | 8,2 ms / **15 ms** |
+| Contar los procesos de TeX de la máquina (una vez por build, para «otros procesos de TeX») | 8,4 ms |
+| Matar el huérfano (`taskkill /T /F`) y confirmar que no queda ninguno | **201 a 212 ms** |
+| Escribir una línea del historial (mediana de 200) | 0,26 ms |
+| …cruzando el límite de 1 MB (con una rotación adentro, media de 200) | 0,34 ms |
+| Leer las últimas 200 con sus pistas, archivo de ~1 MB (mediana de 20) | 6,2 ms |
+
+### Doctor
+
+| Escenario | Tiempo |
+|---|---|
+| Sondas una tras otra, sobre el libro (en la app, al abrir) | **8,7 s** |
+| Las sondas independientes en paralelo (en la app, al abrir) | **1,95 s** |
+| Lo mismo con `--example medidas_f8` | 1,92 s |
+| Cada sonda sola (`pdflatex --version` 320 ms, un documento mínimo 346 ms, `latexmk -v` 535 ms, `latexmk -e -c` 540 ms, `perl -v` 54 ms, `biber --version` **1281 ms**, `bibtex` 304 ms, `makeindex` 289 ms, `synctex` 282 ms) | suman 4,3 s |
+
+El doctor corre en segundo plano al abrir el proyecto y no frena nada; con las sondas en fila tardaba más que el listado de figuras. Lo que ve en el libro de esta máquina: 12 hallazgos, dos avisos (`\def\OpcionPie` sin guardia en `structure.tex:269` y el PATH de latexmk con una sola entrada, porque el libro tiene `latexmkrc`) y el resto en verde. Sin errores.
+
+### Smoke de aceptación de F8
+
+| Qué | Resultado |
+|---|---|
+| `pdflatex` huérfano lanzado por el script antes de abrir | ofrecido al abrir (con su PID), muerto, ninguno al volver a buscar |
+| Doctor | encuentra `\OpcionPie`, lee el PATH de latexmk, no da errores ni el aviso de «partes por `\input`» |
+| Historial | 6 líneas, `build` 3 / `bake` 1 / `export` 1 / `fragment` 1; coincide con los eventos de la cola; motivos `manual`, `guardado: Secciones/Desnormalización.tex` y `afuera: Secciones/Desnormalización.tex` |
+| Segunda instancia | ve el candado (PID de la primera), avisa, no pregunta por huérfanos, no corre el doctor, no compila, cocina ni exporta, sí abre archivos; el candado de la primera queda intacto |
+| Al salir | candado con un PID muerto en disco (la app sale con `exit`); ningún proceso de TeX vivo |
+
+### Pruebas
+
+| | Cantidad | Qué cubren |
+|---|---|---|
+| `cargo test -p lv-core --lib` | 143 | lo de F7 más el candado, los procesos, el historial (rotación, pistas), el doctor (sondas falsas: lanzador roto con `0xC0000135`, núcleo viejo, shell escape, TeX Live, PATH, `\def`, BOM, `autoClean`, partes por `\input`) |
+| `cargo test -p lv-core --features tex` | todas pasan (13 suites) | más `tests/candado.rs` (proceso ajeno de verdad), `tests/diagnostico.rs` (huérfano de verdad, doctor de la sesión y el doctor contra MiKTeX), y el historial en `exportar_tex.rs`, `figuras_datos.rs`, `figuras_sesion.rs` y `session.rs` |
+| `npx vitest run` | 224 | lo de F7 (215) más el store de F8 (5: motivos, panel Historial, doctor al abrir, huérfanos, proyecto bloqueado) y las funciones del panel (4) |
+
+### Hallazgos de F8
+
+1. **Las sondas del doctor, en fila, tardaban 8,7 s al abrir** (4,3 s de procesos más lo que contendía con el resto): corriendo a la vez bajan a 1,95 s. `biber --version` sola tarda 1,3 s.
+2. **`latexmk -v` sale antes de ejecutar el `-e`**: el PATH que ve Perl se lee con `-c x.tex`, y el código del `-e` no puede llevar comillas (`qq()`).
+3. **Con `:` como separador el PATH de Windows se cortaba en las letras de unidad**; en Windows se corta por `;`.
+4. **La primera vez que se ve un archivo de datos de figura, se invalida por las dudas**: es la causa de que el primer build de una copia nueva del libro recocine las 2 figuras de los engranajes. El historial lo dice ahora como «la app lo veía por primera vez» y no como un cambio.
+5. **El PATH reducido de latexmk es una propiedad de MiKTeX 26.5 en esta máquina**: sólo es un problema para proyectos con un `latexmkrc` que lance programas por nombre.
+6. **La corrida de regresión completa (F1 a F8 seguidos) se cortó por falta de memoria del sistema** (la máquina tenía 3,6 GB libres de 16 al revisar); no dejó nada vivo ni resultados parciales.

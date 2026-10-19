@@ -55,6 +55,7 @@ impl Session {
     /// Exporta las partes pedidas (por su nombre, el de `\includeonly`; `None` o vacío, todas) a PDF sueltos en `export.dir`. Con otro
     /// trabajo en curso queda pendiente.
     pub fn request_export(self: &Arc<Self>, partes: Option<Vec<String>>) -> Result<BuildAck> {
+        self.guardia()?;
         let (todas, config) = {
             let d = self.lock()?;
             let nombres = d.index.as_ref().map(|i| i.part_names()).unwrap_or_default();
@@ -95,6 +96,7 @@ impl Session {
     /// Compila `texto` (un fragmento: un entorno, una selección) con el documento de contexto y deja el PDF en
     /// `.lv/build/fragmento/lv-fragmento.pdf`. Con otro trabajo en curso queda pendiente (gana el último pedido).
     pub fn request_fragment(self: &Arc<Self>, texto: String) -> Result<BuildAck> {
+        self.guardia()?;
         if texto.trim().is_empty() {
             return Err(otro("el fragmento está vacío"));
         }
@@ -119,8 +121,9 @@ impl Session {
     pub(super) fn lanzar_fragmento(self: &Arc<Self>, f: &FragmentJob) -> Result<u64> {
         let plan = self.plan_con(PERFIL_FRAGMENTO, false, &PlanExtra { partes: Some(vec![]), fragmento: Some(f.texto.clone()) })?;
         let desde = std::time::SystemTime::now();
-        let sink = self.envolver(PERFIL_FRAGMENTO.to_string(), plan.cache_dir.clone(), false, desde);
-        self.lanzar_con(plan, PERFIL_FRAGMENTO, sink)
+        let ctx: historia::Ctx = Arc::new(Mutex::new(historia::CtxBuild::nuevo("manual".into(), None)));
+        let sink = self.envolver(PERFIL_FRAGMENTO.to_string(), plan.cache_dir.clone(), false, desde, ctx.clone());
+        self.lanzar_con(plan, PERFIL_FRAGMENTO, sink, ctx)
     }
 
     pub(super) fn lanzar_export(self: &Arc<Self>, e: &ExportJob) -> Result<u64> {
@@ -161,7 +164,7 @@ impl Session {
             }
             otro => (me.sink)(otro),
         });
-        self.lanzar_con(plan, perfil, sink)?;
+        self.lanzar_con(plan, perfil, sink, Arc::new(Mutex::new(historia::CtxBuild::nuevo("exportación".into(), None))))?;
         rx.recv().map_err(|_| otro("el build de la exportación terminó sin avisar"))
     }
 
@@ -176,11 +179,14 @@ impl Session {
         }
         // La numeración de las partes que no tienen capítulo numerado: su posición en el documento.
         let todas = self.lock().ok().and_then(|d| d.index.as_ref().map(|i| i.part_names())).unwrap_or_default();
+        let inicio_ms = historia::ahora_ms();
+        let mut hechas: Vec<crate::historial::ParteExportada> = Vec::new();
         if error.is_none() {
             for (i, parte) in partes.iter().enumerate() {
                 if cancelado.load(Ordering::SeqCst) {
                     break;
                 }
+                let t_parte = std::time::Instant::now();
                 let extra = PlanExtra { partes: Some(vec![parte.clone()]), fragmento: None };
                 let (ok, num, archivo) = match self.build_de_servicio(PERFIL_EXPORT, &extra) {
                     Ok(BuildEvent::Finished { ok: true, pdf: Some(_), .. }) => {
@@ -210,11 +216,13 @@ impl Session {
                 } else {
                     fallidas += 1;
                 }
+                hechas.push(crate::historial::ParteExportada { parte: parte.clone(), num: num.clone(), ms: t_parte.elapsed().as_millis() as u64, ok });
                 (self.sink)(BuildEvent::ExportProgress { id, done: i as u32 + 1, total, part: parte.clone(), num, file: archivo, ok });
             }
         }
         let fue_cancelada = cancelado.load(Ordering::SeqCst);
         *self.export.cancelado.lock().unwrap_or_else(|p| p.into_inner()) = None;
+        self.registrar_export(inicio_ms, t0.elapsed().as_millis() as u64, error.is_none() && !fue_cancelada && fallidas == 0, fue_cancelada, hechas, &ex.dir);
         let fin = BuildEvent::ExportFinished {
             id,
             ok: error.is_none() && !fue_cancelada && fallidas == 0,

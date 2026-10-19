@@ -13,7 +13,9 @@ import {
   type FileInfo,
   type LaunchOptions,
   type Cocinando,
+  type EntradaHistorial,
   type EstadoFiguras,
+  type InformeDoctor,
   type InformeReemplazo,
   type OpcionesBusqueda,
   type OutsideSave,
@@ -143,7 +145,7 @@ export const BUSQUEDA_INICIAL: EstadoBusqueda = {
   buscando: false,
   error: null,
 };
-export type PanelInferior = 'problemas' | 'log';
+export type PanelInferior = 'problemas' | 'log' | 'historial' | 'doctor';
 
 /** La exportación de partes en curso, según sus eventos. */
 export interface ExportEstado {
@@ -189,6 +191,11 @@ interface AppState {
   filtro: FiltroProblemas;
   problemaIdx: number;
   panelInferior: PanelInferior;
+  /** El historial de trabajos (`.lv/history.jsonl`, el más nuevo primero): se lee al mostrar el panel y cuando termina un trabajo con el panel a la vista. */
+  historialTrabajos: EntradaHistorial[];
+  /** El último informe del doctor y si hay uno corriendo (lanza las herramientas de TeX, tarda unos segundos). */
+  doctor: InformeDoctor | null;
+  doctorCorriendo: boolean;
   /** Pedido de ir a una línea de un archivo (y, si trae `inicio` y `fin`, a seleccionar esa palabra): lo atiende el editor cuando la pestaña ya está activa. */
   irA: { rel: string; line: number; n: number; inicio?: number; fin?: number } | null;
   /** El estado del cache de figuras (panel Figuras): se pide al abrir, al terminar un build o una cocción, y al mostrar el panel. */
@@ -228,7 +235,8 @@ interface AppState {
   guardar(rel?: string, opciones?: { forzar?: boolean; auto?: boolean }): Promise<ResultadoGuardado>;
   guardarTodo(opciones?: { auto?: boolean }): Promise<boolean>;
   hacerEditable(rel: string): void;
-  compilar(perfil?: string, opciones?: { guardar?: boolean }): Promise<void>;
+  /** `motivo` dice qué lo pidió (`guardado: x.tex`, `afuera: x.tex`): queda en el historial. Sin él es `manual`. */
+  compilar(perfil?: string, opciones?: { guardar?: boolean; motivo?: string }): Promise<void>;
   cancelarBuild(): Promise<void>;
   manejarEventoBuild(e: BuildEvent): void;
   // perfiles, partes y auto-compilación
@@ -245,6 +253,11 @@ interface AppState {
   guardarConfig(): Promise<void>;
   mostrarPanel(p: PanelIzquierdo): void;
   mostrarPanelInferior(p: PanelInferior): void;
+  cargarHistorial(): Promise<void>;
+  /** Corre el doctor. `alAbrir`: sólo avisa (con un botón para verlo) si encontró errores o avisos. */
+  correrDoctor(opciones?: { alAbrir?: boolean }): Promise<void>;
+  /** Al abrir: procesos de TeX del proyecto que quedaron de antes, con la opción de matarlos. */
+  revisarHuerfanos(): Promise<void>;
   cargarProblemas(perfil: string, abrirPanel?: boolean): Promise<void>;
   setFiltro(cambios: Partial<FiltroProblemas>): void;
   irAProblema(i: number): Promise<void>;
@@ -375,6 +388,9 @@ export const useApp = create<AppState>()((set, get) => {
     filtro: FILTRO_INICIAL,
     problemaIdx: -1,
     panelInferior: 'log',
+    historialTrabajos: [],
+    doctor: null,
+    doctorCorriendo: false,
     irA: null,
     simbolos: null,
     figuras: null,
@@ -443,6 +459,9 @@ export const useApp = create<AppState>()((set, get) => {
         parteActiva: null,
         problems: [],
         problemaIdx: -1,
+        historialTrabajos: [],
+        doctor: null,
+        doctorCorriendo: false,
         irA: null,
         simbolos: null,
         figuras: null,
@@ -480,6 +499,16 @@ export const useApp = create<AppState>()((set, get) => {
       // Si el archivo existe pero está roto ya se avisó (y es un aviso más importante que éste).
       void get().cargarSimbolos();
       void get().cargarFiguras();
+      void (async () => {
+        if (info.lockedBy !== null) {
+          // Otra instancia tiene el proyecto: acá se puede leer y editar, pero dos colas sobre el mismo `.lv` y el mismo cache se pisarían.
+          get().avisar(`Este proyecto ya está abierto en otra instancia de la aplicación (PID ${info.lockedBy}). Acá no se compila ni se cocina; cerrá la otra y volvé a abrirlo.`, 'error');
+          return;
+        }
+        // Primero los huérfanos (el doctor también los cuenta) y después el doctor.
+        await get().revisarHuerfanos();
+        await get().correrDoctor({ alAbrir: true });
+      })();
       if (get().project?.configSaved === false && !info.configError && get().rootFile) {
         get().avisar('Este proyecto no tiene latexviewer.json: se usa una configuración inferida. Podés guardarla desde el menú ⋯.');
       }
@@ -667,10 +696,10 @@ export const useApp = create<AppState>()((set, get) => {
       const st = get().project?.state;
       if (!st || st.autoCompile === 'manual' || !info.profileAuto) return;
       if (info.affects === 'yes') {
-        await get().compilar(undefined, { guardar: false });
+        await get().compilar(undefined, { guardar: false, motivo: `guardado: ${rel}` });
       } else if (info.affects === 'other_part' && info.part) {
         const parte = info.part;
-        if (st.outsideSave === 'build') await get().compilar(undefined, { guardar: false });
+        if (st.outsideSave === 'build') await get().compilar(undefined, { guardar: false, motivo: `guardado: ${rel}` });
         else if (st.outsideSave === 'switch') await get().compilarParte(parte, { guardar: false });
         else {
           get().avisar(`Guardaste ${nombreDe(rel)}, que es de la parte «${nombreDe(parte)}» y el perfil activo no la incluye.`, 'info', {
@@ -693,7 +722,7 @@ export const useApp = create<AppState>()((set, get) => {
       if (!yaCorria) set((x) => ({ build: { ...x.build, status: 'running', ms: null, code: null, passes: null, pendiente: null } }));
       try {
         // Si ya hay un build corriendo, el core deja este pedido pendiente (y los pedidos seguidos se coalescen).
-        const ack = await getBackend().build(perfil);
+        const ack = await getBackend().build(perfil, opciones?.motivo);
         if (ack.kind === 'queued') set((x) => ({ build: { ...x.build, pendiente: perfil ?? x.project?.state.activeProfile ?? null } }));
       } catch (e) {
         if (!yaCorria) set({ build: BUILD_INICIAL });
@@ -759,6 +788,7 @@ export const useApp = create<AppState>()((set, get) => {
         if (!e.cancelled) void get().cargarProblemas(e.perfil, e.errors > 0);
         // Un build puede haber cocinado figuras por su cuenta (pgf cocina de a una las que faltan) o haber descartado alguna rota.
         void get().cargarFiguras();
+        if (get().panelInferior === 'historial') void get().cargarHistorial();
         const que = status === 'ok' ? 'terminó bien' : status === 'cancelled' ? 'cancelado' : `falló (código ${e.code ?? '?'})`;
         const pasadas = e.passes > 0 ? `, ${e.passes} pasada${e.passes === 1 ? '' : 's'}` : '';
         logBuffer.append(`\n== ${que} en ${(e.ms / 1000).toFixed(1)} s${pasadas}${e.repaired ? ' (después de reparar los auxiliares)' : ''}\n`);
@@ -827,6 +857,7 @@ export const useApp = create<AppState>()((set, get) => {
       } else if (e.type === 'bakefinished') {
         set({ figProgreso: null, figPendiente: false });
         void get().cargarFiguras();
+        if (get().panelInferior === 'historial') void get().cargarHistorial();
         if (e.error) get().avisar(`No se pudieron cocinar las figuras: ${e.error}`, 'error');
         else if (e.failed > 0) {
           get().avisar(`${e.failed} figura${e.failed === 1 ? '' : 's'} no salieron: están en el panel Figuras, con su error.`, 'error');
@@ -953,6 +984,8 @@ export const useApp = create<AppState>()((set, get) => {
       items.push({ id: 'fragmento', titulo: 'Vista previa del fragmento (selección o entorno actual)', ejecutar: () => get().previsualizarFragmento() });
       items.push({ id: 'cocinar', titulo: 'Cocinar las figuras', ejecutar: () => get().cocinarFiguras() });
       items.push({ id: 'limpiar', titulo: 'Limpiar el cache de figuras', ejecutar: () => get().limpiarFiguras() });
+      items.push({ id: 'historial', titulo: 'Ver el historial de trabajos', detalle: 'por qué tardó cada uno', ejecutar: () => get().mostrarPanelInferior('historial') });
+      items.push({ id: 'doctor', titulo: 'Correr el doctor', detalle: 'TeX, latexmk y el proyecto', ejecutar: () => void get().correrDoctor() });
       if (cfg.publishDir) items.push({ id: 'publicar', titulo: 'Publicar el PDF del último build', detalle: cfg.publishDir, ejecutar: () => get().publicar() });
       get().abrirQuick({ titulo: 'Compilación', placeholder: 'Perfiles, variables, exportar, cocinar…', items });
     },
@@ -1011,7 +1044,8 @@ export const useApp = create<AppState>()((set, get) => {
           // un archivo que ya no está: no decide nada
         }
       }
-      if (compila) await get().compilar(undefined, { guardar: false });
+      const quien = cambiados.length <= 3 ? cambiados.join(', ') : `${cambiados.slice(0, 3).join(', ')} y ${cambiados.length - 3} más`;
+      if (compila) await get().compilar(undefined, { guardar: false, motivo: `afuera: ${quien}` });
     },
 
     // --- perfiles y partes ----------------------------------------------------------------------------------------------
@@ -1106,6 +1140,68 @@ export const useApp = create<AppState>()((set, get) => {
 
     mostrarPanelInferior(p) {
       set({ panelInferior: p });
+      if (p === 'historial') void get().cargarHistorial();
+    },
+
+    async cargarHistorial() {
+      if (!get().project) return set({ historialTrabajos: [] });
+      try {
+        set({ historialTrabajos: await getBackend().history(200) });
+      } catch {
+        // Sin historial el panel queda vacío: no es crítico.
+      }
+    },
+
+    async correrDoctor(opciones) {
+      if (!get().project || get().doctorCorriendo) return;
+      set({ doctorCorriendo: true });
+      try {
+        const informe = await getBackend().runDoctor();
+        set({ doctor: informe });
+        const errores = informe.hallazgos.filter((h) => h.nivel === 'error').length;
+        const avisos = informe.hallazgos.filter((h) => h.nivel === 'aviso').length;
+        if (opciones?.alAbrir) {
+          if (errores + avisos > 0) {
+            const partes = [errores > 0 ? `${errores} error${errores === 1 ? '' : 'es'}` : '', avisos > 0 ? `${avisos} aviso${avisos === 1 ? '' : 's'}` : ''].filter(Boolean);
+            get().avisar(`El doctor encontró ${partes.join(' y ')}.`, errores > 0 ? 'error' : 'info', { label: 'Ver', run: () => get().mostrarPanelInferior('doctor') });
+          }
+        } else {
+          get().mostrarPanelInferior('doctor');
+        }
+      } catch (e) {
+        if (!opciones?.alAbrir) get().avisar(`El doctor no pudo correr: ${mensajeDe(e)}`, 'error');
+      } finally {
+        set({ doctorCorriendo: false });
+      }
+    },
+
+    async revisarHuerfanos() {
+      let huerfanos;
+      try {
+        huerfanos = await getBackend().orphans();
+      } catch {
+        return;
+      }
+      if (huerfanos.length === 0) return;
+      const lista = huerfanos.map((p) => `${p.nombre} (PID ${p.pid})`).join(', ');
+      const plural = huerfanos.length === 1 ? '' : 's';
+      const r = await get().preguntar(
+        `Hay ${huerfanos.length} proceso${plural} de TeX de este proyecto que quedó${huerfanos.length === 1 ? '' : 'n'} de antes.`,
+        [
+          { id: 'matar', label: 'Matarlos', primary: true },
+          { id: 'dejar', label: 'Dejarlos' },
+        ],
+        `${lista}. Retienen el PDF y los auxiliares: el próximo build puede fallar o colgarse.`,
+      );
+      if (r !== 'matar') return;
+      try {
+        const muertos = await getBackend().killOrphans(huerfanos.map((p) => p.pid));
+        get().avisar(
+          muertos.length === huerfanos.length ? `Se mataron ${muertos.length} proceso${plural} de TeX.` : `Se mataron ${muertos.length} de ${huerfanos.length}; el resto ya no estaba o no se pudo.`,
+        );
+      } catch (e) {
+        get().avisar(mensajeDe(e), 'error');
+      }
     },
 
     // --- problemas ----------------------------------------------------------------------------------------------------

@@ -312,6 +312,63 @@ fn un_perfil_que_solo_consume_el_cache_cocina_antes_y_saltea_el_listado_mientras
 }
 
 #[test]
+fn el_historial_tiene_una_linea_por_trabajo_de_la_cola_con_su_motivo_y_sus_pistas() {
+    let c = caso();
+    c.s.request_bake().unwrap();
+    c.esperar("la primera cocción", 60, |c| c.ocioso() && c.secuencia().len() == 3);
+    c.cambiar_estilo(2);
+    assert!(matches!(c.s.request_build_por(Some("parcial"), "guardado: Secciones/Uno.tex").unwrap(), BuildAck::Started { .. }));
+    c.esperar("el ciclo del estilo", 90, |c| c.ocioso() && c.secuencia().len() >= 11);
+    std::thread::sleep(Duration::from_millis(400));
+    let h = c.s.history(20);
+    let resumen: Vec<(String, String)> = h.iter().map(|e| (e.entrada.tipo.clone(), e.entrada.motivo.clone())).collect();
+    assert_eq!(
+        resumen,
+        [
+            ("bake".to_string(), "el resto".to_string()),
+            ("build".to_string(), "guardado: Secciones/Uno.tex".to_string()),
+            ("bake".to_string(), "antes del build de parcial".to_string()),
+            ("bake".to_string(), "manual".to_string()),
+        ],
+        "una línea por trabajo, la más nueva primero: {h:#?}"
+    );
+    let antes = &h[2].entrada;
+    assert_eq!((antes.fase.as_deref(), antes.a_cocinar, antes.cocidas, antes.trabajos), (Some("perfil parcial"), 2, 2, 2));
+    assert!(h[2].pistas.iter().any(|p| p.contains("se cocinó antes de compilar «parcial»")), "{:?}", h[2].pistas);
+    let build = &h[1].entrada;
+    assert_eq!((build.perfil.as_deref(), build.ok, build.pasadas), (Some("parcial"), true, 1));
+    assert_eq!(build.herramientas.iter().map(|x| x.nombre.as_str()).collect::<Vec<_>>(), ["pdflatex"], "la herramienta sale de `Run number 1 of rule 'pdflatex'`");
+    assert!(build.aux_faltantes.contains(&"fdb_latexmk".to_string()), "el primer build del perfil no tenía .fdb_latexmk");
+    assert!(h[1].pistas.iter().any(|p| p.contains("faltaba el .fdb_latexmk")) && h[1].pistas.iter().any(|p| p.contains("lo disparó guardar Secciones/Uno.tex")), "{:?}", h[1].pistas);
+    assert!(h[0].pistas.iter().any(|p| p.contains("es el resto de las figuras")), "{:?}", h[0].pistas);
+    // Y un pedido sin motivo es manual.
+    c.s.request_build(Some("parcial")).unwrap();
+    c.esperar("otro build", 60, |c| c.ocioso() && c.s.history(20).len() == 5);
+    assert_eq!(c.s.history(1)[0].entrada.motivo, "manual");
+}
+
+#[test]
+fn un_perfil_que_consume_el_cache_deja_en_el_historial_si_se_salteo_el_listado_y_por_que_no() {
+    let c = caso();
+    c.s.request_build(Some("revision")).unwrap();
+    c.esperar("el primero", 60, |c| c.ocioso() && c.s.history(10).iter().any(|e| e.entrada.tipo == "build"));
+    std::thread::sleep(Duration::from_millis(300));
+    c.s.request_build(Some("revision")).unwrap();
+    c.esperar("el segundo", 60, |c| c.ocioso() && c.s.history(10).iter().filter(|e| e.entrada.tipo == "build").count() == 2);
+    let h = c.s.history(10);
+    let builds: Vec<&lv_core::historial::Entrada> = h.iter().filter(|e| e.entrada.tipo == "build").map(|e| &e.entrada).collect();
+    let l1 = builds[1].listado.as_ref().expect("el primero decidió sobre el listado");
+    assert!(!l1.salteado && l1.motivo.contains("todavía no había una lista"), "{l1:?}");
+    let l2 = builds[0].listado.as_ref().expect("el segundo también");
+    assert!(l2.salteado && l2.motivo.contains("nada cambió"), "{l2:?}");
+    assert!(h[0].pistas.iter().any(|p| p.contains("se salteó el listado de las figuras")), "{:?}", h[0].pistas);
+    // El de un perfil que no consume el cache no decide nada.
+    c.s.request_build(Some("parcial")).unwrap();
+    c.esperar("el parcial", 60, |c| c.ocioso() && c.s.history(10).iter().filter(|e| e.entrada.tipo == "build").count() == 3);
+    assert!(c.s.history(1)[0].entrada.listado.is_none());
+}
+
+#[test]
 fn un_perfil_que_consume_el_cache_no_publica() {
     let c = caso();
     c.escribir("latexviewer.json", &CONFIG.replace("\"parallelJobs\": 2 }", "\"parallelJobs\": 2 },\n  \"publish\": { \"dir\": \"PDF\" }"));

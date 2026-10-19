@@ -72,6 +72,8 @@ export interface ProjectInfo {
   state: AppStateInfo;
   parts: PartInfo[];
   indexMs: number;
+  /** El PID de otra instancia de la app que tiene este proyecto abierto: esta no compila ni cocina (candado de `.lv/lock`). */
+  lockedBy: number | null;
 }
 
 export interface FileInfo {
@@ -359,18 +361,85 @@ export interface Limpieza {
   figuras: number;
 }
 
+/** Una línea de `.lv/history.jsonl` con sus pistas: una por cada trabajo de la cola. Lo que vale cero no viaja. */
+export interface EntradaHistorial {
+  inicioMs: number;
+  tipo: 'build' | 'bake' | 'export' | 'fragment';
+  perfil?: string | null;
+  /** Qué lo pidió: `manual`, `guardado: x.tex`, `afuera: x.tex`, `antes del build de <perfil>`, `el resto`. */
+  motivo: string;
+  ms: number;
+  ok: boolean;
+  cancelado?: boolean;
+  codigo?: number | null;
+  pasadas?: number;
+  herramientas?: { nombre: string; ms: number }[];
+  errores?: number;
+  avisos?: number;
+  cajas?: number;
+  figurasEnElBuild?: string[];
+  limpioAntes?: boolean;
+  auxFaltantes?: string[];
+  sospechosoAntes?: boolean;
+  reparado?: boolean;
+  otrosTex?: number;
+  datosCambiados?: string[];
+  figurasInvalidadas?: number;
+  listado?: { salteado: boolean; motivo: string } | null;
+  fase?: string | null;
+  listadoMs?: number;
+  figurasListadas?: number;
+  aCocinar?: number;
+  cocidas?: number;
+  fallidas?: number;
+  restantes?: number;
+  cedio?: boolean;
+  trabajos?: number;
+  partes?: { parte: string; num: string | null; ms: number; ok: boolean }[];
+  destino?: string | null;
+  /** Por qué tardó lo que tardó, en frases. */
+  pistas: string[];
+}
+
+export type NivelHallazgo = 'ok' | 'info' | 'aviso' | 'error';
+
+export interface Hallazgo {
+  id: string;
+  nivel: NivelHallazgo;
+  titulo: string;
+  detalle: string;
+  /** Cómo se arregla, si se sabe. */
+  arreglo: string | null;
+  archivo: string | null;
+  linea: number | null;
+}
+
+export interface InformeDoctor {
+  hallazgos: Hallazgo[];
+  ms: number;
+  distribucion: string | null;
+}
+
+/** Un proceso de TeX del proyecto que quedó de antes (huérfano). */
+export interface ProcesoTex {
+  pid: number;
+  nombre: string;
+  cwd: string;
+  linea: string;
+}
+
 export interface LaunchOptions {
   open: string | null;
   root: string | null;
   smoke: boolean;
   /** Qué smoke de aceptación corre la interfaz con `LV_SMOKE`: el de F1, F2, F3 o F4. */
-  smokeMode: 'f1' | 'f2' | 'f3' | 'f4' | 'f5' | 'f6' | 'f7';
+  smokeMode: 'f1' | 'f2' | 'f3' | 'f4' | 'f5' | 'f6' | 'f7' | 'f8';
   smokeFile: string | null;
   /** Milisegundos que el smoke deja la interfaz abierta al terminar (para sacarle una captura). */
   smokePausaMs: number;
 }
 
-export type ErrorKind = 'invalid_path' | 'not_found' | 'not_text' | 'invalid_text' | 'conflict' | 'io' | 'busy' | 'no_latexmk' | 'other';
+export type ErrorKind = 'invalid_path' | 'not_found' | 'not_text' | 'invalid_text' | 'conflict' | 'io' | 'busy' | 'locked' | 'no_latexmk' | 'other';
 
 /** Error del core, ya traducido: `kind` permite distinguir un conflicto de versión de un error de disco. */
 export class BackendError extends Error {
@@ -405,9 +474,20 @@ export interface Backend {
   /** `expectedVersion`: la que devolvió `readFile` o el último `writeFile`; `null` sólo para un archivo nuevo. */
   writeFile(rel: string, text: string, expectedVersion: string | null): Promise<WriteOutcome>;
   readPdf(rel: string): Promise<Uint8Array>;
-  /** Pide un build del perfil (el activo si no se dice). Si ya hay uno corriendo queda pendiente y corre una vez después. */
-  build(profile?: string): Promise<BuildAck>;
+  /**
+   * Pide un build del perfil (el activo si no se dice). Si ya hay uno corriendo queda pendiente y corre una vez después.
+   * `reason` dice qué lo pidió (`guardado: x.tex`, `afuera: x.tex`) y queda en el historial; sin él es `manual`.
+   */
+  build(profile?: string, reason?: string): Promise<BuildAck>;
   cancelBuild(): Promise<boolean>;
+  /** Las últimas líneas del historial de trabajos (la más nueva primero), con sus pistas. */
+  history(limit?: number): Promise<EntradaHistorial[]>;
+  /** El doctor: lanza las herramientas de TeX unos segundos y mira el proyecto; no cambia nada. */
+  runDoctor(): Promise<InformeDoctor>;
+  /** Procesos de TeX del proyecto que quedaron de antes. */
+  orphans(): Promise<ProcesoTex[]>;
+  /** Los mata (y lo que lanzaron); devuelve los PID que se mataron. */
+  killOrphans(pids: number[]): Promise<number[]>;
   /** Los problemas del último build del perfil. */
   problems(profile: string): Promise<Problema[]>;
   /** Del cursor al PDF. `null` si el archivo todavía no figura en el SyncTeX del PDF elegido. */

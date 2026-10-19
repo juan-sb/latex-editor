@@ -93,6 +93,10 @@ export const COMANDOS: Comando[] = [
   { id: 'panel.esquema', titulo: 'Mostrar el esquema', categoria: 'Paneles', atajos: [], ejecutar: () => app().mostrarPanel('esquema') },
   { id: 'panel.problemas', titulo: 'Mostrar los problemas', categoria: 'Paneles', atajos: [], ejecutar: () => app().mostrarPanelInferior('problemas') },
   { id: 'panel.log', titulo: 'Mostrar el log del build', categoria: 'Paneles', atajos: [], ejecutar: () => app().mostrarPanelInferior('log') },
+  { id: 'panel.historial', titulo: 'Mostrar el historial de trabajos (por qué tardó cada build)', categoria: 'Paneles', atajos: [], ejecutar: () => app().mostrarPanelInferior('historial') },
+  { id: 'panel.doctor', titulo: 'Mostrar el doctor', categoria: 'Paneles', atajos: [], ejecutar: () => app().mostrarPanelInferior('doctor') },
+  { id: 'doctor.correr', titulo: 'Correr el doctor: revisar TeX y el proyecto', categoria: 'Compilación', atajos: [], ejecutar: () => void app().correrDoctor() },
+  { id: 'procesos.huerfanos', titulo: 'Buscar procesos de TeX que quedaron de antes', categoria: 'Compilación', atajos: [], ejecutar: () => void app().revisarHuerfanos() },
 
   formato('negrita', 'Negrita', ['Ctrl+B'], 'negrita'),
   formato('cursiva', 'Cursiva', ['Ctrl+I'], 'cursiva'),

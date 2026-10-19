@@ -30,7 +30,7 @@ export const tauriBackend: Backend = {
       open: string | null;
       root: string | null;
       smoke: boolean;
-      smoke_mode: 'f1' | 'f2' | 'f3' | 'f4' | 'f5' | 'f6' | 'f7';
+      smoke_mode: 'f1' | 'f2' | 'f3' | 'f4' | 'f5' | 'f6' | 'f7' | 'f8';
       smoke_file: string | null;
       smoke_pausa_ms: number;
     }>('launch_options');
@@ -50,8 +50,12 @@ export const tauriBackend: Backend = {
   async readPdf(rel) {
     return new Uint8Array(await llamar<ArrayBuffer>('read_pdf', { rel }));
   },
-  build: (profile) => llamar('build', { profile: profile ?? null }),
+  build: (profile, reason) => llamar('build', { profile: profile ?? null, reason: reason ?? null }),
   cancelBuild: () => llamar('cancel_build'),
+  history: (limit) => llamar('history', { limit: limit ?? null }),
+  runDoctor: () => llamar('run_doctor'),
+  orphans: () => llamar('orphans'),
+  killOrphans: (pids) => llamar('kill_orphans', { pids }),
   problems: (profile) => llamar('problems', { profile }),
   synctexForward: (rel, line) => llamar('synctex_forward', { rel, line }),
   synctexInverse: (profile, page, x, y) => llamar('synctex_inverse', { profile, page, x, y }),

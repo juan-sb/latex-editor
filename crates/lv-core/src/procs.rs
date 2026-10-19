@@ -79,3 +79,34 @@ mod imp {
 }
 
 pub use imp::Job;
+
+/// El nombre del ejecutable (sólo el archivo, en minúsculas) del proceso `pid` si está vivo; `None` si no existe, ya terminó o no se
+/// puede mirar. Sirve para saber si el PID de un candado sigue siendo de la app y no de otro programa que heredó el número.
+#[cfg(windows)]
+pub fn imagen_de_proceso(pid: u32) -> Option<String> {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{GetExitCodeProcess, OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION};
+    const STILL_ACTIVE: u32 = 259;
+    unsafe {
+        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if h.is_null() {
+            return None;
+        }
+        let mut codigo = 0u32;
+        let vivo = GetExitCodeProcess(h, &mut codigo) != 0 && codigo == STILL_ACTIVE;
+        let mut buf = [0u16; 1024];
+        let mut largo = buf.len() as u32;
+        let ok = vivo && QueryFullProcessImageNameW(h, 0, buf.as_mut_ptr(), &mut largo) != 0;
+        CloseHandle(h);
+        if !ok {
+            return None;
+        }
+        let ruta = String::from_utf16_lossy(&buf[..largo as usize]);
+        ruta.rsplit(['\\', '/']).next().map(|n| n.to_lowercase())
+    }
+}
+
+#[cfg(not(windows))]
+pub fn imagen_de_proceso(pid: u32) -> Option<String> {
+    std::fs::read_link(format!("/proc/{pid}/exe")).ok().and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_lowercase()))
+}

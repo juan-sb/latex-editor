@@ -95,7 +95,9 @@ fn abre_con_la_configuracion_del_proyecto_las_partes_y_un_estado_valido() {
     assert_eq!(c.profiles.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), ["parcial", "rapido", "completo"]);
     assert_eq!(v.state.active_profile.as_deref(), Some("parcial"), "el primero que compila al guardar");
     assert_eq!(v.state.selection, ["Secciones/Uno"], "sin selección previa: la primera parte");
-    assert!(!d.path().join(".lv").exists(), "abrir no escribe nada");
+    // Abrir sólo toma el candado del proyecto (`.lv/lock`, F8): ni estado, ni drivers, ni nada del usuario.
+    let en_lv: Vec<String> = fs::read_dir(d.path().join(".lv")).map(|r| r.flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect()).unwrap_or_default();
+    assert_eq!(en_lv, ["lock"], "abrir no escribe nada más que el candado");
 }
 
 #[test]
@@ -297,6 +299,11 @@ fn un_aux_truncado_se_repara_y_se_reintenta_una_sola_vez() {
     assert_eq!(contar(&r, |e| matches!(e, BuildEvent::Started { retry: true, .. })), 1);
     assert_eq!(contar(&r, |e| matches!(e, BuildEvent::Started { .. })), 2);
     assert!(!p.join(".lv/build/rapido/.sospechoso").exists());
+    // El historial tiene UNA línea (los dos intentos son un solo trabajo) y dice que se reparó.
+    let h = s.history(10);
+    assert_eq!(h.len(), 1, "{h:#?}");
+    assert!(h[0].entrada.reparado && h[0].entrada.ok, "{:?}", h[0].entrada);
+    assert!(h[0].pistas.iter().any(|x| x.contains("el .aux quedó truncado")), "{:?}", h[0].pistas);
 }
 
 #[test]

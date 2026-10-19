@@ -117,6 +117,14 @@ fn cambiar_un_archivo_que_una_figura_lee_con_input_recocina_esa_figura_y_ninguna
     assert_eq!(c.invocaciones() - base, 1, "sólo la de `uno`; antes daba 0: {:?}", c.secuencia());
     assert_ne!(c.caja_de_uno(), caja, "la figura recocinada es la nueva");
     assert!(c.secuencia().last().is_some_and(|e| e == "fin(rapido,ok=true)"), "{:?}", c.secuencia());
+    // El historial explica ese build: cambió un archivo que una figura lee, se borraron `.md5` y `.fdb_latexmk`, y pgf cocinó una figura.
+    let h = c.s.history(5);
+    let e = h.iter().find(|x| x.entrada.tipo == "build" && !x.entrada.datos_cambiados.is_empty()).expect("un build con datos cambiados");
+    assert_eq!(e.entrada.datos_cambiados, ["datos.tex"]);
+    assert_eq!((e.entrada.figuras_invalidadas, e.entrada.figuras_en_el_build.len()), (1, 1), "{:?}", e.entrada);
+    assert!(e.entrada.herramientas.iter().any(|x| x.nombre == "pdflatex") && e.entrada.pasadas >= 1);
+    assert!(e.pistas.iter().any(|p| p.contains("cambió datos.tex, que una figura lee desde adentro de su tikzpicture")), "{:?}", e.pistas);
+    assert!(e.pistas.iter().any(|p| p.contains("1 figura cocinada por pgf dentro de la pasada")), "{:?}", e.pistas);
     // Y a partir de ahí vuelve a estar al día.
     c.compilar("rapido");
     assert_eq!(c.invocaciones() - base, 1);

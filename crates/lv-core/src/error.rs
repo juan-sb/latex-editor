@@ -20,6 +20,8 @@ pub enum Error {
     Busy,
     /// No se pudo lanzar `latexmk`.
     NoLatexmk(String),
+    /// Otra instancia de la app tiene abierto este proyecto (candado en `.lv/lock`): acá no se compila ni se cocina.
+    Locked(u32),
     Other(String),
 }
 
@@ -36,6 +38,7 @@ impl fmt::Display for Error {
             Error::Io(m) => write!(f, "error de disco: {m}"),
             Error::Busy => write!(f, "ya hay una compilación en curso"),
             Error::NoLatexmk(m) => write!(f, "no se pudo lanzar latexmk: {m}"),
+            Error::Locked(pid) => write!(f, "este proyecto está abierto en otra instancia de la aplicación (PID {pid}): acá no se compila ni se cocina, para que dos colas no se pisen el mismo .lv y el mismo cache"),
             Error::Other(m) => write!(f, "{m}"),
         }
     }
@@ -63,6 +66,7 @@ impl Error {
             Error::Io(_) => "io",
             Error::Busy => "busy",
             Error::NoLatexmk(_) => "no_latexmk",
+            Error::Locked(_) => "locked",
             Error::Other(_) => "other",
         };
         ErrorInfo {

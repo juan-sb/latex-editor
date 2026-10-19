@@ -47,6 +47,7 @@ Si un spike o la implementación contradicen el plan, se actualiza `plan.md` y s
 - `scripts/aceptacion-f5.ps1`: el smoke de F5 sobre `fixtures/editor` (`LV_SMOKE=f5`, segundos, sin TeX): formato, autocompletado, F12, Ctrl+P, paleta, esquema, búsqueda y reemplazo con bytes exactos, lint y keybindings.
 - `scripts/aceptacion-f6.ps1`: el smoke de F6 sobre una copia de `fixtures/figuras-app` (`LV_SMOKE=f6`, ~25 s, con TeX real): panel Figuras, Cocinar con progreso, disparo automático al cambiar el estilo, Limpiar con vista previa, una figura rota y Cancelar a mitad de una cocción.
 - `scripts/aceptacion-f7.ps1`: el smoke de F7 sobre una copia tibia del libro (`LV_SMOKE=f7`, ~3 minutos, con TeX y Python): la variable `OpcionPie` en el documento, Ctrl+Alt+T y Ctrl+\ con teclado real, la vista previa de un fragmento, exportar dos partes con el número impreso (8 y 9) y archivos cambiados afuera (el script corre `gen_engranajes.py` con la app abierta y compara el PDF antes y después con `scripts/comparar-pdf.py`: tiene que cambiar una sola página). Necesita `scripts/parchear-libro-f7.ps1`, que le pone la guardia a `\OpcionPie` a la COPIA del libro (el real se corrige en F9).
+- `scripts/aceptacion-f8.ps1`: el smoke de F8 sobre una copia tibia del libro SIN la guardia a `\OpcionPie` (`LV_SMOKE=f8`, ~1,5 minutos, con TeX): el script deja un `pdflatex` huérfano en la carpeta, la app lo ofrece y lo mata, el doctor encuentra el `\def` y lee el PATH de latexmk, el historial queda con una línea por trabajo (build, cocción, exportación, fragmento, guardado y cambio de afuera), y una segunda instancia (la lanza el script con `LV_SMOKE_FILE=segunda`) ve el candado y no compila ni cocina. Necesita el cache de figuras tibio.
 - `python scripts/comparar-pdf.py a.pdf b.pdf [dpi] [carpeta]`: diff rasterizado página a página (usa `pdftoppm` de MiKTeX); cuántas páginas difieren y dónde.
 - `cargo run --release -p lv-core --example build -- <carpeta> --exportar "A,B"|todas` y `--fragmento <archivo.tex>`: exportar partes y vista previa de un fragmento con el mismo motor que la app.
 - Los scripts de aceptación **frenan si hay una instancia de `lv-app.exe` abierta** (impide recompilar `target\release\lv-app.exe` y, con una segunda instancia, WebView2 comparte el proceso del navegador con la primera: la memoria que mide el smoke de F2 sale de 36 MB y no sirve). `LV_ACEPTAR_APP_ABIERTA=1` lo deja pasar.
@@ -57,7 +58,8 @@ Si un spike o la implementación contradicen el plan, se actualiza `plan.md` y s
 - `cargo test -p lv-core --features tex --test synctex_oraculo`: el parser de SyncTeX contra el CLI `synctex`, sobre `fixtures/sync`.
 - `cargo run -p lv-core --example problemas -- <raíz> <log|blg|ilg>`: lo que el parser saca de un log, para mirar uno nuevo antes de escribir su prueba. Los logs de `fixtures/logs/` se generan con `--example build` sobre `fixtures/errores` (copiado a `spikes/work`).
 - `scripts/compilar-fixtures.ps1`: compila los fixtures con latexmk a secas.
-- Variables de entorno de la app: `LV_OPEN` (carpeta a abrir), `LV_ROOT` (raíz del documento), `LV_SMOKE` (`1` o `f2` a `f7`), `LV_SMOKE_FILE`, `LV_SMOKE_OUT`, `LV_LATEXMK` (otro ejecutable en lugar de latexmk), `LV_CONFIG_DIR` (otro directorio de configuración del usuario, para que los smokes no toquen el `keybindings.json` real).
+- `cargo test -p lv-core --test diagnostico` (y con `--features tex` el doctor contra TeX de verdad), `--test candado` (candado con un proceso ajeno de verdad; cambia `LV_NOMBRE_APP`, por eso es una prueba sola en su archivo).
+- Variables de entorno de la app: `LV_OPEN` (carpeta a abrir), `LV_ROOT` (raíz del documento), `LV_SMOKE` (`1` o `f2` a `f8`), `LV_SMOKE_FILE` (en `f8`, `segunda` hace que la instancia haga de segunda), `LV_SMOKE_OUT`, `LV_NOMBRE_APP` (el nombre del ejecutable que el candado reconoce como «la app»; sólo para las pruebas), `LV_LATEXMK` (otro ejecutable en lugar de latexmk), `LV_CONFIG_DIR` (otro directorio de configuración del usuario, para que los smokes no toquen el `keybindings.json` real).
 
 ## Estructura
 
@@ -65,7 +67,7 @@ Si un spike o la implementación contradicen el plan, se actualiza `plan.md` y s
 plan.md        diseño y fases
 docs/          benchmarks.md, spikes/Sx.md, decisiones
 fixtures/      proyectos chicos de prueba; libro-tc/ es la copia del libro (ignorada); configs/ trae el latexviewer.json del libro
-scripts/       copiar-libro, bench-base, bench-figuras, compilar-fixtures, aceptacion-f1 a f7, parchear-libro-f7, comparar-pdf.py, bom-ps1
+scripts/       copiar-libro, bench-base, bench-figuras, compilar-fixtures, aceptacion-f1 a f8, parchear-libro-f7 (con `-SinGuardia` para el de F8), comparar-pdf.py, bom-ps1
 spikes/        código de los spikes de F0, de referencia (work/ ignorada)
 crates/lv-core core en Rust (sin Tauri): fsio, project, config (latexviewer.json y estado), graph (inclusión y partes),
                auxiliares (aislamiento de los .aux), build (driver, latexmk, streaming), procs (Job Objects), session (cola y motor),
@@ -76,7 +78,11 @@ crates/lv-core core en Rust (sin Tauri): fsio, project, config (latexviewer.json
                partes con el número impreso del `.aux` y vista previa de fragmento: builds de los perfiles de servicio `export` y
                `fragmento`), figcache (sello, estado del cache, pendientes por contenido,
                limpieza), figures (verificación de las figuras que fallan o se cortan), cocinero (cocción en paralelo y listado con el
-               perfil oculto `cocina`), session/bake (el trabajo Bake: orden, disparo automático, estado y limpieza para el panel Figuras)
+               perfil oculto `cocina`), session/bake (el trabajo Bake: orden, disparo automático, estado y limpieza para el panel Figuras),
+               candado (`.lv/lock` con el PID: una segunda instancia sobre el mismo proyecto no compila ni cocina), procesos (los
+               pdflatex/latexmk que quedaron de antes, por su directorio de trabajo), historial (`.lv/history.jsonl`, una línea por
+               trabajo de la cola, y las pistas de por qué tardó), doctor (las sondas de TeX y los chequeos del proyecto) y
+               session/historia y session/diagnostico (lo que sólo la sesión sabe para armar cada línea y cada informe)
                En el frontend, `src/sync/` tiene la lógica pura de SyncTeX (texto plano, búsqueda de palabras, los dos saltos),
                `src/comandos/` el registro de comandos, el despachador de teclado (`keybindings.json`) y el filtro difuso, y
                `src/nav/` el reconocimiento de lo que hay bajo el cursor (etiqueta, cita, archivo, comando) para F12.
@@ -107,6 +113,9 @@ inspo/         referencia, intocable, no se versiona
 - **pgf no ve lo que una figura lee desde adentro de su `tikzpicture`** (`\input{datos}`, una imagen, `plot file`): hashea la línea escrita y no el archivo, y latexmk tampoco lo ve con la figura en el cache. El grafo los marca (`ProjectIndex.datos_de_tikz`) y `figcache::invalidar_por_datos` guarda su md5 en `.lv/tikz-datos.json` y, si cambió, borra los `.md5` de las figuras del archivo que lo incluye y los `.fdb_latexmk`. Con `onlyInFigureEnv` sólo cuentan los de un `figure` (los del template no se externalizan).
 - Para correr los smokes con otro ejecutable (hay una instancia de la app abierta y `target\release\lv-app.exe` no se puede reemplazar), `LV_APP_EXE`: `target\release\deps\lv_app.exe` es el que compiló cargo aunque falle el último paso.
 - Un perfil con `cacheOnly` (spike S5, `docs/spikes/S5.md`; el `completo` del libro) compila sin `-shell-escape` y pgf no mira el md5: la app cocina el documento entero antes de cada build, salvo que la huella de las figuras (`figcache::huella_de_figuras`, en `.lv/figlist.json`) no haya cambiado. No publica: lo que se entrega sale del perfil `entrega`, sin cache.
+- **Candado (F8): abrir un proyecto ya escribe `.lv/lock`** (los tests de «abrir no escribe nada» esperan `.lv` con sólo `lock`). Vale sólo si su PID está vivo **y** ese proceso se llama como la app (`procs::imagen_de_proceso`): un PID reutilizado por otro programa no traba nada. La app sale con `exit`, así que el archivo queda en disco con un PID muerto, y la próxima apertura lo pisa. Se suelta (`Drop`) sólo si el token es el propio: una segunda instancia sin candado no borra el de la primera.
+- **Los huérfanos se reconocen por el directorio de trabajo** del proceso (se lee del PEB con `NtQueryInformationProcess`), no por la línea de comandos: todo lo que lanza la app usa rutas relativas a la raíz. Sólo los del mismo usuario; `matar_huerfanos` revisa de nuevo la lista antes de matar (un PID que ya no es huérfano no se toca).
+- **El doctor lee el PATH que ve Perl con `latexmk -e "print qq(...)" -c x.tex`** en una carpeta del temporal: `-v` sale antes de ejecutar el `-e`, y el código no puede llevar comillas (Windows se las come; por eso `qq()`). Las sondas corren en paralelo (4,3 s en fila contra 1,9 s medidos).
 
 ## Trampas de las herramientas de esta máquina
 

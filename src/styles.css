@@ -250,6 +250,40 @@ button, input, select { font: inherit; color: inherit; }
 .problemas-resumen.error { color: var(--peligro); }
 .problemas-resumen.warning { color: var(--aviso); }
 
+/* historial y doctor (F8) */
+.historial, .doctor-lista { height: 100%; overflow: auto; }
+.doctor { height: 100%; display: flex; flex-direction: column; }
+.doctor-cabecera { display: flex; align-items: center; gap: 14px; padding: 3px 10px; border-bottom: 1px solid var(--borde); }
+.doctor-cabecera .detalle { color: var(--texto-suave); font-size: 12px; }
+.hist-fila { border-left: 3px solid transparent; padding: 1px 0; }
+.hist-fila.fail { border-left-color: var(--peligro); }
+.hist-fila.cancelled { border-left-color: var(--aviso); }
+.hist-linea { display: flex; align-items: baseline; gap: 10px; padding: 2px 10px; cursor: pointer; white-space: nowrap; }
+.hist-linea:hover { background: var(--hover); }
+.hist-icono { width: 12px; flex: none; text-align: center; font-size: 10px; }
+.hist-fila.ok .hist-icono { color: var(--acento); }
+.hist-fila.fail .hist-icono { color: var(--peligro); }
+.hist-fila.cancelled .hist-icono { color: var(--aviso); }
+.hist-hora, .hist-ms { font-family: var(--fuente-mono); font-size: 12px; color: var(--texto-suave); flex: none; }
+.hist-tipo { width: 70px; flex: none; }
+.hist-perfil { width: 90px; flex: none; color: var(--texto-suave); overflow: hidden; text-overflow: ellipsis; }
+.hist-resumen { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.hist-motivo { color: var(--texto-suave); font-size: 12px; overflow: hidden; text-overflow: ellipsis; max-width: 40%; }
+.hist-pistas { margin: 0 0 2px 0; padding: 0 10px 0 52px; list-style: none; color: var(--texto-suave); font-size: 12px; }
+.hist-pistas li::before { content: '→ '; }
+.hist-detalle { padding: 2px 10px 4px 52px; font-size: 12px; color: var(--texto-suave); display: grid; gap: 2px; }
+.hallazgo { display: flex; align-items: flex-start; gap: 8px; padding: 3px 10px; border-left: 3px solid transparent; }
+.hallazgo .icono { width: 12px; flex: none; text-align: center; font-size: 11px; margin-top: 2px; }
+.hallazgo.error { border-left-color: var(--peligro); }
+.hallazgo.error .icono { color: var(--peligro); }
+.hallazgo.aviso { border-left-color: var(--aviso); }
+.hallazgo.aviso .icono { color: var(--aviso); }
+.hallazgo.info .icono, .hallazgo.ok .icono { color: var(--texto-suave); }
+.hallazgo-cuerpo { flex: 1; min-width: 0; }
+.hallazgo.ok .hallazgo-titulo { color: var(--texto-suave); }
+.hallazgo-detalle, .hallazgo-arreglo { font-size: 12px; color: var(--texto-suave); }
+.hallazgo .donde { background: none; border: none; cursor: pointer; color: var(--acento); font-family: var(--fuente-mono); font-size: 12px; flex: none; }
+
 /* SyncTeX: resaltado de lo que se salta en el PDF */
 .lv-resaltados { position: absolute; inset: 0; pointer-events: none; z-index: 6; }
 .lv-resaltado { position: absolute; background: rgba(255, 200, 0, 0.5); border-radius: 2px; box-shadow: 0 0 0 1px rgba(255, 170, 0, 0.8); animation: lv-desvanecer 1500ms ease-out forwards; }

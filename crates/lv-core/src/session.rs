@@ -13,6 +13,7 @@
 
 use crate::auxiliares as aux;
 use crate::build::{render_driver_spec, BuildEvent, Builder, DriverSpec, RunSpec, Sink};
+use crate::candado;
 use crate::cola::{Clase, Cola, Pedido, Trabajo};
 use crate::config::{self, comandos_por_defecto, infer_config, PartsSel, ProjectConfig, State, StatePatch};
 use crate::error::{Error, Result};
@@ -21,6 +22,7 @@ use crate::figcache;
 use crate::figures;
 use crate::fsio;
 use crate::fswatch;
+use crate::historial;
 use crate::graph::{Affects, ProjectIndex};
 use crate::logparse::{self, Problem};
 use crate::project;
@@ -33,7 +35,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 mod bake;
+mod diagnostico;
 mod export;
+mod historia;
 pub use bake::{Cocinando, ErrorFigura, FiglistView, FiguraView, FiguresStatus};
 
 // --- lo que ve la interfaz ----------------------------------------------------------------------------------------------
@@ -95,6 +99,8 @@ pub struct ProjectView {
     pub state: State,
     pub parts: Vec<PartView>,
     pub index_ms: u64,
+    /// El PID de otra instancia de la app que tiene abierto este proyecto (`.lv/lock`): acá no se compila ni se cocina.
+    pub locked_by: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -172,6 +178,12 @@ pub struct Session {
     problemas: Mutex<std::collections::HashMap<String, Vec<Problem>>>,
     /// El `.synctex.gz` cargado de cada perfil, con el mtime con el que se leyó: un build nuevo lo invalida.
     synctex: Mutex<std::collections::HashMap<String, (std::time::SystemTime, Arc<Synctex>)>>,
+    /// El candado del proyecto (`candado.rs`) y, si lo tiene otra instancia, su PID.
+    _candado: Option<candado::Candado>,
+    bloqueado_por: Option<u32>,
+    /// Qué pidió el próximo build y qué se decidió del listado de figuras antes de él: lo consume `lanzar` y va al historial.
+    motivo: Mutex<Option<String>>,
+    listado_decidido: Mutex<Option<historial::Listado>>,
 }
 
 /// Un trabajo de la cola: un build, la cocción de figuras (F6), la exportación de partes y la vista previa de un fragmento (F7).
@@ -261,6 +273,11 @@ impl Session {
             .filter(existe)
             .or_else(|| config.as_ref().map(|c| c.root.clone()).filter(existe))
             .or_else(|| p.info.suggested.clone());
+        // Dos instancias sobre el mismo proyecto escribirían el mismo `.lv/` y el mismo cache: la primera toma el candado.
+        let (candado, bloqueado_por) = match candado::adquirir(&p.root) {
+            candado::Adquirido::Tomado(c) => (Some(c), None),
+            candado::Adquirido::Ocupado(pid) => (None, Some(pid)),
+        };
         let s = Session {
             root: p.root.clone(),
             name: p.info.name.clone(),
@@ -275,6 +292,10 @@ impl Session {
             partes_vistas: Mutex::new(vec![]),
             problemas: Mutex::new(Default::default()),
             synctex: Mutex::new(Default::default()),
+            _candado: candado,
+            bloqueado_por,
+            motivo: Mutex::new(None),
+            listado_decidido: Mutex::new(None),
         };
         {
             let mut d = s.datos.lock().map_err(|_| otro("estado envenenado"))?;
@@ -373,6 +394,7 @@ impl Session {
                 })
                 .unwrap_or_default(),
             index_ms: d.index.as_ref().map(|i| i.scan_ms).unwrap_or(0),
+            locked_by: self.bloqueado_por,
         }
     }
 
@@ -595,12 +617,30 @@ impl Session {
         })
     }
 
+    /// Con el proyecto abierto en otra instancia de la app (candado) no se compila, ni se cocina, ni se exporta, ni se limpia.
+    pub(crate) fn guardia(&self) -> Result<()> {
+        match self.bloqueado_por {
+            Some(pid) => Err(Error::Locked(pid)),
+            None => Ok(()),
+        }
+    }
+
     /// Pide un build del perfil (el activo si no se dice). Si hay otro trabajo corriendo queda pendiente.
     pub fn request_build(self: &Arc<Self>, perfil: Option<&str>) -> Result<BuildAck> {
+        self.request_build_por(perfil, "manual")
+    }
+
+    /// Lo mismo, diciendo qué lo pidió (`manual`, `guardado: <archivo>`, `afuera: <archivo>`): queda en el historial. Los pedidos que
+    /// se coalescen dejan el motivo del último, como el pedido mismo.
+    pub fn request_build_por(self: &Arc<Self>, perfil: Option<&str>, motivo: &str) -> Result<BuildAck> {
+        self.guardia()?;
         let perfil = match perfil {
             Some(p) => p.to_string(),
             None => self.lock()?.state.active_profile.clone().ok_or_else(|| otro("no hay perfil activo"))?,
         };
+        if let Ok(mut m) = self.motivo.lock() {
+            *m = Some(motivo.chars().take(300).collect());
+        }
         // Si el sello de las figuras cambió, primero se cocinan las del perfil (`session/bake.rs`).
         self.pedir_con_cocina(perfil)
     }
@@ -608,30 +648,47 @@ impl Session {
     /// Lanza un trabajo que la cola ya le dio al ejecutor.
     fn ejecutar(self: &Arc<Self>, trabajo: &Job, retry: bool) -> Result<u64> {
         match trabajo {
-            Job::Build { perfil } => self.lanzar(perfil, retry),
+            Job::Build { perfil } => self.lanzar(perfil, retry, None),
             Job::Bake(b) => self.lanzar_bake(b),
             Job::Export(e) => self.lanzar_export(e),
             Job::Fragment(f) => self.lanzar_fragmento(f),
         }
     }
 
-    fn lanzar(self: &Arc<Self>, perfil: &str, retry: bool) -> Result<u64> {
+    /// `ctx`: el contexto del historial de un build que se reintenta (el mismo de la primera corrida); `None` para uno nuevo.
+    fn lanzar(self: &Arc<Self>, perfil: &str, retry: bool, ctx: Option<historia::Ctx>) -> Result<u64> {
         let plan = self.plan(perfil, retry)?;
+        let ctx = ctx.unwrap_or_else(|| Arc::new(Mutex::new(historia::CtxBuild::nuevo(self.tomar_motivo(), self.tomar_listado()))));
         // Las figuras que lance este build se verifican contra este instante: su PDF tiene que ser posterior.
         let desde = std::time::SystemTime::now();
-        let sink = self.envolver(perfil.to_string(), plan.cache_dir.clone(), retry, desde);
-        self.lanzar_con(plan, perfil, sink)
+        let sink = self.envolver(perfil.to_string(), plan.cache_dir.clone(), retry, desde, ctx.clone());
+        self.lanzar_con(plan, perfil, sink, ctx)
     }
 
     /// Lanza latexmk con un plan ya armado. Lo que hay que preparar antes (limpiar o sembrar auxiliares, el fragmento) va DENTRO
-    /// de `start_with`: después de comprobar que no hay otro build.
-    fn lanzar_con(self: &Arc<Self>, plan: Plan, perfil: &str, sink: Sink) -> Result<u64> {
+    /// de `start_with`: después de comprobar que no hay otro build. Ahí mismo se anota en `ctx` lo que había en el disco al empezar.
+    fn lanzar_con(self: &Arc<Self>, plan: Plan, perfil: &str, sink: Sink, ctx: historia::Ctx) -> Result<u64> {
         let root = self.root.clone();
         let nombre = perfil.to_string();
         let antes = {
-            let (plan, root, nombre) = (&plan, &root, &nombre);
+            let (plan, root, nombre, ctx) = (&plan, &root, &nombre, &ctx);
             move || -> Result<()> {
                 let _ = config::ensure_gitignore(root);
+                // Para el historial, antes de limpiar nada: lo que faltaba y lo que estaba sospechoso (un reintento conserva lo de la primera corrida).
+                if !plan.spec.retry {
+                    if let Ok(mut c) = ctx.lock() {
+                        let dir = aux::build_dir(root, nombre);
+                        if !dir.join(format!("lv-{nombre}.fdb_latexmk")).is_file() {
+                            c.aux_faltantes.push("fdb_latexmk".into());
+                        }
+                        if !dir.join(format!("lv-{nombre}.aux")).is_file() {
+                            c.aux_faltantes.push("aux".into());
+                        }
+                        c.sospechoso_antes = aux::is_suspect(root, nombre);
+                        c.limpio_antes = plan.clean;
+                        c.otros_tex = crate::procesos::cuantos_de_tex() as u32;
+                    }
+                }
                 // En el reintento ya se limpió; el completo se limpia siempre al empezar (`cleanBefore`).
                 if plan.clean && !plan.spec.retry {
                     aux::clean_profile(root, nombre, &plan.cache_dir);
@@ -640,7 +697,12 @@ impl Session {
                 aux::ensure_cache_dirs(root, nombre, &plan.cache_dir)?;
                 // Un archivo que una figura lee desde adentro de su `tikzpicture` cambió: sin su `.md5` pgf recocina la figura.
                 if let Some(datos) = &plan.datos_de_figuras {
-                    figcache::invalidar_por_datos(root, &plan.cache_dir, datos);
+                    let i = figcache::invalidar_con_detalle(root, &plan.cache_dir, datos);
+                    if let (false, Ok(mut c)) = (i.figuras.is_empty() && i.datos.is_empty() && i.nuevos.is_empty(), ctx.lock()) {
+                        c.datos_cambiados = i.datos;
+                        c.datos_nuevos = i.nuevos;
+                        c.figuras_invalidadas = i.figuras.len() as u32;
+                    }
                 }
                 if let Some((excluidas, fuentes)) = &plan.seed {
                     aux::seed(root, nombre, excluidas, fuentes)?;
@@ -659,10 +721,10 @@ impl Session {
     }
 
     /// El sumidero del builder: deja pasar todo salvo el `Finished`, que primero pasa por `al_terminar`.
-    fn envolver(self: &Arc<Self>, perfil: String, cache_dir: String, retry: bool, desde: std::time::SystemTime) -> Sink {
+    fn envolver(self: &Arc<Self>, perfil: String, cache_dir: String, retry: bool, desde: std::time::SystemTime, ctx: historia::Ctx) -> Sink {
         let me = self.clone();
         Arc::new(move |ev: BuildEvent| match ev {
-            BuildEvent::Finished { .. } => me.al_terminar(ev, &perfil, &cache_dir, retry, desde),
+            BuildEvent::Finished { .. } => me.al_terminar(ev, &perfil, &cache_dir, retry, desde, &ctx),
             otro => (me.sink)(otro),
         })
     }
@@ -696,7 +758,7 @@ impl Session {
         }
     }
 
-    fn al_terminar(self: &Arc<Self>, ev: BuildEvent, perfil: &str, cache_dir: &str, retry: bool, desde: std::time::SystemTime) {
+    fn al_terminar(self: &Arc<Self>, ev: BuildEvent, perfil: &str, cache_dir: &str, retry: bool, desde: std::time::SystemTime, ctx: &historia::Ctx) {
         let mut ev = ev;
         let BuildEvent::Finished { id, ok, cancelled, truncated_aux, .. } = &ev else { return };
         let (id, ok, cancelled, truncated_aux) = (*id, *ok, *cancelled, *truncated_aux);
@@ -709,12 +771,16 @@ impl Session {
             });
             let n = aux::clean_profile(&self.root, perfil, cache_dir);
             (self.sink)(BuildEvent::Log { id, text: format!("== {n} auxiliares borrados\n") });
-            match self.lanzar(perfil, true) {
-                Ok(_) => return, // el `Finished` de este intento no se informa: el del reintento lo reemplaza
+            if let Ok(mut c) = ctx.lock() {
+                c.reparado = true;
+            }
+            match self.lanzar(perfil, true, Some(ctx.clone())) {
+                Ok(_) => return, // el `Finished` de este intento no se informa ni se anota: el del reintento lo reemplaza
                 Err(e) => (self.sink)(BuildEvent::Error { message: format!("no se pudo reintentar: {e}") }),
             }
         }
         self.cerrar_problemas(&mut ev, perfil, rotas);
+        self.registrar_build(&ev, perfil, ctx);
         // El ejecutor se libera antes de avisar que terminó: quien mira `is_building` después del aviso ve la verdad.
         let siguiente = self.cola.liberar();
         (self.sink)(ev);

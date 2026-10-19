@@ -61,6 +61,10 @@ pub enum BuildEvent {
         /// Las figuras cuya subcompilación lanzó pgf durante el build (`-jobname`); la sesión las verifica. No viaja a la interfaz.
         #[serde(skip)]
         figuras: Vec<String>,
+        /// Cuánto tardó cada regla de latexmk (`pdflatex`, `biber`, `makeindex`...), en orden, con la hora de su línea `Run number N of rule`
+        /// del stdout; es lo que lee el historial. No viaja a la interfaz.
+        #[serde(skip)]
+        herramientas: Vec<(String, u64)>,
     },
     /// Algo que no es un build (por ejemplo, el pendiente no se pudo lanzar).
     Error { message: String },
@@ -371,6 +375,17 @@ pub(crate) struct Contador {
     pub truncado: bool,
     /// Las figuras cuya subcompilación lanzó pgf (el `-jobname` con el que se lanzó), en orden y sin repetir.
     pub figuras: Vec<String>,
+    /// Cuándo arrancó cada regla de latexmk (`Run number N of rule 'X'`): sirve para saber cuánto tardó cada pasada.
+    marcas: Vec<(String, Instant)>,
+}
+
+/// La regla de una línea `Run number 2 of rule 'pdflatex'`.
+fn regla_de(linea: &str) -> Option<&str> {
+    let i = linea.find("Run number ")?;
+    let r = linea[i..].find("of rule '")? + i + "of rule '".len();
+    let fin = linea[r..].find('\'')?;
+    let n = &linea[r..r + fin];
+    (!n.is_empty()).then_some(n)
 }
 
 /// Lo que sigue a `-jobname "` hasta la comilla de cierre, si hay.
@@ -387,6 +402,18 @@ const AGUJAS_TRUNCADO: [&str; 2] = ["File ended while scanning use of \\@newl@be
 const LARGO_DE_COLA: usize = 64;
 
 impl Contador {
+    /// Lo que tardó cada regla: de su línea `Run number` a la de la siguiente, y la última hasta `fin`.
+    pub(crate) fn herramientas(&self, fin: Instant) -> Vec<(String, u64)> {
+        self.marcas
+            .iter()
+            .enumerate()
+            .map(|(i, (regla, t))| {
+                let hasta = self.marcas.get(i + 1).map_or(fin, |m| m.1);
+                (regla.clone(), hasta.saturating_duration_since(*t).as_millis() as u64)
+            })
+            .collect()
+    }
+
     pub(crate) fn push(&mut self, s: &str) {
         let previo = self.cola.len();
         let ventana = format!("{}{}", self.cola, s);
@@ -402,6 +429,9 @@ impl Contador {
         // termina en salto se acota para no crecer sin límite.
         self.linea.push_str(s);
         while let Some(i) = self.linea.find('\n') {
+            if let Some(regla) = regla_de(&self.linea[..i]) {
+                self.marcas.push((regla.to_string(), Instant::now()));
+            }
             if let Some(n) = jobname_de(&self.linea[..i]) {
                 if !self.figuras.iter().any(|f| f == n) {
                     self.figuras.push(n.to_string());
@@ -651,6 +681,7 @@ impl Builder {
                 errors: 0,
                 warnings: 0,
                 badboxes: 0,
+                herramientas: contador.herramientas(Instant::now()),
                 figuras: contador.figuras,
             });
         });

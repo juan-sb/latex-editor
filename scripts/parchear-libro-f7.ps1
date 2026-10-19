@@ -8,7 +8,9 @@
 
 param(
     [Parameter(Mandatory = $true)][string]$Carpeta,
-    [string]$ExportDir = ''
+    [string]$ExportDir = '',
+    # No toca structure.tex: el libro queda como está, con su \def incondicional (lo usa el smoke de F8, donde el doctor tiene que verlo).
+    [switch]$SinGuardia
 )
 
 $ErrorActionPreference = 'Stop'
@@ -20,7 +22,9 @@ $structure = Join-Path $carpeta 'structure.tex'
 $t = [IO.File]::ReadAllText($structure, $utf8)
 $sin = '\def\OpcionPie{completo}'
 $con = '\ifdefined\OpcionPie\else\def\OpcionPie{completo}\fi'
-if ($t.Contains($con)) {
+if ($SinGuardia) {
+    Write-Host 'structure.tex: sin tocar (sin guardia).'
+} elseif ($t.Contains($con)) {
     Write-Host 'structure.tex: la guardia ya estaba.'
 } elseif ($t.Contains($sin)) {
     [IO.File]::WriteAllText($structure, $t.Replace($sin, $con), $utf8)

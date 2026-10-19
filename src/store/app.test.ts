@@ -6,11 +6,14 @@ import {
   type Backend,
   type BuildAck,
   type BuildEvent,
+  type EntradaHistorial,
   type EstadoFiguras,
   type Limpieza,
   type Eol,
   type FileInfo,
+  type InformeDoctor,
   type InformeReemplazo,
+  type ProcesoTex,
   type Problema,
   type ResultadoBusqueda,
   type Simbolos,
@@ -79,6 +82,7 @@ function infoDe(o: Partial<ProjectInfo> = {}): ProjectInfo {
       { name: 'Secciones/Tres', file: 'Secciones/Tres.tex', command: 'include' },
     ],
     indexMs: 3,
+    lockedBy: null,
     ...o,
   };
 }
@@ -109,6 +113,13 @@ function falso(archivos: Record<string, Partial<Archivo> & { text: string }>, pr
     inverse: null as SyncInverse | null,
     ackExport: { kind: 'started', id: 1 } as BuildAck,
     errorExport: null as string | null,
+    /** Por qué se pidió cada build (el segundo argumento de `build`), sin ensuciar `llamadas`. */
+    motivos: [] as (string | undefined)[],
+    historial: [] as EntradaHistorial[],
+    informe: { hallazgos: [], ms: 5, distribucion: 'MiKTeX 26.5' } as InformeDoctor,
+    huerfanos: [] as ProcesoTex[],
+    /** Los PID que la interfaz mandó matar. */
+    muertos: [] as number[],
     /** Lo que `onBuildEvent` y `onFsChanged` le entregaron a la interfaz: los tests los disparan a mano. */
     emitirBuild: (() => {}) as (e: BuildEvent) => void,
     emitirCambios: (() => {}) as (archivos: string[]) => void,
@@ -158,9 +169,17 @@ function falso(archivos: Record<string, Partial<Archivo> & { text: string }>, pr
       return { written: true, version: f.version };
     },
     readPdf: async () => new Uint8Array(),
-    build: async (p) => {
+    build: async (p, motivo) => {
       llamadas.push(p ? `build ${p}` : 'build');
+      control.motivos.push(motivo);
       return control.ack;
+    },
+    history: async () => control.historial,
+    runDoctor: async () => control.informe,
+    orphans: async () => control.huerfanos,
+    killOrphans: async (pids) => {
+      control.muertos.push(...pids);
+      return pids;
     },
     cancelBuild: async () => {
       llamadas.push('cancel');
@@ -266,6 +285,9 @@ beforeEach(() => {
     filtro: FILTRO_INICIAL,
     problemaIdx: -1,
     panelInferior: 'log',
+    historialTrabajos: [],
+    doctor: null,
+    doctorCorriendo: false,
     irA: null,
     simbolos: null,
     figuras: null,
@@ -1647,5 +1669,90 @@ describe('exportar, fragmento, layout y archivos cambiados afuera (F7)', () => {
       expect(f.llamadas.filter((l) => l.startsWith('info '))).toHaveLength(0);
       expect(f.llamadas.filter((l) => l === 'build')).toHaveLength(1);
     });
+  });
+});
+
+describe('historial, doctor y procesos (F8)', () => {
+  const huerfano = (pid: number): ProcesoTex => ({ pid, nombre: 'pdflatex.exe', cwd: '/p', linea: 'pdflatex main.tex' });
+
+  it('los builds que disparan un guardado o un archivo cambiado afuera dicen qué los pidió; uno a mano, no', async () => {
+    const f = falso({ 'Secciones/Uno.tex': { text: 'uno\n' } });
+    Object.assign(f.estado, { autoCompile: 'save' });
+    useApp.setState({ project: infoDe({ state: { ...f.estado } }) });
+    await st().abrirArchivo('Secciones/Uno.tex');
+    editarDoc('Secciones/Uno.tex', { from: 0, to: 0, insert: 'x' });
+    await st().guardar('Secciones/Uno.tex');
+    await st().alCambiarAfuera(['Secciones/fig_a.tex', 'Herramientas/b.tex', 'c.tex', 'd.tex', 'e.tex']);
+    await st().compilar(undefined, { guardar: false });
+    expect(f.control.motivos).toEqual(['guardado: Secciones/Uno.tex', 'afuera: Secciones/fig_a.tex, Herramientas/b.tex, c.tex y 2 más', undefined]);
+  });
+
+  it('el panel Historial lee el historial al mostrarse y se actualiza cuando termina un trabajo con el panel a la vista', async () => {
+    const f = falso({});
+    const linea = (tipo: EntradaHistorial['tipo']): EntradaHistorial => ({ inicioMs: 1, tipo, motivo: 'manual', ms: 10, ok: true, pistas: ['faltaba el .fdb_latexmk'] });
+    f.control.historial = [linea('build')];
+    await st().init(); // engancha los eventos del backend
+    st().mostrarPanelInferior('historial');
+    await vi.waitFor(() => expect(st().historialTrabajos).toHaveLength(1));
+    f.control.historial = [linea('bake'), linea('build')];
+    f.control.emitirBuild({ type: 'bakefinished', ok: true, cancelled: false, cooked: 3, failed: 0, ms: 5, error: null } as unknown as BuildEvent);
+    await vi.waitFor(() => expect(st().historialTrabajos).toHaveLength(2));
+    // Con otro panel a la vista no se lee (no hay nadie mirando).
+    st().mostrarPanelInferior('log');
+    f.control.historial = [linea('export')];
+    f.control.emitirBuild({ type: 'bakefinished', ok: true, cancelled: false, cooked: 0, failed: 0, ms: 5, error: null } as unknown as BuildEvent);
+    await Promise.resolve();
+    expect(st().historialTrabajos).toHaveLength(2);
+  });
+
+  it('al abrir un proyecto el doctor corre y, si hay avisos, lo dice con un botón que abre el panel; sin hallazgos no molesta', async () => {
+    const f = falso({});
+    await st().abrirProyecto('/p');
+    await vi.waitFor(() => expect(st().doctor).not.toBeNull());
+    expect(st().notice).toBeNull();
+    f.control.informe = {
+      distribucion: 'MiKTeX 26.5',
+      ms: 9,
+      hallazgos: [
+        { id: 'variable-def', nivel: 'aviso', titulo: '«\\OpcionPie» se define sin guardia', detalle: '', arreglo: 'usar \\ifdefined', archivo: 'structure.tex', linea: 3 },
+        { id: 'perl', nivel: 'error', titulo: 'No se encontró perl', detalle: '', arreglo: null, archivo: null, linea: null },
+      ],
+    };
+    useApp.setState({ doctor: null });
+    await st().correrDoctor({ alAbrir: true });
+    expect(st().notice).toMatchObject({ nivel: 'error', texto: 'El doctor encontró 1 error y 1 aviso.' });
+    st().notice!.accion!.run();
+    expect(st().panelInferior).toBe('doctor');
+    // A pedido abre el panel directamente, incluso sin hallazgos.
+    useApp.setState({ panelInferior: 'log', notice: null });
+    f.control.informe = { distribucion: null, ms: 1, hallazgos: [] };
+    await st().correrDoctor();
+    expect(st().panelInferior).toBe('doctor');
+    expect(st().doctorCorriendo).toBe(false);
+  });
+
+  it('al abrir con procesos de TeX huérfanos pregunta y, si se acepta, los mata; si se deja, no', async () => {
+    const f = falso({});
+    f.control.huerfanos = [huerfano(41), huerfano(42)];
+    const abriendo = st().abrirProyecto('/p');
+    await responder('matar');
+    await abriendo;
+    await vi.waitFor(() => expect(f.control.muertos).toEqual([41, 42]));
+    expect(st().dialog).toBeNull();
+    f.control.muertos.length = 0;
+    const otra = st().revisarHuerfanos();
+    await responder('dejar');
+    await otra;
+    expect(f.control.muertos).toEqual([]);
+  });
+
+  it('un proyecto abierto en otra instancia lo avisa y no pregunta por huérfanos ni corre el doctor', async () => {
+    const f = falso({}, { lockedBy: 777 });
+    f.control.huerfanos = [huerfano(41)];
+    await st().abrirProyecto('/p');
+    expect(st().notice).toMatchObject({ nivel: 'error' });
+    expect(st().notice?.texto).toMatch(/otra instancia.*PID 777/);
+    expect(st().dialog).toBeNull();
+    expect(st().doctor).toBeNull();
   });
 });

@@ -5,6 +5,9 @@
 
 use lv_core::build::{BuildEvent, Sink};
 use lv_core::config::{State, StatePatch};
+use lv_core::doctor::Informe;
+use lv_core::historial::EntradaView;
+use lv_core::procesos::ProcesoTex;
 use lv_core::error::{Error, ErrorInfo};
 use lv_core::figcache::Limpieza;
 use lv_core::fsio::{self, FileRead, WriteOutcome};
@@ -78,6 +81,7 @@ async fn launch_options() -> LaunchOptions {
             Some("f5") => "f5".into(),
             Some("f6") => "f6".into(),
             Some("f7") => "f7".into(),
+            Some("f8") => "f8".into(),
             _ => "f1".into(),
         },
         smoke_file: var("LV_SMOKE_FILE"),
@@ -245,13 +249,42 @@ async fn read_pdf(state: TauriState<'_, AppState>, rel: String) -> Res<Response>
 
 /// Pide un build del perfil (el activo si no se dice). Si ya hay uno corriendo queda pendiente y corre una vez después.
 #[tauri::command]
-async fn build(state: TauriState<'_, AppState>, profile: Option<String>) -> Res<BuildAck> {
+async fn build(state: TauriState<'_, AppState>, profile: Option<String>, reason: Option<String>) -> Res<BuildAck> {
     let s = sesion(&state)?;
     // `request_build` espera el candado de datos y lee el disco: no se hace en el hilo del runtime asíncrono.
-    tauri::async_runtime::spawn_blocking(move || s.request_build(profile.as_deref()))
+    // `reason` dice qué lo pidió (`guardado: x.tex`, `afuera: x.tex`): queda en el historial. Sin él es `manual`.
+    tauri::async_runtime::spawn_blocking(move || s.request_build_por(profile.as_deref(), reason.as_deref().unwrap_or("manual")))
         .await
         .map_err(|e| otro(&e.to_string()))?
         .map_err(|e| e.info())
+}
+
+/// Las últimas `limit` líneas del historial de trabajos (la más nueva primero), con sus pistas de por qué tardó.
+#[tauri::command]
+async fn history(state: TauriState<'_, AppState>, limit: Option<usize>) -> Res<Vec<EntradaView>> {
+    let s = sesion(&state)?;
+    tauri::async_runtime::spawn_blocking(move || s.history(limit.unwrap_or(200))).await.map_err(|e| otro(&e.to_string()))
+}
+
+/// El doctor: lanza las herramientas de TeX unos segundos y mira el proyecto. No cambia nada.
+#[tauri::command]
+async fn run_doctor(state: TauriState<'_, AppState>) -> Res<Informe> {
+    let s = sesion(&state)?;
+    tauri::async_runtime::spawn_blocking(move || s.doctor()).await.map_err(|e| otro(&e.to_string()))?.map_err(|e| e.info())
+}
+
+/// Los procesos de TeX del proyecto que quedaron de antes (5.6).
+#[tauri::command]
+async fn orphans(state: TauriState<'_, AppState>) -> Res<Vec<ProcesoTex>> {
+    let s = sesion(&state)?;
+    tauri::async_runtime::spawn_blocking(move || s.huerfanos()).await.map_err(|e| otro(&e.to_string()))
+}
+
+/// Mata esos huérfanos (y lo que lanzaron). Devuelve los PID que se mataron.
+#[tauri::command]
+async fn kill_orphans(state: TauriState<'_, AppState>, pids: Vec<u32>) -> Res<Vec<u32>> {
+    let s = sesion(&state)?;
+    tauri::async_runtime::spawn_blocking(move || s.matar_huerfanos(&pids)).await.map_err(|e| otro(&e.to_string()))?.map_err(|e| e.info())
 }
 
 /// Los problemas del último build del perfil (errores, avisos y cajas mal llenas), con archivo y línea.
@@ -393,6 +426,10 @@ fn main() {
             write_file,
             read_pdf,
             build,
+            history,
+            run_doctor,
+            orphans,
+            kill_orphans,
             cancel_build,
             problems,
             get_symbols,

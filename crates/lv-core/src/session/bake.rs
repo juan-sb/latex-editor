@@ -25,7 +25,7 @@ pub(super) enum FaseBake {
 }
 
 impl FaseBake {
-    fn nombre(&self) -> String {
+    pub(super) fn nombre(&self) -> String {
         match self {
             FaseBake::Perfil(p) => format!("perfil {p}"),
             FaseBake::Todo => "todo".into(),
@@ -38,6 +38,8 @@ pub(super) struct BakeJob {
     pub fase: FaseBake,
     /// El build que estaba esperando esta cocción: corre apenas termina.
     pub luego_build: Option<String>,
+    /// Qué la pidió, para el historial: `manual`, `antes del build de <perfil>` o `el resto`.
+    pub motivo: String,
 }
 
 /// Lo que hace falta para cancelar la cocción en curso.
@@ -62,11 +64,13 @@ pub(super) struct EstadoBake {
     pub activo: Mutex<Option<BakeActivo>>,
     pub cocinando: Mutex<Option<Cocinando>>,
     pub rotas: Mutex<Vec<FiguraRota>>,
+    /// Lo que dejó el listado de la cocción en curso (o de la última), para su línea del historial.
+    pub detalle: Mutex<super::historia::DetalleDeListado>,
 }
 
 impl EstadoBake {
     pub fn nuevo() -> Self {
-        EstadoBake { id: AtomicU64::new(1), activo: Mutex::new(None), cocinando: Mutex::new(None), rotas: Mutex::new(vec![]) }
+        EstadoBake { id: AtomicU64::new(1), activo: Mutex::new(None), cocinando: Mutex::new(None), rotas: Mutex::new(vec![]), detalle: Mutex::new(Default::default()) }
     }
 }
 
@@ -302,36 +306,48 @@ impl Session {
     /// quedó cocido del todo (ninguna pendiente ni fallida, con su PDF en el cache) y desde entonces no cambió nada que pueda cambiar
     /// una figura: mismo sello y misma huella (`huella_de_figuras`). Ninguna figura rota sin arreglar. Cuesta lo que un grafo del
     /// proyecto (≈ 10 ms en el libro) y un chequeo de los PDF.
-    pub(super) fn cache_al_dia(&self) -> bool {
-        let Ok(d) = self.lock() else { return false };
-        let (Some(cfg), Some(rf)) = (d.config.as_ref(), d.root_file.as_ref()) else { return false };
+    /// `Err` dice por qué no: es lo que el historial muestra como «se listaron las figuras antes de compilar: …».
+    pub(super) fn cache_al_dia(&self) -> std::result::Result<(), String> {
+        let no = |m: &str| Err(m.to_string());
+        let Ok(d) = self.lock() else { return no("no se pudo leer la configuración") };
+        let (Some(cfg), Some(rf)) = (d.config.as_ref(), d.root_file.as_ref()) else { return no("no hay configuración o raíz") };
         let f = FigureCfg::de(cfg);
         if f.modo == Modo::Off {
-            return false;
+            return no("el cache de figuras está apagado");
         }
         if self.bake.rotas.lock().map(|r| !r.is_empty()).unwrap_or(true) {
-            return false;
+            return no("hay una figura rota sin arreglar");
         }
-        let Some(lista) = figcache::leer_figlist(&self.root) else { return false };
-        let Some(guardada) = lista.huella.as_deref() else { return false };
-        if !lista.completa || !lista.pendientes.is_empty() || !lista.fallidas.is_empty() {
-            return false;
+        let Some(lista) = figcache::leer_figlist(&self.root) else { return no("todavía no había una lista de las figuras") };
+        let Some(guardada) = lista.huella.as_deref() else { return no("la última lista no quedó cocida del todo") };
+        if !lista.completa {
+            return no("la última lista era de un perfil parcial");
         }
-        let Some(sello) = figcache::sello(&self.root, &f.stamp_files) else { return false };
+        if !lista.pendientes.is_empty() || !lista.fallidas.is_empty() {
+            return no("la última cocción dejó figuras sin cocinar");
+        }
+        let Some(sello) = figcache::sello(&self.root, &f.stamp_files) else { return no("no se pudo calcular el sello de las figuras") };
         if lista.sello != sello {
-            return false;
+            return no("cambió el sello de las figuras (el estilo)");
         }
         let ix = ProjectIndex::build(&self.root, rf, &cfg.parts.commands);
         let hoy = figcache::huella_de_figuras(&self.root, &ix.reachable, &ix.archivos_de_datos(f.only_in_figure_env), &|rel| ix.part_of(rel).is_some(), &sello);
-        hoy == guardada && lista.nombres.iter().all(|n| self.root.join(format!("{n}.pdf")).is_file())
+        if hoy != guardada {
+            return no("cambió algo que puede cambiar una figura (una figura, una definición, el preámbulo o un archivo que una figura lee)");
+        }
+        if !lista.nombres.iter().all(|n| self.root.join(format!("{n}.pdf")).is_file()) {
+            return no("falta el PDF de alguna figura en el cache");
+        }
+        Ok(())
     }
 
     // --- pedir ---------------------------------------------------------------------------------------------------------------------
 
     /// La cocción manual (botón Cocinar): lista el documento entero y cocina lo que falte. Con otro trabajo en curso queda pendiente.
     pub fn request_bake(self: &Arc<Self>) -> Result<BuildAck> {
+        self.guardia()?;
         self.plan_bake(&FaseBake::Todo)?; // un error de configuración se dice acá, no en un hilo
-        match self.cola.pedir(Job::Bake(BakeJob { fase: FaseBake::Todo, luego_build: None })) {
+        match self.cola.pedir(Job::Bake(BakeJob { fase: FaseBake::Todo, luego_build: None, motivo: "manual".into() })) {
             Pedido::Correr(t) => match self.ejecutar(&t, false) {
                 Ok(id) => Ok(BuildAck::Started { id }),
                 Err(e) => {
@@ -352,7 +368,15 @@ impl Session {
         // Un perfil que sólo consume el cache cocina SIEMPRE el documento entero antes (sin importar el 60 %), y un error al armar
         // la cocción corta el pedido: compilar igual sería publicar figuras que pgf no revisó.
         // Salvo que nada haya cambiado desde que el cache quedó cocido (`cache_al_dia`): ahí se saltea hasta el listado.
-        let solo_cache = self.solo_cache(&perfil) && !self.cache_al_dia();
+        let al_dia = self.solo_cache(&perfil).then(|| self.cache_al_dia());
+        let solo_cache = matches!(al_dia, Some(Err(_)));
+        // Para el historial del build que viene: se saltó el listado o por qué no. Un perfil que no consume el cache no decide nada.
+        if let Ok(mut l) = self.listado_decidido.lock() {
+            *l = al_dia.map(|r| match r {
+                Ok(()) => historial::Listado { salteado: true, motivo: "nada cambió desde la última cocción completa (mismo sello y misma huella de las figuras)".into() },
+                Err(m) => historial::Listado { salteado: false, motivo: m },
+            });
+        }
         let fase = if solo_cache { FaseBake::Todo } else { FaseBake::Perfil(perfil.clone()) };
         if solo_cache {
             self.plan_bake(&fase)?;
@@ -362,7 +386,7 @@ impl Session {
         let cocinando_ya = self.cola.activo() == Some(Clase::Bake);
         // (un perfil que sólo consume el cache sí se envuelve aunque haya una cocción corriendo: queda pendiente detrás de ella)
         if solo_cache || (!cocinando_ya && self.debe_cocer_antes(&perfil) && self.plan_bake(&fase).is_ok()) {
-            match self.cola.pedir(Job::Bake(BakeJob { fase, luego_build: Some(perfil.clone()) })) {
+            match self.cola.pedir(Job::Bake(BakeJob { fase, luego_build: Some(perfil.clone()), motivo: format!("antes del build de {perfil}") })) {
                 Pedido::Correr(t) => match self.ejecutar(&t, false) {
                     Ok(id) => return Ok(BuildAck::Started { id }),
                     Err(_) => {
@@ -419,6 +443,10 @@ impl Session {
         let fase = b.fase.nombre();
         (self.sink)(BuildEvent::BakeListing { id, fase: fase.clone() });
         let t0 = std::time::Instant::now();
+        let inicio_ms = super::historia::ahora_ms();
+        if let Ok(mut d) = self.bake.detalle.lock() {
+            *d = Default::default();
+        }
         let r = self.cocer_todo(id, &b, &plan, &cancelado, &job);
         let ms = t0.elapsed().as_millis() as u64;
         *self.bake.activo.lock().unwrap_or_else(|p| p.into_inner()) = None;
@@ -462,7 +490,7 @@ impl Session {
             if let Some(p) = &b.luego_build {
                 let _ = self.cola.pedir(Job::Build { perfil: p.clone() });
             }
-            let _ = self.cola.pedir(Job::Bake(BakeJob { fase: FaseBake::Todo, luego_build: None }));
+            let _ = self.cola.pedir(Job::Bake(BakeJob { fase: FaseBake::Todo, luego_build: None, motivo: "el resto".into() }));
         } else if let Some(p) = &b.luego_build {
             // La cocción falló antes de empezar (no hay motor, no compila hasta el listado): el build igual se intenta, que es
             // lo que el usuario pidió, y dirá su propio error.
@@ -470,6 +498,8 @@ impl Session {
                 let _ = self.cola.pedir(Job::Build { perfil: p.clone() });
             }
         }
+        let detalle = self.bake.detalle.lock().map(|d| d.clone()).unwrap_or_default();
+        self.registrar_bake(inicio_ms, ms, &b, plan.opciones.jobs as u32, &detalle, &fin);
         let siguiente = self.cola.liberar();
         (self.sink)(fin);
         self.correr_siguiente(siguiente);
@@ -483,9 +513,12 @@ impl Session {
         aux::ensure_cache_dirs(root, PERFIL_COCINA, dir)?;
         let _ = &plan.root_rel;
         // Un archivo que una figura lee desde adentro de su `tikzpicture` cambió: sin su `.md5` el listado da esas figuras por pendientes.
-        let invalidadas = figcache::invalidar_por_datos(root, dir, &plan.datos);
-        if !invalidadas.is_empty() {
-            (self.sink)(BuildEvent::Log { id, text: format!("== {} figura(s) leen un archivo que cambió: se recocinan\n", invalidadas.len()) });
+        let invalidadas = figcache::invalidar_con_detalle(root, dir, &plan.datos);
+        if !invalidadas.figuras.is_empty() {
+            (self.sink)(BuildEvent::Log { id, text: format!("== {} figura(s) leen un archivo que cambió: se recocinan\n", invalidadas.figuras.len()) });
+        }
+        if let Ok(mut d) = self.bake.detalle.lock() {
+            *d = super::historia::DetalleDeListado { datos_cambiados: invalidadas.datos, datos_nuevos: invalidadas.nuevos, ..Default::default() };
         }
 
         let t_listado = std::time::Instant::now();
@@ -497,6 +530,11 @@ impl Session {
             (figcache::sello(root, &f.stamp_files), f.usa_sello())
         };
         let pend = figcache::pendientes(root, &nombres);
+        if let Ok(mut d) = self.bake.detalle.lock() {
+            d.listado_ms = listing_ms;
+            d.listadas = nombres.len() as u32;
+            d.a_cocinar = pend.len() as u32;
+        }
         let completa = plan.completa;
         self.guardar_lista(&nombres, &pend, &[], completa, stamp.as_deref(), None);
         let total = pend.len() as u32;
@@ -669,6 +707,7 @@ impl Session {
 
     /// Borra lo que el último listado completo no nombra. Con una cocción o un build en curso se niega.
     pub fn figures_clean(&self) -> Result<Limpieza> {
+        self.guardia()?;
         if self.cola.ocupado() {
             return Err(Error::Busy);
         }
