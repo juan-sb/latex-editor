@@ -241,7 +241,7 @@ pub fn parse_tex_log(bytes: &[u8], root: &Path) -> Vec<Problem> {
 
         if let Some((f, n, msg)) = error_con_archivo(l) {
             let fin = fin_bloque(i).min(i + 40);
-            let (linea, contexto) = contexto_de(&lineas[i + 1..fin]);
+            let (linea, contexto) = contexto_extendido(&lineas, i + 1, fin);
             let msg = msg.trim();
             if !es_ruido(msg) {
                 out.push(Problem {
@@ -259,7 +259,7 @@ pub fn parse_tex_log(bytes: &[u8], root: &Path) -> Vec<Problem> {
         }
         if let Some(msg) = l.strip_prefix("! ") {
             let fin = fin_bloque(i).min(i + 40);
-            let (linea, contexto) = contexto_de(&lineas[i + 1..fin]);
+            let (linea, contexto) = contexto_extendido(&lineas, i + 1, fin);
             let msg = msg.trim();
             if !es_ruido(msg) {
                 out.push(Problem {
@@ -348,6 +348,27 @@ pub fn parse_tex_log(bytes: &[u8], root: &Path) -> Vec<Problem> {
         }
     }
     deduplicar(out)
+}
+
+/// Como `contexto_de`, pero si el bloque terminó antes de llegar a `l.<n>` sigue unas líneas más. Pasa con los errores que
+/// muestran primero `<recently read> \cmd` o `<argument> ...`: TeX imprime debajo una línea de sólo espacios (la que alinea
+/// el cursor), que para este parser es una línea en blanco. Los logs de las subcompilaciones de figuras (sin
+/// `-file-line-error`) dependen de esto para saber la línea.
+fn contexto_extendido(lineas: &[&str], desde: usize, fin: usize) -> (Option<u32>, String) {
+    let (linea, contexto) = contexto_de(&lineas[desde..fin]);
+    if linea.is_some() {
+        return (linea, contexto);
+    }
+    let tope = (fin + 6).min(lineas.len());
+    for k in fin..tope {
+        if lineas[k].starts_with('!') {
+            break;
+        }
+        if linea_de_contexto(lineas[k]).is_some() {
+            return contexto_de(&lineas[k..tope]);
+        }
+    }
+    (None, String::new())
 }
 
 /// Del cuerpo de un error: la línea de `l.<n>` y lo que TeX muestra (esa línea y la siguiente, juntas).

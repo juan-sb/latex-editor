@@ -58,6 +58,9 @@ pub enum BuildEvent {
         errors: u32,
         warnings: u32,
         badboxes: u32,
+        /// Las figuras cuya subcompilación lanzó pgf durante el build (`-jobname`); la sesión las verifica. No viaja a la interfaz.
+        #[serde(skip)]
+        figuras: Vec<String>,
     },
     /// Algo que no es un build (por ejemplo, el pendiente no se pudo lanzar).
     Error { message: String },
@@ -253,8 +256,21 @@ impl RunSpec {
 #[derive(Default)]
 pub(crate) struct Contador {
     cola: String,
+    /// La línea que todavía no terminó, para leer las `Invoking ... -jobname "<cache>/<figura>"` de pgf aunque lleguen
+    /// partidas entre dos fragmentos.
+    linea: String,
     pub pasadas: u32,
     pub truncado: bool,
+    /// Las figuras cuya subcompilación lanzó pgf (el `-jobname` con el que se lanzó), en orden y sin repetir.
+    pub figuras: Vec<String>,
+}
+
+/// Lo que sigue a `-jobname "` hasta la comilla de cierre, si hay.
+fn jobname_de(linea: &str) -> Option<&str> {
+    let i = linea.find("-jobname \"")? + "-jobname \"".len();
+    let fin = linea[i..].find('"')?;
+    let n = &linea[i..i + fin];
+    (!n.is_empty()).then_some(n)
 }
 
 const AGUJAS_PASADA: [&str; 3] = ["of rule 'pdflatex'", "of rule 'xelatex'", "of rule 'lualatex'"];
@@ -273,6 +289,22 @@ impl Contador {
         }
         let desde = ventana.char_indices().rev().nth(LARGO_DE_COLA - 1).map(|(i, _)| i).unwrap_or(0);
         self.cola = ventana[desde..].to_string();
+
+        // Las figuras que pgf lanza: una línea por figura. pdflatex escribe `[12] [13]` sin saltos, así que lo que no
+        // termina en salto se acota para no crecer sin límite.
+        self.linea.push_str(s);
+        while let Some(i) = self.linea.find('\n') {
+            if let Some(n) = jobname_de(&self.linea[..i]) {
+                if !self.figuras.iter().any(|f| f == n) {
+                    self.figuras.push(n.to_string());
+                }
+            }
+            self.linea.drain(..=i);
+        }
+        if self.linea.len() > 8192 {
+            let corte = self.linea.char_indices().rev().nth(4095).map(|(i, _)| i).unwrap_or(0);
+            self.linea.drain(..corte);
+        }
     }
 }
 
@@ -511,6 +543,7 @@ impl Builder {
                 errors: 0,
                 warnings: 0,
                 badboxes: 0,
+                figuras: contador.figuras,
             });
         });
         Ok(id)

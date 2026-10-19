@@ -16,6 +16,7 @@ use crate::build::{render_driver_spec, BuildEvent, Builder, DriverSpec, RunSpec,
 use crate::cola::{Clase, Cola, Pedido, Trabajo};
 use crate::config::{self, comandos_por_defecto, infer_config, PartsSel, ProjectConfig, State, StatePatch};
 use crate::error::{Error, Result};
+use crate::figures;
 use crate::fsio;
 use crate::graph::{Affects, ProjectIndex};
 use crate::logparse::{self, Problem};
@@ -568,25 +569,32 @@ impl Session {
                 aux::mark_suspect(root, nombre)
             }
         };
-        let sink = self.envolver(perfil.to_string(), plan.cache_dir.clone(), retry);
+        // Las figuras que lance este build se verifican contra este instante: su PDF tiene que ser posterior.
+        let desde = std::time::SystemTime::now();
+        let sink = self.envolver(perfil.to_string(), plan.cache_dir.clone(), retry, desde);
         self.builder.start_with(&self.root, &plan.spec, sink, &antes)
     }
 
     /// El sumidero del builder: deja pasar todo salvo el `Finished`, que primero pasa por `al_terminar`.
-    fn envolver(self: &Arc<Self>, perfil: String, cache_dir: String, retry: bool) -> Sink {
+    fn envolver(self: &Arc<Self>, perfil: String, cache_dir: String, retry: bool, desde: std::time::SystemTime) -> Sink {
         let me = self.clone();
         Arc::new(move |ev: BuildEvent| match ev {
-            BuildEvent::Finished { .. } => me.al_terminar(ev, &perfil, &cache_dir, retry),
+            BuildEvent::Finished { .. } => me.al_terminar(ev, &perfil, &cache_dir, retry, desde),
             otro => (me.sink)(otro),
         })
     }
 
-    fn al_terminar(self: &Arc<Self>, ev: BuildEvent, perfil: &str, cache_dir: &str, retry: bool) {
+    fn al_terminar(self: &Arc<Self>, ev: BuildEvent, perfil: &str, cache_dir: &str, retry: bool, desde: std::time::SystemTime) {
         let mut ev = ev;
-        let BuildEvent::Finished { id, ok, cancelled, truncated_aux, .. } = &ev else { return };
+        let BuildEvent::Finished { id, ok, cancelled, truncated_aux, figuras, .. } = &ev else { return };
         let (id, ok, cancelled, truncated_aux) = (*id, *ok, *cancelled, *truncated_aux);
+        // Primero se verifican las figuras que pgf lanzó (7 del plan, "Figuras que fallan o se cortan"): pgf escribe su `.md5`
+        // antes de subcompilar, así que una que falló o se cortó no puede pasar al cache compartido. Se hace también antes
+        // del reintento por `.aux` truncado: el reintento vería ese `.md5` y daría la figura por buena.
+        let rotas = figures::verificar(&self.root, perfil, figuras, desde, cancelled);
         aux::move_md5(&self.root, perfil, cache_dir);
-        if ok {
+        // Con una figura rota el PDF lleva una imagen vieja (o ninguna): sigue sospechoso, no se publica ni se siembra.
+        if ok && rotas.is_empty() {
             aux::clear_suspect(&self.root, perfil);
         }
         if !ok && truncated_aux && !cancelled && !retry {
@@ -602,7 +610,8 @@ impl Session {
             }
         }
         // Los problemas del log se leen una vez por build y viajan resumidos en el `Finished`; la lista la pide la interfaz.
-        let encontrados = logparse::problems_of_profile(&self.root, perfil);
+        let mut encontrados = logparse::problems_of_profile(&self.root, perfil);
+        encontrados.extend(rotas.into_iter().flat_map(|f| f.problemas));
         if let BuildEvent::Finished { errors, warnings, badboxes, .. } = &mut ev {
             let c = logparse::count(&encontrados);
             (*errors, *warnings, *badboxes) = (c.errors, c.warnings, c.badboxes);

@@ -521,3 +521,73 @@ fn cambiar_la_raiz_no_se_puede_con_un_build_en_curso() {
     assert!(s.set_root("../afuera.tex").is_err());
     assert!(s.set_root("no-existe.tex").is_err());
 }
+
+// --- figuras que fallan o se cortan (7 del plan, revisión previa a F6) -------------------------------------------------------
+
+/// Un latexmk que lanza dos figuras: la A sale bien y la B tiene un error fatal en su log (con un PDF viejo al lado, como
+/// lo deja pgf). El build termina "bien": latexmk sale con 0 y hay PDF.
+const DOS_FIGURAS: &str = r##"$p = $env:LV_PERFIL
+$d = ".lv/build/$p"
+New-Item -ItemType Directory -Force "$d/figuras-cache", "figuras-cache" | Out-Null
+Set-Content "$d/figuras-cache/A-uno-0.md5" 'nuevo'
+Set-Content "$d/figuras-cache/B-dos-0.md5" 'nuevo'
+Set-Content "figuras-cache/A-uno-0.pdf" "%PDF-1.5`n%%EOF"
+Set-Content "figuras-cache/A-uno-0.log" 'This is pdfTeX'
+Set-Content "figuras-cache/B-dos-0.pdf" "%PDF-1.5`n%%EOF"
+Set-Content "figuras-cache/B-dos-0.log" "(./main.tex`n! Undefined control sequence.`nl.3 \foo`n`n! ==> Fatal error occurred, no output PDF file produced!"
+"===== 'mode=convert with system call': Invoking 'pdflatex -shell-escape -jobname `"figuras-cache/A-uno-0`" x' ====="
+"===== 'mode=convert with system call': Invoking 'pdflatex -shell-escape -jobname `"figuras-cache/B-dos-0`" x' ====="
+"Run number 1 of rule 'pdflatex'"
+Set-Content "$d/lv-$p.pdf" 'x'
+"##;
+
+#[test]
+fn las_figuras_verificadas_pasan_al_cache_y_la_rota_se_informa_sin_pasar_su_md5() {
+    let d = proyecto();
+    let (s, r) = abrir(&d, DOS_FIGURAS);
+    s.request_build(Some("rapido")).unwrap();
+    esperar_finales(&r, 1, 60);
+    let BuildEvent::Finished { ok, errors, .. } = &finales(&r)[0] else { unreachable!() };
+    assert!(ok, "latexmk salió con 0: el build es ok, pero con un error de figura");
+    assert_eq!(*errors, 1, "el error de la figura cuenta en el Finished");
+    let raiz = d.path();
+    assert_eq!(fs::read_to_string(raiz.join("figuras-cache/A-uno-0.md5")).unwrap().trim(), "nuevo", "la verificada pasa al cache compartido");
+    assert!(raiz.join("figuras-cache/A-uno-0.pdf").is_file());
+    assert!(!raiz.join("figuras-cache/B-dos-0.md5").exists(), "el .md5 que miente no llega al cache");
+    assert!(!raiz.join(".lv/build/rapido/figuras-cache/B-dos-0.md5").exists());
+    assert!(!raiz.join("figuras-cache/B-dos-0.pdf").exists(), "ni el PDF viejo");
+    let figuras: Vec<_> = s.problems("rapido").into_iter().filter(|p| p.kind == "figure").collect();
+    assert_eq!(figuras.len(), 1, "{figuras:#?}");
+    assert!(figuras[0].message.contains("B-dos-0") && figuras[0].message.contains("Undefined control sequence"));
+    assert_eq!((figuras[0].file.as_deref(), figuras[0].line), (Some("main.tex"), Some(3)));
+    assert!(raiz.join(".lv/build/rapido/.sospechoso").exists(), "con una figura rota el PDF no es de fiar: no se publica ni se siembra");
+}
+
+#[test]
+fn cancelar_a_mitad_de_una_figura_no_deja_pdf_cortado_ni_md5_que_la_de_por_buena() {
+    let d = proyecto();
+    let script = r##"$p = $env:LV_PERFIL
+$d = ".lv/build/$p"
+New-Item -ItemType Directory -Force "$d/figuras-cache", "figuras-cache" | Out-Null
+Set-Content "$d/figuras-cache/A-uno-0.md5" 'nuevo'
+Set-Content "figuras-cache/A-uno-0.pdf" '%PDF-1.5 cortado'
+Set-Content "figuras-cache/A-uno-0.log" 'This is pdfTeX'
+"===== 'mode=convert with system call': Invoking 'pdflatex -shell-escape -jobname `"figuras-cache/A-uno-0`" x' ====="
+Start-Sleep -Seconds 30
+"##;
+    let (s, r) = abrir(&d, script);
+    s.request_build(Some("rapido")).unwrap();
+    let t = Instant::now();
+    while !r.log().contains("figuras-cache/A-uno-0") {
+        assert!(t.elapsed() < Duration::from_secs(20), "el build falso no llegó a lanzar la figura");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(s.cancel());
+    esperar_finales(&r, 1, 15);
+    let raiz = d.path();
+    for rel in ["figuras-cache/A-uno-0.md5", "figuras-cache/A-uno-0.pdf", ".lv/build/rapido/figuras-cache/A-uno-0.md5"] {
+        assert!(!raiz.join(rel).exists(), "{rel} tenía que borrarse: la figura quedó a medio hacer");
+    }
+    assert!(s.problems("rapido").iter().all(|p| p.kind != "figure"), "cancelar no es un error del proyecto");
+    assert!(raiz.join(".lv/build/rapido/.sospechoso").exists());
+}

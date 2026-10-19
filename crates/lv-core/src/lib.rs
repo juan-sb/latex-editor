@@ -7,6 +7,7 @@ pub mod build;
 pub mod cola;
 pub mod config;
 pub mod error;
+pub mod figures;
 pub mod fsio;
 pub mod graph;
 pub mod logparse;
