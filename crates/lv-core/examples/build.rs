@@ -1,9 +1,12 @@
-//! Compila un proyecto sin interfaz, con el mismo motor que la app (perfiles, partes, sembrado, reparación):
+//! Compila un proyecto sin interfaz, con el mismo motor que la app (perfiles, partes, sembrado, reparación, cocción de figuras):
 //!
-//!   cargo run -p lv-core --example build -- <carpeta> [perfil] [--root <raíz.tex>] [--parts "A,B"]
+//!   cargo run -p lv-core --example build -- <carpeta> [perfil] [--root <raíz.tex>] [--parts "A,B"] [--figuras]
 //!
 //! Sin `--root` usa la de `latexviewer.json` o `.lv/state.json`; sin perfil, el activo (o `completo`). Imprime el log
-//! crudo tal como llega y sale con 0 si el build fue ok. Sirve para probar el motor solo y para medir.
+//! crudo tal como llega y sale con 0 si el build fue ok. Con `--figuras` no compila: cocina las figuras del documento entero
+//! (el botón Cocinar del panel Figuras) y sale con 0 si todas salieron bien. En los dos casos espera a que la sesión quede
+//! ociosa, así que incluye lo que la cola deja después (la cocción del resto tras un build). Sirve para probar el motor solo
+//! y para medir.
 
 use lv_core::build::BuildEvent;
 use lv_core::config::StatePatch;
@@ -23,8 +26,9 @@ fn main() {
     };
     let root = tomar("--root");
     let parts = tomar("--parts");
+    let figuras = args.iter().position(|a| a == "--figuras").map(|i| args.remove(i)).is_some();
     if args.is_empty() || args.len() > 2 {
-        eprintln!("uso: build <carpeta> [perfil] [--root <raíz.tex>] [--parts \"A,B\"]");
+        eprintln!("uso: build <carpeta> [perfil] [--root <raíz.tex>] [--parts \"A,B\"] [--figuras]");
         std::process::exit(2);
     }
     let (tx, rx) = mpsc::channel();
@@ -38,7 +42,11 @@ fn main() {
         }
         BuildEvent::Queued { perfil } => eprintln!("== en cola: {perfil}"),
         BuildEvent::Error { message } => eprintln!("== error: {message}"),
-        fin @ BuildEvent::Finished { .. } => {
+        BuildEvent::BakeQueued => eprintln!("== cocción de figuras en cola"),
+        BuildEvent::BakeListing { fase, .. } => eprintln!("== listando las figuras ({fase})"),
+        BuildEvent::BakeStarted { fase, total, listed, .. } => eprintln!("== cocinando ({fase}): {total} de {listed}"),
+        BuildEvent::BakeProgress { done, total, name, ok, .. } => eprintln!("   {done}/{total} {name}{}", if ok { "" } else { "  FALLÓ" }),
+        fin @ (BuildEvent::Finished { .. } | BuildEvent::BakeFinished { .. }) => {
             let _ = tx.lock().unwrap().send(fin);
         }
     });
@@ -56,20 +64,48 @@ fn main() {
         if let Some(p) = &parts {
             sesion.set_state(StatePatch { selection: Some(p.split(',').map(|s| s.trim().to_string()).collect()), ..Default::default() })?;
         }
-        sesion.request_build(args.get(1).map(String::as_str)).map(|_| ())
+        if figuras {
+            sesion.request_bake().map(|_| ())
+        } else {
+            sesion.request_build(args.get(1).map(String::as_str)).map(|_| ())
+        }
     })();
     if let Err(e) = ok {
         eprintln!("no se pudo lanzar: {e}");
         std::process::exit(2);
     }
-    match rx.recv().unwrap() {
-        BuildEvent::Finished { perfil, ok, code, ms, pdf, updated, passes, repaired, .. } => {
-            eprintln!(
-                "== terminó {perfil}: ok={ok} código={code:?} {:.1} s pasadas={passes} pdf={pdf:?} actualizado={updated} reparado={repaired}",
-                ms as f64 / 1000.0
-            );
-            std::process::exit(if ok { 0 } else { 1 });
+    let mut salida = 0;
+    // El primer aviso de lo pedido (un build o una cocción) fija el código de salida; después se espera a que la cola se vacíe.
+    let esperado = |ev: &BuildEvent| matches!((figuras, ev), (false, BuildEvent::Finished { .. }) | (true, BuildEvent::BakeFinished { .. }));
+    loop {
+        let ev = match rx.recv_timeout(std::time::Duration::from_millis(400)) {
+            Ok(ev) => ev,
+            // Un trabajo que termina deja la sesión libre (o ya reservada para el siguiente) antes de avisar: sin nada corriendo, se sale.
+            Err(mpsc::RecvTimeoutError::Timeout) if sesion.is_building() => continue,
+            Err(_) => break,
+        };
+        match &ev {
+            BuildEvent::Finished { perfil, ok, code, ms, pdf, updated, passes, repaired, errors, .. } => {
+                eprintln!(
+                    "== terminó {perfil}: ok={ok} código={code:?} {:.1} s pasadas={passes} pdf={pdf:?} actualizado={updated} reparado={repaired} errores={errors}",
+                    *ms as f64 / 1000.0
+                );
+                if esperado(&ev) {
+                    salida = if *ok { 0 } else { 1 };
+                }
+            }
+            BuildEvent::BakeFinished { ok, cancelled, ceded, cooked, failed, remaining, ms, error, .. } => {
+                eprintln!(
+                    "== cocción terminada: ok={ok} cocidas={cooked} fallidas={failed} pendientes={remaining} cancelada={cancelled} cedió={ceded} {:.1} s{}",
+                    *ms as f64 / 1000.0,
+                    error.as_ref().map(|e| format!(" error: {e}")).unwrap_or_default()
+                );
+                if esperado(&ev) {
+                    salida = if *ok { 0 } else { 1 };
+                }
+            }
+            _ => {}
         }
-        _ => unreachable!(),
     }
+    std::process::exit(salida);
 }
