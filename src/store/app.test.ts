@@ -6,6 +6,8 @@ import {
   type Backend,
   type BuildAck,
   type BuildEvent,
+  type EstadoFiguras,
+  type Limpieza,
   type Eol,
   type FileInfo,
   type InformeReemplazo,
@@ -99,6 +101,10 @@ function falso(archivos: Record<string, Partial<Archivo> & { text: string }>, pr
     buscar: null as null | (() => Promise<ResultadoBusqueda>),
     reemplazo: { changed: [], skipped: [], total: 0 } as InformeReemplazo,
     config: {} as Record<string, string>,
+    ackBake: { kind: 'started', id: 1 } as BuildAck,
+    figuras: { modo: 'project', dir: 'figuras-cache', sello: '6D06AB', actuales: 3, viejas: 0, sinSello: 0, bytes: 0, bytesViejos: 0, figlist: null, figuras: [], pendientes: 0, fallidas: 0, necesitaCocer: false, cocinando: null, errores: [] } as EstadoFiguras,
+    limpieza: { archivos: [], bytes: 0, figuras: 0 } as Limpieza,
+    errorLimpieza: null as string | null,
     inverse: null as SyncInverse | null,
   };
   const vista = (o: Partial<ProjectInfo> = {}) => infoDe({ ...proyecto, state: { ...estado }, ...o });
@@ -163,6 +169,23 @@ function falso(archivos: Record<string, Partial<Archivo> & { text: string }>, pr
       return control.forward;
     },
     getSymbols: async () => control.simbolos,
+    figuresStatus: async () => {
+      llamadas.push('figStatus');
+      return control.figuras;
+    },
+    figuresBake: async () => {
+      llamadas.push('figBake');
+      return control.ackBake;
+    },
+    figuresCleanPreview: async () => {
+      llamadas.push('figVista');
+      if (control.errorLimpieza) throw new BackendError('other', control.errorLimpieza);
+      return control.limpieza;
+    },
+    figuresClean: async () => {
+      llamadas.push('figLimpiar');
+      return control.limpieza;
+    },
     searchProject: async (o, r) => {
       llamadas.push(`buscar ${o.query}${r !== undefined ? ` -> ${r}` : ''}`);
       return control.buscar ? control.buscar() : control.busqueda;
@@ -223,6 +246,9 @@ beforeEach(() => {
     panelInferior: 'log',
     irA: null,
     simbolos: null,
+    figuras: null,
+    figProgreso: null,
+    figPendiente: false,
     quick: null,
     historial: [],
     histIdx: -1,
@@ -1277,5 +1303,118 @@ describe('navegación y búsqueda (F5)', () => {
     await st().recargarPestana('a.tex');
     expect(textoDe('a.tex')).toBe('Mirar \\ref{sec:x} aquí\n');
     expect(tab('a.tex').epoch).toBe(1);
+  });
+});
+
+describe('cache de figuras (F6)', () => {
+  const evento = (e: Record<string, unknown>) => st().manejarEventoBuild(e as unknown as BuildEvent);
+
+  it('cocinar pide la cocción: si arranca marca que está listando y si queda esperando lo dice', async () => {
+    const f = falso({});
+    await st().cocinarFiguras();
+    expect(f.llamadas).toContain('figBake');
+    expect(st().figProgreso).toMatchObject({ listando: true });
+    f.control.ackBake = { kind: 'queued' };
+    useApp.setState({ figProgreso: null });
+    await st().cocinarFiguras();
+    expect(st().figPendiente).toBe(true);
+    expect(st().figProgreso).toBeNull();
+  });
+
+  it('los eventos recorren listando, cocinando y terminado, y al terminar se vuelve a pedir el estado', async () => {
+    const f = falso({});
+    evento({ type: 'bakelisting', id: 1, fase: 'todo' });
+    expect(st().figProgreso).toEqual({ fase: 'todo', hechas: 0, total: 0, listando: true });
+    evento({ type: 'bakestarted', id: 1, fase: 'todo', total: 4, listed: 9, listing_ms: 800 });
+    expect(st().figProgreso).toMatchObject({ total: 4, listando: false });
+    evento({ type: 'bakeprogress', id: 1, done: 3, total: 4, name: 'figuras-cache/A-a-2', ok: true });
+    expect(st().figProgreso).toMatchObject({ hechas: 3, total: 4 });
+    f.llamadas.length = 0;
+    evento({ type: 'bakefinished', id: 1, ok: true, cancelled: false, ceded: false, cooked: 4, failed: 0, remaining: 0, ms: 5000, error: null });
+    expect(st().figProgreso).toBeNull();
+    await vi.waitFor(() => expect(f.llamadas).toContain('figStatus'));
+    expect(st().notice).toBeNull();
+  });
+
+  it('si alguna figura no salió se avisa y se muestra el panel Figuras con su error', () => {
+    falso({});
+    evento({ type: 'bakefinished', id: 1, ok: false, cancelled: false, ceded: false, cooked: 3, failed: 2, remaining: 0, ms: 5000, error: null });
+    expect(st().notice).toMatchObject({ nivel: 'error' });
+    expect(st().notice?.texto).toMatch(/2 figuras no salieron/);
+    expect(st().panelIzq).toBe('figuras');
+  });
+
+  it('una cocción que no pudo ni empezar da su error', () => {
+    falso({});
+    evento({ type: 'bakefinished', id: 1, ok: false, cancelled: false, ceded: false, cooked: 0, failed: 0, remaining: 0, ms: 10, error: 'no compila hasta el listado' });
+    expect(st().notice?.texto).toContain('no compila hasta el listado');
+  });
+
+  it('cancelar la cocción que esperaba un build lo saca de "compilando"; si el build ya empezó, no lo toca', () => {
+    falso({});
+    useApp.setState({ build: { ...BUILD_INICIAL, status: 'running' } });
+    evento({ type: 'bakefinished', id: 1, ok: false, cancelled: true, ceded: false, cooked: 1, failed: 0, remaining: 3, ms: 10, error: null });
+    expect(st().build.status).toBe('idle');
+    useApp.setState({ build: { ...BUILD_INICIAL, status: 'running', id: 7, perfil: 'rapido' } });
+    evento({ type: 'bakefinished', id: 2, ok: false, cancelled: true, ceded: false, cooked: 0, failed: 0, remaining: 0, ms: 10, error: null });
+    expect(st().build.status).toBe('running');
+  });
+
+  it('la cocción que cede el paso a un build no mata el "compilando" del build', () => {
+    falso({});
+    useApp.setState({ build: { ...BUILD_INICIAL, status: 'running' } });
+    evento({ type: 'bakefinished', id: 1, ok: true, cancelled: false, ceded: true, cooked: 2, failed: 0, remaining: 2, ms: 10, error: null });
+    expect(st().build.status).toBe('running');
+  });
+
+  it('terminar un build vuelve a pedir el estado de las figuras', async () => {
+    const f = falso({});
+    f.llamadas.length = 0;
+    evento({ type: 'finished', id: 1, perfil: 'parcial', ok: true, code: 0, cancelled: false, ms: 1000, pdf: null, updated: false, passes: 1, truncated_aux: false, repaired: false, errors: 0, warnings: 0, badboxes: 0 });
+    await vi.waitFor(() => expect(f.llamadas).toContain('figStatus'));
+  });
+
+  it('limpiar muestra qué borraría y sólo borra si se confirma', async () => {
+    const f = falso({});
+    f.control.limpieza = { archivos: ['figuras-cache/A-a-0.pdf', 'figuras-cache/A-a-0.md5'], bytes: 3 * 1048576, figuras: 1 };
+    const p = st().limpiarFiguras();
+    await vi.waitFor(() => expect(st().dialog).not.toBeNull());
+    expect(st().dialog?.mensaje).toMatch(/2 archivos de 1 figura/);
+    expect(st().dialog?.mensaje).toMatch(/3\.0 MB/);
+    st().responderDialogo('cancelar');
+    await p;
+    expect(f.llamadas).not.toContain('figLimpiar');
+    const q = st().limpiarFiguras();
+    await vi.waitFor(() => expect(st().dialog).not.toBeNull());
+    st().responderDialogo('limpiar');
+    await q;
+    expect(f.llamadas).toContain('figLimpiar');
+    expect(st().notice?.texto).toMatch(/Se borraron 2 archivos/);
+  });
+
+  it('sin nada que limpiar no pregunta', async () => {
+    const f = falso({});
+    f.control.limpieza = { archivos: [], bytes: 0, figuras: 0 };
+    await st().limpiarFiguras();
+    expect(st().dialog).toBeNull();
+    expect(f.llamadas).not.toContain('figLimpiar');
+    expect(st().notice?.texto).toMatch(/nada que limpiar/);
+  });
+
+  it('si la limpieza se niega (no hay lista completa) el motivo llega al aviso', async () => {
+    const f = falso({});
+    f.control.errorLimpieza = 'todavía no se listaron las figuras del proyecto';
+    await st().limpiarFiguras();
+    expect(st().notice).toMatchObject({ nivel: 'error' });
+    expect(st().notice?.texto).toContain('todavía no se listaron');
+  });
+
+  it('mostrar el panel Figuras pide el estado', async () => {
+    const f = falso({});
+    f.llamadas.length = 0;
+    st().mostrarPanel('figuras');
+    await vi.waitFor(() => expect(f.llamadas).toContain('figStatus'));
+    expect(st().panelIzq).toBe('figuras');
+    expect(st().figuras?.sello).toBe('6D06AB');
   });
 });

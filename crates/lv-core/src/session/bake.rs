@@ -374,7 +374,9 @@ impl Session {
         aux::ensure_cache_dirs(root, PERFIL_COCINA, dir)?;
         let _ = &plan.root_rel;
 
+        let t_listado = std::time::Instant::now();
         let nombres = self.cocinero.listar(&plan.opciones, job, cancelado)?;
+        let listing_ms = t_listado.elapsed().as_millis() as u64;
         let (stamp, usa_sello) = {
             let d = self.lock()?;
             let f = d.config.as_ref().map(FigureCfg::de).ok_or_else(|| otro("no hay configuración"))?;
@@ -390,7 +392,7 @@ impl Session {
                 c.listando = false;
             }
         }
-        (self.sink)(BuildEvent::BakeStarted { id, fase: b.fase.nombre(), total, listed: nombres.len() as u32 });
+        (self.sink)(BuildEvent::BakeStarted { id, fase: b.fase.nombre(), total, listed: nombres.len() as u32, listing_ms });
         let _ = usa_sello;
 
         let sink = self.sink.clone();
@@ -407,6 +409,7 @@ impl Session {
         // sí: un pedido de build interrumpe, y se retoma cuando termine.
         let cede = || matches!(b.fase, FaseBake::Todo) && self.cola.build_pendiente();
         let res = self.cocinero.cocer(&plan.opciones, &pend, job, cancelado, &cede, &avance)?;
+        figures::quitar_residuos_de_subcompilacion(root, cocinero::JOB_COCINA);
         let sin_cocer: Vec<String> = res.restantes.iter().cloned().chain(res.rotas.iter().map(|f| f.nombre.clone())).collect();
         let fallidas: Vec<String> = res.rotas.iter().map(|f| f.nombre.clone()).collect();
         self.guardar_lista(&nombres, &sin_cocer, &fallidas, completa, stamp.as_deref());

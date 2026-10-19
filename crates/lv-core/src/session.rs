@@ -600,6 +600,7 @@ impl Session {
         // antes de subcompilar, así que una que falló o se cortó no puede pasar al cache compartido. Se hace también antes
         // del reintento por `.aux` truncado: el reintento vería ese `.md5` y daría la figura por buena.
         let rotas = figures::verificar(&self.root, perfil, figuras, desde, cancelled);
+        figures::quitar_residuos_de_subcompilacion(&self.root, &format!("lv-{perfil}"));
         aux::move_md5(&self.root, perfil, cache_dir);
         // Con una figura rota el PDF lleva una imagen vieja (o ninguna): sigue sospechoso, no se publica ni se siembra.
         if ok && rotas.is_empty() {

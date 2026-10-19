@@ -78,6 +78,9 @@ export const COMANDOS: Comando[] = [
     },
   },
 
+  { id: 'figuras.cocinar', titulo: 'Cocinar las figuras', categoria: 'Figuras', atajos: [], ejecutar: () => void app().cocinarFiguras() },
+  { id: 'figuras.limpiar', titulo: 'Limpiar el cache de figuras', categoria: 'Figuras', atajos: [], ejecutar: () => void app().limpiarFiguras() },
+  { id: 'panel.figuras', titulo: 'Mostrar las figuras', categoria: 'Paneles', atajos: [], ejecutar: () => app().mostrarPanel('figuras') },
   { id: 'panel.archivos', titulo: 'Mostrar los archivos', categoria: 'Paneles', atajos: [], ejecutar: () => app().mostrarPanel('archivos') },
   { id: 'panel.partes', titulo: 'Mostrar las partes', categoria: 'Paneles', atajos: [], ejecutar: () => app().mostrarPanel('partes') },
   { id: 'panel.esquema', titulo: 'Mostrar el esquema', categoria: 'Paneles', atajos: [], ejecutar: () => app().mostrarPanel('esquema') },

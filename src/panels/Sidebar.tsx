@@ -1,6 +1,7 @@
-// Panel izquierdo con pestañas: Archivos, Partes, Esquema y Buscar (10.1 del plan; Figuras llega con F6).
+// Panel izquierdo con pestañas: Archivos, Partes, Esquema, Buscar y Figuras (10.1 del plan).
 import { useApp, type PanelIzquierdo } from '../store/app';
 import { EsquemaPanel } from './EsquemaPanel';
+import { FigurasPanel } from './FigurasPanel';
 import { FileTree } from './FileTree';
 import { PartsPanel } from './PartsPanel';
 import { SearchPanel } from './SearchPanel';
@@ -10,6 +11,7 @@ const PESTANAS: { id: PanelIzquierdo; titulo: string }[] = [
   { id: 'partes', titulo: 'Partes' },
   { id: 'esquema', titulo: 'Esquema' },
   { id: 'buscar', titulo: 'Buscar' },
+  { id: 'figuras', titulo: 'Figuras' },
 ];
 
 export function Sidebar() {
@@ -25,7 +27,17 @@ export function Sidebar() {
         ))}
       </div>
       <div className="sidebar-cuerpo">
-        {panel === 'archivos' ? <FileTree /> : panel === 'partes' ? <PartsPanel /> : panel === 'esquema' ? <EsquemaPanel /> : <SearchPanel />}
+        {panel === 'archivos' ? (
+          <FileTree />
+        ) : panel === 'partes' ? (
+          <PartsPanel />
+        ) : panel === 'esquema' ? (
+          <EsquemaPanel />
+        ) : panel === 'buscar' ? (
+          <SearchPanel />
+        ) : (
+          <FigurasPanel />
+        )}
       </div>
     </div>
   );

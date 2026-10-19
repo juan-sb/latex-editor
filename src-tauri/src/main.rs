@@ -6,12 +6,13 @@
 use lv_core::build::{BuildEvent, Sink};
 use lv_core::config::{State, StatePatch};
 use lv_core::error::{Error, ErrorInfo};
+use lv_core::figcache::Limpieza;
 use lv_core::fsio::{self, FileRead, WriteOutcome};
 use lv_core::logparse::Problem;
 use lv_core::project::{self, DirEntry};
 use lv_core::search::{ReplaceReport, SearchOptions, SearchResult};
 use lv_core::symbols::Symbols;
-use lv_core::session::{BuildAck, FileInfo, ProjectView, Published, Session, SyncForward, SyncInverse};
+use lv_core::session::{BuildAck, FiguresStatus, FileInfo, ProjectView, Published, Session, SyncForward, SyncInverse};
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -233,6 +234,34 @@ async fn synctex_inverse(state: TauriState<'_, AppState>, profile: String, page:
     tauri::async_runtime::spawn_blocking(move || s.synctex_inverse(&profile, page, x, y)).await.map_err(|e| otro(&e.to_string()))?.map_err(|e| e.info())
 }
 
+/// El estado del cache de figuras: sello, cuántas hay al día, pendientes y fallidas, MB, y la lista por archivo.
+#[tauri::command]
+async fn figures_status(state: TauriState<'_, AppState>) -> Res<FiguresStatus> {
+    let s = sesion(&state)?;
+    tauri::async_runtime::spawn_blocking(move || s.figures_status()).await.map_err(|e| otro(&e.to_string()))?.map_err(|e| e.info())
+}
+
+/// Cocina las figuras del documento entero (lista y cocina lo que falte). Con otro trabajo en curso queda pendiente.
+#[tauri::command]
+async fn figures_bake(state: TauriState<'_, AppState>) -> Res<BuildAck> {
+    let s = sesion(&state)?;
+    tauri::async_runtime::spawn_blocking(move || s.request_bake()).await.map_err(|e| otro(&e.to_string()))?.map_err(|e| e.info())
+}
+
+/// Lo que borraría la limpieza del cache (archivos y MB), sin borrar nada.
+#[tauri::command]
+async fn figures_clean_preview(state: TauriState<'_, AppState>) -> Res<Limpieza> {
+    let s = sesion(&state)?;
+    tauri::async_runtime::spawn_blocking(move || s.figures_clean_preview()).await.map_err(|e| otro(&e.to_string()))?.map_err(|e| e.info())
+}
+
+/// Borra lo que el último listado completo no nombra.
+#[tauri::command]
+async fn figures_clean(state: TauriState<'_, AppState>) -> Res<Limpieza> {
+    let s = sesion(&state)?;
+    tauri::async_runtime::spawn_blocking(move || s.figures_clean()).await.map_err(|e| otro(&e.to_string()))?.map_err(|e| e.info())
+}
+
 /// Etiquetas, citas, secciones, definiciones y archivos del proyecto, con el lint.
 #[tauri::command]
 async fn get_symbols(state: TauriState<'_, AppState>) -> Res<Symbols> {
@@ -326,6 +355,10 @@ fn main() {
             cancel_build,
             problems,
             get_symbols,
+            figures_status,
+            figures_bake,
+            figures_clean_preview,
+            figures_clean,
             search_project,
             replace_project,
             read_user_config,

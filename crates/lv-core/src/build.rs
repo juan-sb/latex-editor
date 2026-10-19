@@ -68,8 +68,8 @@ pub enum BuildEvent {
     BakeQueued,
     /// Arrancó una cocción: se están listando las figuras (una pasada del motor que no dibuja nada).
     BakeListing { id: u64, fase: String },
-    /// Terminó el listado: `listed` figuras en total, `total` para cocinar.
-    BakeStarted { id: u64, fase: String, total: u32, listed: u32 },
+    /// Terminó el listado (`listing_ms`): `listed` figuras en total, `total` para cocinar.
+    BakeStarted { id: u64, fase: String, total: u32, listed: u32, listing_ms: u64 },
     /// Una figura terminó (`ok`: salió bien y quedó verificada).
     BakeProgress { id: u64, done: u32, total: u32, name: String, ok: bool },
     /// La cocción terminó. `ceded`: cedió el paso a un build y queda `remaining` por cocinar; `error`: no pudo ni empezar.

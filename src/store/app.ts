@@ -10,6 +10,8 @@ import {
   type Eol,
   type FileInfo,
   type LaunchOptions,
+  type Cocinando,
+  type EstadoFiguras,
   type InformeReemplazo,
   type OpcionesBusqueda,
   type OutsideSave,
@@ -95,7 +97,7 @@ export interface Notice {
 }
 
 export type ResultadoGuardado = 'guardado' | 'sin-cambios' | 'cancelado' | 'error';
-export type PanelIzquierdo = 'archivos' | 'partes' | 'esquema' | 'buscar';
+export type PanelIzquierdo = 'archivos' | 'partes' | 'esquema' | 'buscar' | 'figuras';
 
 /** Un renglón de un selector rápido (abrir archivo, paleta, ir a sección...). */
 export interface QuickItem {
@@ -161,6 +163,12 @@ interface AppState {
   panelInferior: PanelInferior;
   /** Pedido de ir a una línea de un archivo (y, si trae `inicio` y `fin`, a seleccionar esa palabra): lo atiende el editor cuando la pestaña ya está activa. */
   irA: { rel: string; line: number; n: number; inicio?: number; fin?: number } | null;
+  /** El estado del cache de figuras (panel Figuras): se pide al abrir, al terminar un build o una cocción, y al mostrar el panel. */
+  figuras: EstadoFiguras | null;
+  /** La cocción en curso, según sus eventos (el estado de arriba sólo cambia cuando se vuelve a pedir). */
+  figProgreso: Cocinando | null;
+  /** Hay una cocción de figuras esperando a que termine otro trabajo. */
+  figPendiente: boolean;
   /** Lo que el core sabe del proyecto sin compilar (etiquetas, citas, secciones...), con el lint. */
   simbolos: Simbolos | null;
   quick: QuickState | null;
@@ -204,6 +212,10 @@ interface AppState {
   cargarProblemas(perfil: string, abrirPanel?: boolean): Promise<void>;
   setFiltro(cambios: Partial<FiltroProblemas>): void;
   irAProblema(i: number): Promise<void>;
+  cargarFiguras(): Promise<void>;
+  cocinarFiguras(): Promise<void>;
+  limpiarFiguras(): Promise<void>;
+  manejarEventoFiguras(e: BuildEvent): void;
   cargarSimbolos(): Promise<void>;
   programarSimbolos(): void;
   abrirQuick(q: QuickState): void;
@@ -238,6 +250,8 @@ interface AppState {
   cerrarAviso(): void;
 }
 
+/** Los eventos de la cocción de figuras viajan por el mismo canal que los del build. */
+const esDeFiguras = (e: BuildEvent): e is Extract<BuildEvent, { type: `bake${string}` }> => e.type.startsWith('bake');
 const nombreDe = (rel: string) => rel.split('/').pop() ?? rel;
 const mensajeDe = (e: unknown) => (e instanceof Error ? e.message : String(e));
 export const BUILD_INICIAL: BuildState = {
@@ -313,6 +327,9 @@ export const useApp = create<AppState>()((set, get) => {
     panelInferior: 'log',
     irA: null,
     simbolos: null,
+    figuras: null,
+    figProgreso: null,
+    figPendiente: false,
     quick: null,
     historial: [],
     histIdx: -1,
@@ -371,6 +388,9 @@ export const useApp = create<AppState>()((set, get) => {
         problemaIdx: -1,
         irA: null,
         simbolos: null,
+        figuras: null,
+        figProgreso: null,
+        figPendiente: false,
         quick: null,
         historial: [],
         histIdx: -1,
@@ -398,6 +418,7 @@ export const useApp = create<AppState>()((set, get) => {
       }
       // Si el archivo existe pero está roto ya se avisó (y es un aviso más importante que éste).
       void get().cargarSimbolos();
+      void get().cargarFiguras();
       if (get().project?.configSaved === false && !info.configError && get().rootFile) {
         get().avisar('Este proyecto no tiene latexviewer.json: se usa una configuración inferida. Podés guardarla desde el menú ⋯.');
       }
@@ -625,7 +646,9 @@ export const useApp = create<AppState>()((set, get) => {
     },
 
     manejarEventoBuild(e) {
-      if (e.type === 'queued') {
+      if (esDeFiguras(e)) {
+        get().manejarEventoFiguras(e);
+      } else if (e.type === 'queued') {
         set((s) => ({ build: { ...s.build, pendiente: e.perfil } }));
       } else if (e.type === 'error') {
         set((s) => ({ build: { ...s.build, pendiente: null } }));
@@ -655,9 +678,84 @@ export const useApp = create<AppState>()((set, get) => {
         // Un build cortado deja un log a medias: se conservan los problemas del anterior. Si hubo errores, el panel de
         // problemas se abre solo (5.7 del plan).
         if (!e.cancelled) void get().cargarProblemas(e.perfil, e.errors > 0);
+        // Un build puede haber cocinado figuras por su cuenta (pgf cocina de a una las que faltan) o haber descartado alguna rota.
+        void get().cargarFiguras();
         const que = status === 'ok' ? 'terminó bien' : status === 'cancelled' ? 'cancelado' : `falló (código ${e.code ?? '?'})`;
         const pasadas = e.passes > 0 ? `, ${e.passes} pasada${e.passes === 1 ? '' : 's'}` : '';
         logBuffer.append(`\n== ${que} en ${(e.ms / 1000).toFixed(1)} s${pasadas}${e.repaired ? ' (después de reparar los auxiliares)' : ''}\n`);
+      }
+    },
+
+    // --- cache de figuras (F6) ----------------------------------------------------------------------------------------------
+
+    async cargarFiguras() {
+      if (!get().project?.rootFile) return set({ figuras: null });
+      try {
+        set({ figuras: await getBackend().figuresStatus() });
+      } catch {
+        // Sin configuración o con un proyecto a medio escribir el estado de las figuras no es crítico.
+      }
+    },
+
+    async cocinarFiguras() {
+      if (!get().project) return get().avisar('Abrí una carpeta primero.');
+      try {
+        const ack = await getBackend().figuresBake();
+        if (ack.kind === 'queued') set({ figPendiente: true });
+        else set({ figProgreso: { fase: 'todo', hechas: 0, total: 0, listando: true } });
+      } catch (e) {
+        get().avisar(mensajeDe(e), 'error');
+      }
+    },
+
+    /** Muestra qué borraría la limpieza (archivos y MB), pide confirmación y la hace. Nunca limpia sin preguntar. */
+    async limpiarFiguras() {
+      let vista;
+      try {
+        vista = await getBackend().figuresCleanPreview();
+      } catch (e) {
+        return get().avisar(mensajeDe(e), 'error');
+      }
+      if (vista.archivos.length === 0) return get().avisar('No hay nada que limpiar: el cache sólo tiene figuras que el proyecto usa.');
+      const mb = (vista.bytes / 1048576).toFixed(1);
+      const r = await get().preguntar(
+        `Borrar ${vista.archivos.length} archivos de ${vista.figuras} figura${vista.figuras === 1 ? '' : 's'} que el proyecto ya no usa (${mb} MB)?`,
+        [
+          { id: 'limpiar', label: 'Limpiar', primary: true },
+          { id: 'cancelar', label: 'Cancelar' },
+        ],
+        'Son figuras de sellos anteriores (por ejemplo, antes de cambiar el estilo) o de figuras que ya no están en el documento. Si hacen falta, se vuelven a cocinar.',
+      );
+      if (r !== 'limpiar') return;
+      try {
+        const h = await getBackend().figuresClean();
+        get().avisar(`Se borraron ${h.archivos.length} archivos (${(h.bytes / 1048576).toFixed(1)} MB).`);
+      } catch (e) {
+        get().avisar(mensajeDe(e), 'error');
+      }
+      await get().cargarFiguras();
+    },
+
+    manejarEventoFiguras(e) {
+      if (e.type === 'bakequeued') {
+        set({ figPendiente: true });
+      } else if (e.type === 'bakelisting') {
+        set({ figPendiente: false, figProgreso: { fase: e.fase, hechas: 0, total: 0, listando: true } });
+      } else if (e.type === 'bakestarted') {
+        set({ figProgreso: { fase: e.fase, hechas: 0, total: e.total, listando: false } });
+      } else if (e.type === 'bakeprogress') {
+        set((s) => ({ figProgreso: { fase: s.figProgreso?.fase ?? '', hechas: e.done, total: e.total, listando: false } }));
+      } else if (e.type === 'bakefinished') {
+        set({ figProgreso: null, figPendiente: false });
+        void get().cargarFiguras();
+        if (e.error) get().avisar(`No se pudieron cocinar las figuras: ${e.error}`, 'error');
+        else if (e.failed > 0) {
+          get().avisar(`${e.failed} figura${e.failed === 1 ? '' : 's'} no salieron: están en el panel Figuras, con su error.`, 'error');
+          set({ panelIzq: 'figuras' });
+        }
+        // Un build que esperaba esta cocción y no va a correr (se canceló o no se pudo cocinar): no se queda "compilando".
+        const s = get().build;
+        if ((e.cancelled || e.error) && s.status === 'running' && s.id === null) set({ build: BUILD_INICIAL });
       }
     },
 
@@ -747,6 +845,7 @@ export const useApp = create<AppState>()((set, get) => {
     },
 
     mostrarPanel(p) {
+      if (p === 'figuras') void get().cargarFiguras();
       set({ panelIzq: p });
     },
 

@@ -28,6 +28,16 @@ pub struct FiguraRota {
     pub problemas: Vec<Problem>,
 }
 
+/// biblatex escribe `<job>.run.xml` en el directorio de trabajo cuando compila una figura: con `\tikzexternalrealjob` definido usa
+/// el nombre del job real y no el `\jobname` de la subcompilación (medido en F6 con el libro: `lv-cocina.run.xml` aparecía en la
+/// raíz del proyecto al terminar la cocción). Es un residuo sin valor, y deja la raíz sucia; se borra al terminar.
+pub fn quitar_residuos_de_subcompilacion(root: &Path, job: &str) {
+    if job.is_empty() || job.contains(['/', '\\', ':']) {
+        return;
+    }
+    let _ = fs::remove_file(root.join(format!("{job}.run.xml")));
+}
+
 /// El nombre de una figura sin el directorio del cache, para mostrarlo.
 pub fn nombre_corto(nombre: &str) -> &str {
     nombre.rsplit('/').next().unwrap_or(nombre)
@@ -258,6 +268,19 @@ mod tests {
         let log = format!("{a}\nresto de la linea\notra\r\n{a}\n");
         assert_eq!(String::from_utf8(desenvolver(log.as_bytes())).unwrap(), format!("{a}resto de la linea\notra\n{a}\n"));
         assert_eq!(String::from_utf8(desenvolver(b"corta\nlinea")).unwrap(), "corta\nlinea");
+    }
+
+    #[test]
+    fn el_residuo_de_biblatex_se_borra_de_la_raiz_y_nada_mas() {
+        let d = tempfile::tempdir().unwrap();
+        escribir(d.path(), "lv-cocina.run.xml", b"x");
+        escribir(d.path(), "otro.run.xml", b"x");
+        escribir(d.path(), "figuras-cache/lv-cocina.run.xml", b"x");
+        quitar_residuos_de_subcompilacion(d.path(), "lv-cocina");
+        assert!(!d.path().join("lv-cocina.run.xml").exists());
+        assert!(d.path().join("otro.run.xml").exists() && d.path().join("figuras-cache/lv-cocina.run.xml").exists());
+        quitar_residuos_de_subcompilacion(d.path(), "../lv-cocina");
+        quitar_residuos_de_subcompilacion(d.path(), "");
     }
 
     #[test]

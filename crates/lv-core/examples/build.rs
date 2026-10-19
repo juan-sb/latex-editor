@@ -44,7 +44,7 @@ fn main() {
         BuildEvent::Error { message } => eprintln!("== error: {message}"),
         BuildEvent::BakeQueued => eprintln!("== cocción de figuras en cola"),
         BuildEvent::BakeListing { fase, .. } => eprintln!("== listando las figuras ({fase})"),
-        BuildEvent::BakeStarted { fase, total, listed, .. } => eprintln!("== cocinando ({fase}): {total} de {listed}"),
+        BuildEvent::BakeStarted { fase, total, listed, listing_ms, .. } => eprintln!("== cocinando ({fase}): {total} de {listed} (listado en {:.1} s)", listing_ms as f64 / 1000.0),
         BuildEvent::BakeProgress { done, total, name, ok, .. } => eprintln!("   {done}/{total} {name}{}", if ok { "" } else { "  FALLÓ" }),
         fin @ (BuildEvent::Finished { .. } | BuildEvent::BakeFinished { .. }) => {
             let _ = tx.lock().unwrap().send(fin);

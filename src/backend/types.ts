@@ -274,14 +274,86 @@ export type BuildEvent =
       warnings: number;
       badboxes: number;
     }
-  | { type: 'error'; message: string };
+  | { type: 'error'; message: string }
+  // la cocción de figuras (eventos `figures:*`)
+  | { type: 'bakequeued' }
+  | { type: 'bakelisting'; id: number; fase: string }
+  | { type: 'bakestarted'; id: number; fase: string; total: number; listed: number; listing_ms: number }
+  | { type: 'bakeprogress'; id: number; done: number; total: number; name: string; ok: boolean }
+  | {
+      type: 'bakefinished';
+      id: number;
+      ok: boolean;
+      cancelled: boolean;
+      /** Cedió el paso a un build: quedan `remaining` por cocinar y se retoman después. */
+      ceded: boolean;
+      cooked: number;
+      failed: number;
+      remaining: number;
+      ms: number;
+      error: string | null;
+    };
+
+/** Una figura del cache: `aldia`, `pendiente` (hay que cocinarla), `fallo` (su subcompilación falló) o `falta` (sin PDF). */
+export type EstadoFigura = 'aldia' | 'pendiente' | 'fallo' | 'falta';
+
+export interface FiguraInfo {
+  nombre: string;
+  slug: string | null;
+  /** El archivo que declara el slug (`\FigurasDe{slug}`), si se encontró. */
+  archivo: string | null;
+  estado: EstadoFigura;
+  bytes: number;
+}
+
+export interface ErrorFigura {
+  nombre: string;
+  mensaje: string;
+  file: string | null;
+  line: number | null;
+  /** El `.log` de la subcompilación, relativo a la raíz. */
+  log: string;
+}
+
+export interface Cocinando {
+  fase: string;
+  hechas: number;
+  total: number;
+  /** Todavía se listan las figuras (no se sabe el total). */
+  listando: boolean;
+}
+
+export interface EstadoFiguras {
+  modo: 'project' | 'app' | 'off';
+  dir: string;
+  sello: string | null;
+  actuales: number;
+  viejas: number;
+  sinSello: number;
+  bytes: number;
+  bytesViejos: number;
+  figlist: { fechaMs: number; total: number; completa: boolean; delSelloDeHoy: boolean } | null;
+  figuras: FiguraInfo[];
+  pendientes: number;
+  fallidas: number;
+  necesitaCocer: boolean;
+  cocinando: Cocinando | null;
+  errores: ErrorFigura[];
+}
+
+/** Lo que borra (o borraría) la limpieza del cache de figuras. */
+export interface Limpieza {
+  archivos: string[];
+  bytes: number;
+  figuras: number;
+}
 
 export interface LaunchOptions {
   open: string | null;
   root: string | null;
   smoke: boolean;
   /** Qué smoke de aceptación corre la interfaz con `LV_SMOKE`: el de F1, F2, F3 o F4. */
-  smokeMode: 'f1' | 'f2' | 'f3' | 'f4' | 'f5';
+  smokeMode: 'f1' | 'f2' | 'f3' | 'f4' | 'f5' | 'f6';
   smokeFile: string | null;
   /** Milisegundos que el smoke deja la interfaz abierta al terminar (para sacarle una captura). */
   smokePausaMs: number;
@@ -333,6 +405,14 @@ export interface Backend {
   synctexInverse(profile: string, page: number, x: number, y: number): Promise<SyncInverse | null>;
   /** Etiquetas, citas, secciones, definiciones y archivos del proyecto, con el lint. */
   getSymbols(): Promise<Simbolos>;
+  /** El estado del cache de figuras (panel Figuras). */
+  figuresStatus(): Promise<EstadoFiguras>;
+  /** Cocina las figuras del documento entero. Con otro trabajo en curso queda pendiente. Para cancelar: `cancelBuild`. */
+  figuresBake(): Promise<BuildAck>;
+  /** Lo que borraría la limpieza, sin borrar nada. */
+  figuresCleanPreview(): Promise<Limpieza>;
+  /** Borra lo que el último listado completo no nombra. */
+  figuresClean(): Promise<Limpieza>;
   /** Con `replacement`, cada coincidencia trae lo que quedaría (vista previa). */
   searchProject(options: OpcionesBusqueda, replacement?: string): Promise<ResultadoBusqueda>;
   /** Reemplaza en disco (conserva EOL y BOM). `files`: sólo esos; sin él, todos los que tengan coincidencias. */

@@ -4,6 +4,7 @@
 import { useEffect, useState } from 'react';
 import type { AutoCompileMode, OutsideSave } from '../backend';
 import { perfilActivo, useApp } from '../store/app';
+import { textoDeProgreso } from '../store/figuras';
 import { resumen } from '../store/problemas';
 import { Menu } from './Menu';
 
@@ -47,6 +48,7 @@ export function TopBar() {
   const publicar = useApp((s) => s.publicar);
   const guardarConfig = useApp((s) => s.guardarConfig);
   const mostrarPanel = useApp((s) => s.mostrarPanel);
+  const figProgreso = useApp((s) => s.figProgreso);
   const mostrarPanelInferior = useApp((s) => s.mostrarPanelInferior);
   const avisar = useApp((s) => s.avisar);
   const corriendo = build.status === 'running';
@@ -153,10 +155,15 @@ export function TopBar() {
               {resumen(build.errors ?? 0, build.warnings ?? 0, 0)}
             </button>
           )}
+          {figProgreso && (
+            <button className="figuras-barra" onClick={() => mostrarPanel('figuras')} title="Ver el panel Figuras">
+              {textoDeProgreso(figProgreso)}
+            </button>
+          )}
           <span className={`estado-build ${build.status}`}>
             {build.status === 'running' && (
               <>
-                Compilando «{build.perfil ?? '…'}»… <Cronometro activo />
+                {figProgreso && build.id === null ? 'Esperando las figuras…' : <>Compilando «{build.perfil ?? '…'}»…</>} <Cronometro activo />
                 {build.pendiente && <span className="pendiente" title="Se compila una vez más cuando termine"> · 1 pendiente</span>}
               </>
             )}
