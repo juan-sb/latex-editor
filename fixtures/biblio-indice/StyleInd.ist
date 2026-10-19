@@ -1,0 +1,3 @@
+% Estilo de índice mínimo, nombrado relativo a la raíz del proyecto desde el latexmkrc, como el del libro.
+preamble "\\begin{theindex}\n"
+postamble "\n\n\\end{theindex}\n"

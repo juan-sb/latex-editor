@@ -66,3 +66,53 @@ Referencia del README: ~45 s con 12 trabajos en la máquina del autor, contra ~4
 4. **Alternar parcial ↔ rápido cuesta 0 pasadas con el esquema de inspo**, porque `libro_fast` trae los capítulos por `\input` y no escribe los `.aux` de capítulo. Es el listón que tiene que igualar el aislamiento de `.aux` de S1.
 5. **El rápido se enlentece con el uso** (cambio chico: 9,1 → 9,4 → 9,8 s en tres repeticiones seguidas; el parcial queda plano en 4,7 a 4,8 s). Con tres puntos no alcanza para decir más; se vuelve a mirar en F2.
 6. **Un cambio de estilo recocina sólo lo que el build necesita.** En el parcial son las 46 figuras del capítulo de trabajo (183 s de a una); las otras 112 esperan al primer rápido o a una cocción explícita. Deshacer el cambio no recocina nada (0 figuras, 4,7 s): el cache indexado por sello funciona como dice el README.
+
+## F1: esqueleto de la app
+
+Mismas máquina y versiones que arriba. El build "completo" es el del perfil `completo` con el esquema A de S1 (driver en `.lv/drivers/`, salida en `.lv/build/completo/`), sobre una copia del libro en frío.
+
+### Build completo con el esquema A, contra la línea de base
+
+| Medición | Tiempo | Pasadas |
+|---|---|---|
+| Línea de base de inspo (`compilar.ps1 -Que completo`, limpio) | 338,5 s | 4 (~82 s cada una) |
+| Paso 0: script de Node (`spikes/f1-completo-a/run.mjs`), en frío | 346,8 s | 4 |
+| `lv-core` por el ejemplo de consola (`--example build`), en frío | 340,6 s | |
+| App, smoke de aceptación (primera corrida), en frío | 316,8 s | |
+| App, smoke de aceptación (corrida final), en frío | 320,6 s | |
+| Paso 0: sin cambios | 0,7 s | 0 |
+| Paso 0: cambio chico en `Desnormalización.tex`, auxiliares tibios | 87,1 s | 1 |
+
+El esquema A no cambia el tiempo del completo: las cuatro corridas en frío dan entre 317 y 347 s contra 338,5 s de la línea de base (la variación entre corridas es de ese orden). Con el cambio chico, una pasada del completo (87 s) es lo que ya costaba una pasada en inspo (~82 s).
+
+El resultado también es el mismo: 194 páginas, 0 referencias sin resolver, índice y bibliografía generados, `.aux` de los 8 capítulos en `.lv/build/completo/Secciones/` y ninguno suelto en la raíz del proyecto, y un PDF de 4.134.501 bytes igual al de la línea de base.
+
+### Operaciones de la app sobre el libro
+
+Medidas por el smoke de aceptación dentro de la app real (`scripts/aceptacion-f1.ps1 -Proyecto libro-tc`), con `Secciones/Desnormalización.tex` (201 KB, 3966 líneas).
+
+| Operación | Tiempo |
+|---|---|
+| Abrir el archivo en una pestaña (leer, decodificar, armar el estado de CodeMirror) | 42 a 51 ms |
+| Editar, guardar con escritura atómica y comparar los bytes de disco | 33 a 36 ms |
+| Guardado sin cambios (el core no escribe; incluye 50 ms de espera del test) | 71 a 81 ms |
+| Cargar el PDF de 194 páginas y pintar las páginas visibles | 0,2 s |
+| Buscar un texto en las 194 páginas (`getTextContent` de todas) | 0,52 a 0,53 s |
+| Zoom más, zoom menos ×2, ajustar al ancho, ir a la página 3, siguiente, anterior y esperar el pintado | 0,22 s |
+| Arranque de la interfaz hasta tener el proyecto abierto | 442 ms con el libro; 158 a 162 ms con un fixture chico |
+| Memoria del árbol de procesos (WebView2 incluido) con el PDF de 194 páginas cargado | 505 MB (447 MB con un PDF de una página) |
+
+La app vacía ocupaba 327 a 344 MB en S3, así que el PDF del libro suma unos 160 MB. Es una sola medición por caso, tomada con la interfaz quieta al terminar el smoke: no se midió el uso con varios builds seguidos (eso es F2, junto con el swap del visor).
+
+### Pruebas
+
+| | Cantidad | Qué cubren |
+|---|---|---|
+| `cargo test -p lv-core` | 39 | EOL y BOM (12 casos de bytes), rutas maliciosas, versión y conflicto, escritura atómica con el archivo abierto por otro, proyecto, y el runner del build con un latexmk falso (bytes inválidos, inundación de stderr, cancelar mata el árbol, ocupado, ok y no ok) |
+| `cargo test -p lv-core --features tex` | +4 | build completo con TeX real de fixtures en una carpeta con espacios y `ñ`, `\include` en subcarpetas con tildes, índice con `-s StyleInd.ist` y bibliografía (regresión de `INDEXSTYLE`), build sin cambios |
+| `npx vitest run` | 32 | store (abrir, editar, guardar mientras se escribe, conflicto, EOL mezclados, cerrar, compilar, eventos del build, cierre de la ventana) y buffer del log |
+| Smoke dentro de la app | 3 proyectos | `libro-tc` (LF), `libro-include` (CRLF, rutas con tildes), `articulo-simple`: bytes exactos al guardar y al revertir, F5/Ctrl+R/Ctrl+P frenados, Ctrl+S por evento real, build, PDF visible, marcador en el texto del PDF, zoom y navegación |
+
+### Hallazgo del paso 0
+
+El completo con el esquema A tal como lo dejó S1 **falló**: latexmk corre makeindex desde el directorio de salida y el `$makeindex = 'makeindex -s StyleInd.ist ...'` del libro nombra su estilo relativo a la raíz ("Index style file StyleInd.ist not found", código 12, 532 referencias sin resolver, sin índice ni bibliografía). S1 no lo vio porque ni el parcial ni el rápido llevan índice. Se corrige con `INDEXSTYLE` apuntando a la raíz en `.lv/latexmkrc`; se probaron dos correcciones en `fixtures/biblio-indice` (`INDEXSTYLE`, y reescribir el `-s` del `$makeindex` a ruta absoluta) y las dos funcionan; se eligió la primera porque también cubre estilos en subcarpetas y no toca el `$makeindex` del usuario. Con la corrección, el resultado de la tabla de arriba. Ver `docs/spikes/S1.md` y 5.1 del plan.

@@ -1,0 +1,9 @@
+# Workspace de la app. Los spikes de F0 (spikes/*) tienen su propio Cargo.toml y su propio Cargo.lock: se excluyen
+# a propósito, o cargo los toma por miembros y falla con "current package believes it's in a workspace".
+[workspace]
+resolver = "2"
+members = ["crates/lv-core", "src-tauri"]
+exclude = ["spikes/s2-synctex", "spikes/s3-pdfjs/src-tauri"]
+
+[profile.release]
+debug = false

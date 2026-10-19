@@ -1,0 +1,19 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "LaTeX Viewer",
+  "version": "0.1.0",
+  "identifier": "ar.com.chyps.latexviewer",
+  "build": {
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../dist",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "windows": [
+      { "label": "main", "title": "LaTeX Viewer", "width": 1400, "height": 900, "dragDropEnabled": false }
+    ],
+    "security": { "csp": null }
+  },
+  "bundle": { "active": false }
+}

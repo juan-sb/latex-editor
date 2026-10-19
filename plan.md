@@ -57,7 +57,7 @@ Decisiones **[decidido]**:
 | 18 | Saber qué se está compilando | Reescribir el nombre de la receta en `settings.json` | Barra superior siempre visible con perfil y partes |
 | 19 | Opciones de esta máquina (qué compila Ctrl+S, pie de página) fuera de git | `opciones.tex` no versionado | `.lv/state.json` + variables del proyecto que el driver inyecta como macros (sec. 4.1) |
 | 20 | Iterar sobre una sola figura | `\BancoDePruebas`, `Herramientas/preview/*.tex` | Vista previa de fragmento (sec. 8.2) |
-| 21 | Los `.tex` son UTF-8 sin BOM con CRLF; un BOM en un archivo que entra por `\input` se cuela como carácter | Convención + `UTF8SinBOM` en los scripts | El editor preserva EOL y BOM de cada archivo; todo lo que genera la app es UTF-8 sin BOM |
+| 21 | Los `.tex` son UTF-8 sin BOM; un BOM en un archivo que entra por `\input` se cuela como carácter. El `CLAUDE.md` del libro dice que son CRLF, pero **los 50 archivos de texto del snapshot de inspo son LF puro** (medido en F1; 8 sin salto final) | Convención + `UTF8SinBOM` en los scripts | El editor preserva el EOL y el BOM que tenga cada archivo, byte a byte; todo lo que genera la app es UTF-8 sin BOM |
 | 22 | Cada párrafo es una línea larga | Convención | Soft wrap por defecto; sync por palabra |
 | 23 | Overfull `\hbox` | `compilar.ps1` los cuenta | Panel de problemas, con salto a la línea |
 
@@ -120,7 +120,7 @@ latex-viewer-2/
 
 ### 3.4 API core ↔ UI (borrador, ajustar al implementar)
 
-Comandos: `open_project(path)`, `get_index()`, `read_file(rel)` → `{text, eol, bom}`, `write_file(rel, text)` (restaura EOL y BOM), `set_selection(parts[])`, `set_variable(name, value)`, `build(profile)`, `cancel_build()`, `synctex_forward(rel, line, col)`, `synctex_inverse(profile, page, x, y)`, `search(query, opts)`, `replace(...)`, `bake_figures()`, `clean_figure_cache()`, `export_parts(parts[] | "all")`, `preview_fragment(rel, from, to)`, `doctor()`.
+Comandos: `open_project(path)`, `get_index()`, `read_file(rel)` → `{text (normalizado a \n), eol, bom, mixed, version}`, `write_file(rel, text, expected_version)` (restaura el EOL y el BOM **del archivo en disco**; `version` es el md5 del contenido; si el disco ya tiene otra, error `conflict`; no escribe si el contenido es idéntico), `set_selection(parts[])`, `set_variable(name, value)`, `build(profile)`, `cancel_build()`, `synctex_forward(rel, line, col)`, `synctex_inverse(profile, page, x, y)`, `search(query, opts)`, `replace(...)`, `bake_figures()`, `clean_figure_cache()`, `export_parts(parts[] | "all")`, `preview_fragment(rel, from, to)`, `doctor()`.
 
 Eventos: `build:queued|started|pass|log|finished`, `figures:progress`, `fs:changed`, `index:updated`.
 
@@ -137,7 +137,7 @@ Eventos: `build:queued|started|pass|log|finished`, `figures:progress`, `fs:chang
 | `.lv/state.json` | no | perfil activo, partes elegidas, valores de variables, layout |
 | settings y keybindings globales (dir de config de la app) | n/a | preferencias del usuario, atajos |
 
-Sin `latexviewer.json`, la app lo infiere al abrir (la raíz es el `.tex` con `\documentclass` y `\begin{document}`; si hay varios, pregunta) y ofrece guardarlo.
+Sin `latexviewer.json`, la app lo infiere al abrir (la raíz es el `.tex` con `\documentclass` y `\begin{document}`; si hay varios, pregunta) y ofrece guardarlo. En el libro la inferencia por sí sola no alcanza: hay 5 archivos con `\documentclass` y el `\begin{document}` está en `libro_cuerpo.tex`, que entra por `\input`. **En F1** la raíz se elige entre las candidatas (o viene de `LV_ROOT`) y se recuerda sólo durante la sesión; `latexviewer.json` es de F2.
 
 Ejemplo para el libro:
 
@@ -215,8 +215,8 @@ latexmk -pdf (o -xelatex/-lualatex) -synctex=1 -interaction=nonstopmode -file-li
 ```
 
 - `-file-line-error` deja los errores como `./archivo.tex:123: mensaje`, mucho más fácil de parsear.
-- Ancho de línea del log: `max_print_line=10000` (variable de entorno en TeX Live; en MiKTeX verificar `--max-print-line`). Sin eso el log corta a 79 columnas y rompe rutas.
-- `.lv/latexmkrc` lo genera la app y se lee **después** del `latexmkrc` del proyecto, que sigue valiendo para reglas propias (makeindex con estilo, glossaries, nomencl). Lo de la app pisa `@default_files`, `$out_dir`/`$aux_dir` y lo que haga falta, y pone `TEXINPUTS` con `.lv/drivers` (5.4). Ojo: dentro de latexmk el `PATH` queda reducido al `bin` de MiKTeX (medido con MiKTeX 26.5, ver `docs/benchmarks.md`): el rc no puede lanzar por nombre programas que no estén ahí (`powershell`, `tasklist`), y falla en silencio. Lo que haga falta fuera de TeX lo lanza la app, no el rc.
+- Ancho de línea del log: `max_print_line=10000` (variable de entorno en TeX Live; en MiKTeX la opción `-max-print-line=10000`, verificada en S4). Sin eso el log corta a 79 columnas y rompe rutas. **Se pasa con `-latexoption=-max-print-line=10000`**, no redefiniendo `$pdflatex`: eso pisaría los envoltorios del `latexmkrc` del proyecto (el del libro mide cada pasada con `pdflatex_registrado`). Verificado en F1: latexmk 4.88 lo acepta y el log llega con líneas de hasta 1176 caracteres.
+- `.lv/latexmkrc` lo genera la app y se lee **después** del `latexmkrc` del proyecto, que sigue valiendo para reglas propias (makeindex con estilo, glossaries, nomencl). Lo de la app pisa `@default_files`, `$out_dir`/`$aux_dir` y lo que haga falta, y pone `TEXINPUTS` con `.lv/drivers` (5.4) e `INDEXSTYLE` con la raíz del proyecto: **latexmk corre makeindex desde el directorio de salida**, con nombres sueltos (`makeindex -s StyleInd.ist -o "lv-completo.ind" "lv-completo.idx"`), así que un `$makeindex` del proyecto con un estilo relativo a la raíz (como el del libro) falla con "Index style file StyleInd.ist not found" y el build sale con código 12. Es el perfil `completo`, que S1 no había probado: el parcial y el rápido no llevan índice. Con `INDEXSTYLE` el completo del libro compila bien con el esquema A (F1, paso 0: 346,8 s contra 338,5 s de la línea de base, 194 páginas, 0 referencias sin resolver, biber y makeindex funcionando). Cualquier otra regla del proyecto que nombre archivos relativos a la raíz puede fallar igual: el doctor tiene que avisar. Ojo: dentro de latexmk el `PATH` queda reducido al `bin` de MiKTeX (medido con MiKTeX 26.5, ver `docs/benchmarks.md`): el rc no puede lanzar por nombre programas que no estén ahí (`powershell`, `tasklist`), y falla en silencio. Lo que haga falta fuera de TeX lo lanza la app, no el rc.
 - `-recorder` (default en latexmk) deja el `.fls`: es la lista exacta de archivos que usó cada perfil. Se usa para decidir si un guardado afecta al perfil activo.
 
 ### 5.2 Salidas
@@ -237,11 +237,12 @@ latexmk -pdf (o -xelatex/-lualatex) -synctex=1 -interaction=nonstopmode -file-li
 
 Objetivo: que alternar perfiles no cueste pasadas extra ni pueda dejar un `.aux` truncado a otro perfil, y que en el parcial las referencias a partes excluidas sigan resolviendo (con `\includeonly`, LaTeX las saca de los `.aux` de esas partes).
 
-- **Opción A (elegida):** auxiliares y PDF por perfil (`$out_dir`/`$aux_dir` de latexmk en `.lv/build/<perfil>/`), drivers en `.lv/drivers/`. Medido con el libro real en `docs/spikes/S1.md`: cumple los cuatro criterios (referencias correctas en parcial y rápido, 0 pasadas al alternar, cache de figuras compartido, SyncTeX 10/10) con los mismos tiempos que inspo. Necesita **cuatro ajustes**, sin los cuales falla:
+- **Opción A (elegida):** auxiliares y PDF por perfil (`$out_dir`/`$aux_dir` de latexmk en `.lv/build/<perfil>/`), drivers en `.lv/drivers/`. Medido con el libro real en `docs/spikes/S1.md`: cumple los cuatro criterios (referencias correctas en parcial y rápido, 0 pasadas al alternar, cache de figuras compartido, SyncTeX 10/10) con los mismos tiempos que inspo. Necesita **cinco ajustes**, sin los cuales falla (el quinto apareció en F1, al probar el perfil completo):
   1. **`TEXINPUTS` con `.lv/drivers`**, puesto desde `.lv/latexmkrc`. Sin eso la subcompilación de pgf (`\input{lv-<perfil>}` desde la raíz) no encuentra el driver y el build falla cuando hay que cocinar una figura.
   2. **Mover los `.md5` al cache compartido** después de cada build: con `-output-directory` pgf escribe el `.md5` nuevo en `.lv/build/<perfil>/figuras-cache/`, y el otro perfil, que lee el de `figuras-cache/`, recocina la misma figura (medido: 23,8 s en vez de 9,4 s).
   3. **Sembrado:** antes de un build parcial, para cada parte excluida se copia su `.aux` desde el build más reciente que lo tenga (rápido o completo) si es más nuevo que el propio, y sólo si el contenido difiere (así no se toca el mtime de lo que ya es igual y no se provocan pasadas). **No se siembra desde un build sospechoso** (falló o se canceló): propaga un `.aux` truncado. Como el rápido usa `\include` sin pisar a nadie, deja siempre `.aux` frescos de todas las partes.
   4. **Reparación de `.aux` truncado** (5.5), que cuesta un build en frío de `.aux` (36 a 39 s para el rápido).
+  5. **`INDEXSTYLE` con la raíz del proyecto**, puesto desde `.lv/latexmkrc` (ver 5.1): latexmk corre makeindex desde el directorio de salida y un `$makeindex` del proyecto con un estilo relativo a la raíz no lo encuentra. Sin esto el perfil completo del libro falla con código 12.
 - **Subcarpetas de `\include`:** la app las crea antes dentro del directorio de salida. MiKTeX las crea solo (medido), TeX Live no: se sigue creando por portabilidad.
 - **Opción B (fallback, también cumple todo en S1):** todo en la raíz del proyecto como inspo, con drivers `lv-<perfil>.tex` en la raíz y jobnames distintos, y la app **intercambia** los `.aux` de partes: al terminar un build bueno los guarda en `.lv/aux/<perfil>/` y antes del siguiente build de ese perfil los restaura. No necesita `TEXINPUTS` ni mover `.md5`, pero deja los auxiliares y los drivers en la raíz.
 - **Sin probar:** TeX Live (sólo hay MiKTeX en la máquina de desarrollo). `-output-directory` se comporta distinto ahí (escribe en el directorio de salida todo `\openout` relativo). Lo cubre un test de integración con TeX real cuando haya una máquina con TeX Live; B es el fallback.
@@ -260,6 +261,8 @@ Objetivo: que alternar perfiles no cueste pasadas extra ni pueda dejar un `.aux`
 ### 5.7 Recarga del PDF
 
 - Si el build terminó bien, recargar el PDF sin parpadeo: render en segundo plano y swap, conservando página, zoom y desplazamiento dentro de la página. **[decidido por S3]** Se hacen con **dos visores superpuestos**: el nuevo se arma y se pinta detrás, recibe la misma posición, y cuando sus páginas visibles terminaron de pintarse pasa adelante y el viejo se destruye. Medido con el libro (183 y 194 páginas): 0 cuadros en blanco y 0 de deriva en más de 130 recargas, ~220 a 230 ms hasta lo visible. El `setDocument` sobre el mismo visor deja 4 a 9 cuadros en blanco por recarga y a veces pierde la posición (salto de 59 páginas): descartado (`docs/spikes/S3.md`).
+- **Alcance por fase:** el visor de F1 (`src/pdf/viewer.ts`) desarma el visor viejo por completo pero recarga con `setDocument`-equivalente (arma uno nuevo en el mismo contenedor y restaura página, zoom y desplazamiento): puede parpadear y a veces perder la posición. **El swap de dos visores es de F2**, como dice el ítem "Recarga del PDF sin parpadeo" de esa fase.
+- **`ok` de un build** es "latexmk salió con 0 **y** existe el PDF"; aparte se informa `updated` (si ese build reescribió el PDF). Un build sin cambios sale con 0 sin tocar el PDF y no es un error; una salida distinta de 0 con PDF (latexmk deja el último en `nonstopmode` con errores) tampoco es ok. El visor sólo se recarga con un build ok y actualizado (o si todavía no mostraba ningún PDF).
 - **El visor viejo se desarma por completo, y eso lleva test:** `abortSignal` en `PDFViewer` (abortada al destruirlo), `viewer.cleanup()`, canvas a tamaño cero, `await loadingTask.destroy()` y `await doc.destroy()`. Sin eso la memoria crece ~33 MB por recarga sin estabilizarse (1785 MB a las 40 recargas del rápido); con eso queda en ~0,7 GB. Criterio de aceptación: memoria estable a 40 recargas seguidas.
 - Si falló o no hay PDF nuevo, queda el último bueno, con un borde o cartel de "desactualizado" y el panel de problemas abierto.
 - Opción "detenerse en el primer error" (`-halt-on-error`), apagada por defecto.
@@ -409,7 +412,7 @@ Para iterar sobre una figura, una ecuación o una sección sin compilar la parte
 - Autocompletado: comandos (base + los definidos en el proyecto), entornos (`\begin{` cierra solo con `\end{}`), `\ref{`/`\eqref{`/`\cref{` con los labels y una línea de contexto, `\cite{`/`\parencite{` con autor y título, rutas en `\input`/`\include`/`\includegraphics`.
 - Ctrl+clic / F12: de `\ref` al `\label`, de `\cite` a la entrada del `.bib`, de `\input` al archivo, de `\includegraphics` a la imagen (vista previa al pasar el mouse).
 - Lint liviano sin compilar: `\begin`/`\end` desbalanceados, labels duplicados, `\ref` a labels inexistentes.
-- Guardado: preserva EOL (CRLF/LF) y BOM tal como estaban en el archivo.
+- Guardado: preserva EOL (CRLF/LF/CR) y BOM tal como estaban en el archivo, byte a byte para lo que el usuario no tocó. Un archivo con **EOL mezclados** (o un CR suelto dentro de un CRLF) no se puede guardar "como estaba" sin conservar el EOL de cada línea, y el editor sólo conoce el texto normalizado: se abre en **sólo lectura** con un aviso, y recién si el usuario acepta ("Editar y normalizar") se guarda con el EOL dominante. Los archivos que no son UTF-8 (UTF-16, binarios, UTF-8 inválido) no se abren como texto.
 
 ### 10.3 Atajos
 
@@ -490,11 +493,13 @@ Cada fase termina con: tests verdes, benchmarks anotados en `docs/benchmarks.md`
 
 ### F1. Esqueleto
 
-- [ ] App Tauri que abre una carpeta, árbol de archivos, editor con pestañas, guardado con EOL/BOM preservados.
-- [ ] Visor PDF.js con zoom y navegación.
-- [ ] Un build "completo" con latexmk, log crudo en el panel inferior.
+- [x] App Tauri que abre una carpeta, árbol de archivos, editor con pestañas, guardado con EOL/BOM preservados (`lv-core::fsio`: 12 casos de bytes, escritura atómica, conflicto de versión; archivos con EOL mezclados en sólo lectura).
+- [x] Visor PDF.js con zoom y navegación (`src/pdf/viewer.ts`, con el desarmado completo de S3; el swap sin parpadeo es de F2).
+- [x] Un build "completo" con latexmk, log crudo en el panel inferior (`lv-core::build`, esquema A de S1 más `INDEXSTYLE`; 320 a 347 s para el libro, igual que la línea de base).
 
-Aceptación: abrir `fixtures/libro-tc`, editar un capítulo, guardar sin alterar CRLF ni agregar BOM (verificado por bytes), compilar el completo y verlo.
+Aceptación: abrir `fixtures/libro-tc`, editar un capítulo, guardar sin alterar el EOL ni agregar BOM (verificado por bytes), compilar el completo y verlo.
+
+> **Ajuste de la aceptación (F1).** Decía "sin alterar CRLF", pero el libro de este snapshot es LF puro, sin BOM (los 50 archivos de texto; 8 sin salto final), así que probar CRLF sólo con `libro-tc` no probaría nada. La aceptación es: **preservar el EOL y el BOM que tenga el archivo en disco**, verificado por bytes sobre `libro-tc` (LF), sobre `fixtures/libro-include` (CRLF a propósito) y sobre casos sintéticos (BOM, mezcla, CR suelto, sin salto final, UTF-8 inválido, UTF-16). `scripts/aceptacion-f1.ps1 -Proyecto libro-tc|libro-include` lo corre dentro de la app real.
 
 ### F2. Motor de compilación y perfiles
 

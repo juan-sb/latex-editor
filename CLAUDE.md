@@ -9,7 +9,7 @@ El caso de prueba y la vara de rendimiento es el libro de `inspo/Proyecto`. Wind
 - Identificadores en inglés; comentarios, docs y textos de la UI en español.
 - Todo archivo que genere la app: UTF-8 sin BOM. **Nunca escribir LaTeX a través del shell** (los backslashes se rompen: un `printf '\begin'` mete un backspace). Siempre por código (`fs.writeFileSync`, Rust) o por Edit/Write.
 - Excepción: los `.ps1` de este repo llevan BOM UTF-8. Windows PowerShell 5.1 (el único que hay acá) lee como ANSI un script sin BOM y rompe los acentos de los mensajes; los scripts de inspo hacen lo mismo. Después de crear o editar un `.ps1` con Write/Edit hay que reponer el BOM (`scripts/bom-ps1.ps1`).
-- Los `.tex` del libro son UTF-8 sin BOM y CRLF; el editor y los generadores preservan EOL y BOM de cada archivo.
+- El editor y los generadores preservan el EOL y el BOM que tenga cada archivo, byte a byte. No se asume CRLF: el libro de este snapshot es LF puro y sin BOM (8 archivos sin salto final), aunque el `CLAUDE.md` del libro diga CRLF. El CRLF se prueba con `fixtures/libro-include` (que `.gitattributes` guarda sin conversión) y con casos sintéticos.
 - Los comentarios explican el porqué cuando la solución no es la obvia, como hace el libro: "se probó X y pasaba Y". Es lo que evita que alguien la deshaga.
 - Toda optimización se justifica con una medición en `docs/benchmarks.md` (antes y después, misma máquina).
 - Rutas del protocolo y del estado: siempre relativas a la raíz del proyecto.
@@ -33,11 +33,16 @@ Al terminar cada fase, antes de pasar a la siguiente:
 
 Si un spike o la implementación contradicen el plan, se actualiza `plan.md` y se avisa. No se resuelve en silencio.
 
-## Tests
+## Tests y comandos
 
-- Unitarios en `lv-core`: grafo, drivers, parser de log, parser de SyncTeX, sello, figlist.
-- Unitarios de frontend con Vitest: comandos de formato, normalización de texto para el sync.
-- Integración con TeX real, aparte: `cargo test --features tex` (se corre local).
+- `cargo test -p lv-core`: unitarios del core (EOL y BOM, rutas, proyecto, runner del build con un latexmk falso). **Es `-p lv-core` y no `--workspace`**: `src-tauri` necesita `dist/` para compilar.
+- `cargo test -p lv-core --features tex`: integración con TeX real (latexmk, pdflatex, biber); se corre local.
+- `npm test` (Vitest) y `npm run typecheck`: el frontend. Los tests no importan `pdfjs-dist` (la lógica del visor va aparte).
+- `npx tauri build --no-bundle`: compila la app (`target\release\lv-app.exe`) y corre `npm run build` antes. `npx tauri dev` para desarrollar.
+- `cargo run -p lv-core --example build -- <carpeta> <raíz.tex>`: compila un proyecto con el perfil completo, sin interfaz.
+- `scripts/aceptacion-f1.ps1 -Proyecto libro-tc|libro-include|articulo-simple`: el smoke de aceptación dentro de la app real (`LV_SMOKE=1`).
+- `scripts/compilar-fixtures.ps1`: compila los fixtures con latexmk a secas.
+- Variables de entorno de la app: `LV_OPEN` (carpeta a abrir), `LV_ROOT` (raíz del documento), `LV_SMOKE`, `LV_SMOKE_FILE`, `LV_SMOKE_OUT`, `LV_LATEXMK` (otro ejecutable en lugar de latexmk).
 
 ## Estructura
 
@@ -45,13 +50,20 @@ Si un spike o la implementación contradicen el plan, se actualiza `plan.md` y s
 plan.md        diseño y fases
 docs/          benchmarks.md, spikes/Sx.md, decisiones
 fixtures/      proyectos chicos de prueba; libro-tc/ es la copia del libro (ignorada)
-scripts/       copiar-libro, bench, compilar-fixtures
-spikes/        código de los spikes de F0, de referencia
-crates/lv-core core en Rust
-src-tauri/     capa fina de Tauri
-src/           frontend
+scripts/       copiar-libro, bench-base, compilar-fixtures, aceptacion-f1, bom-ps1
+spikes/        código de los spikes de F0, de referencia (work/ ignorada)
+crates/lv-core core en Rust: fsio, project, build (sin Tauri)
+src-tauri/     capa fina de Tauri (comandos y eventos)
+src/           frontend: backend/ (interfaz y única implementación Tauri), store/, editor/, pdf/, panels/
 inspo/         referencia, intocable, no se versiona
 ```
+
+## Cosas del build que ya costaron un fallo
+
+- **latexmk corre makeindex y las reglas del proyecto desde el directorio de salida** (`.lv/build/<perfil>/`), con nombres sueltos. Un `$makeindex` con `-s StyleInd.ist` relativo a la raíz falla ("Index style file ... not found") salvo que `.lv/latexmkrc` defina `INDEXSTYLE` con la raíz, que es lo que hace.
+- **Dentro de latexmk el `PATH` queda reducido al `bin` de MiKTeX**: un rc no puede lanzar `powershell` ni `tasklist` por nombre.
+- `-max-print-line` va por `-latexoption=`; redefinir `$pdflatex` pisaría los envoltorios del `latexmkrc` del proyecto.
+- El log del build se emite en **fragmentos de texto**, no en líneas (pdflatex escribe `[12] [13]` sin saltos), y se lee por bloques de bytes con decodificación UTF-8 que no parte caracteres.
 
 ## Entorno de esta máquina
 

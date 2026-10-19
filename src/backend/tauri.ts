@@ -1,0 +1,60 @@
+// La única implementación de `Backend` y el único archivo que usa `invoke` y `listen`. Nada de `invoke` desparramado
+// por la interfaz (3.2 del plan).
+import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import { BackendError, type Backend, type BuildEvent, type ErrorKind, type LaunchOptions } from './types';
+
+interface ErrorInfo {
+  kind: ErrorKind;
+  message: string;
+  disk_version?: string;
+}
+
+const esErrorInfo = (e: unknown): e is ErrorInfo =>
+  typeof e === 'object' && e !== null && 'kind' in e && 'message' in e;
+
+/** Los comandos devuelven `ErrorInfo` serializado; se lo convierte en un `Error` de verdad. */
+async function llamar<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  try {
+    return await invoke<T>(cmd, args);
+  } catch (e) {
+    if (esErrorInfo(e)) throw new BackendError(e.kind, e.message, e.disk_version);
+    throw new BackendError('other', String(e));
+  }
+}
+
+export const tauriBackend: Backend = {
+  async launchOptions() {
+    const o = await llamar<{ open: string | null; root: string | null; smoke: boolean; smoke_file: string | null; smoke_pausa_ms: number }>('launch_options');
+    const l: LaunchOptions = { open: o.open, root: o.root, smoke: o.smoke, smokeFile: o.smoke_file, smokePausaMs: o.smoke_pausa_ms };
+    return l;
+  },
+  pickFolder: () => llamar('pick_folder'),
+  openProject: (path) => llamar('open_project', { path }),
+  setRootFile: (rel) => llamar('set_root_file', { rel }),
+  listDir: (rel) => llamar('list_dir', { rel }),
+  readFile: (rel) => llamar('read_file', { rel }),
+  writeFile: (rel, text, expectedVersion) => llamar('write_file', { rel, text, expectedVersion }),
+  async readPdf(rel) {
+    return new Uint8Array(await llamar<ArrayBuffer>('read_pdf', { rel }));
+  },
+  build: () => llamar('build'),
+  cancelBuild: () => llamar('cancel_build'),
+  async onBuildEvent(cb) {
+    const nombres = ['build:started', 'build:log', 'build:finished'];
+    const desuscribir = await Promise.all(nombres.map((n) => listen<BuildEvent>(n, (e) => cb(e.payload))));
+    return () => desuscribir.forEach((d) => d());
+  },
+  async onCloseRequested(permitir) {
+    return getCurrentWindow().onCloseRequested(async (evento) => {
+      if (!(await permitir())) evento.preventDefault();
+    });
+  },
+  exitApp: () => llamar('exit_app'),
+  async smokeReadBytes(rel) {
+    return new Uint8Array(await llamar<ArrayBuffer>('smoke_read_bytes', { rel }));
+  },
+  smokeMtime: (rel) => llamar('smoke_mtime', { rel }),
+  writeSmokeResult: (json) => llamar('write_smoke_result', { json }),
+};

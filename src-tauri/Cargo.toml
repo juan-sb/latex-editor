@@ -1,0 +1,19 @@
+[package]
+name = "lv-app"
+version = "0.1.0"
+edition = "2021"
+description = "LaTeX Viewer 2: capa fina de Tauri sobre lv-core"
+default-run = "lv-app"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+lv-core = { path = "../crates/lv-core" }
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]

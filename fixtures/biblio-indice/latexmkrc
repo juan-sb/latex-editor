@@ -1,0 +1,4 @@
+# Igual que el del libro: el estilo se nombra relativo a la raíz del proyecto. latexmk corre makeindex desde el
+# directorio de salida cuando se usa $out_dir, y ahí este estilo no se encuentra salvo que la app defina INDEXSTYLE
+# (F1, paso 0). Este fixture es el caso de regresión.
+$makeindex = 'makeindex -s StyleInd.ist %O -o %D %S';
