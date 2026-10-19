@@ -52,6 +52,16 @@ pub fn ensure_include_dirs(root: &Path, perfil: &str, dirs: &BTreeSet<String>) -
     Ok(())
 }
 
+/// Crea las dos carpetas del cache de figuras: `<cache>/` en la raíz (donde pgf deja los PDF) y `.lv/build/<perfil>/<cache>/`
+/// (donde deja los `.md5`). MiKTeX las crea solo; **TeX Live no**, y sin ellas el primer build que externaliza falla con
+/// `I can't write on file '<cache>/....md5'` y `Emergency stop` (revisión previa a F6, probado con TeX Live 2022).
+pub fn ensure_cache_dirs(root: &Path, perfil: &str, cache_dir: &str) -> Result<()> {
+    for d in [root.join(cache_dir), build_dir(root, perfil).join(cache_dir)] {
+        fs::create_dir_all(&d).map_err(|e| Error::Io(format!("{}: {e}", d.display())))?;
+    }
+    Ok(())
+}
+
 fn mtime(p: &Path) -> Option<SystemTime> {
     fs::metadata(p).and_then(|m| m.modified()).ok()
 }
@@ -96,6 +106,10 @@ pub fn seed(root: &Path, destino: &str, excluidas: &[String], fuentes: &[String]
 }
 
 /// Mueve los `.md5` que pgf dejó en `.lv/build/<perfil>/<cache>` al cache compartido de la raíz. Devuelve cuántos.
+///
+/// Con `rename`: es atómico (nadie ve un `.md5` a medio escribir) y mantiene el contenido y la fecha; copiar y borrar
+/// dejaba un instante con dos copias, y en Linux `fs::copy` no conserva el mtime. Si no se puede (el cache en otra unidad)
+/// cae a copiar y borrar.
 pub fn move_md5(root: &Path, perfil: &str, cache_dir: &str) -> usize {
     let origen = build_dir(root, perfil).join(cache_dir);
     let Ok(rd) = fs::read_dir(&origen) else { return 0 };
@@ -103,9 +117,9 @@ pub fn move_md5(root: &Path, perfil: &str, cache_dir: &str) -> usize {
     let mut n = 0;
     for e in rd.flatten() {
         let p = e.path();
-        if p.extension().is_some_and(|x| x == "md5") {
-            if fs::create_dir_all(&destino).is_ok() && fs::copy(&p, destino.join(e.file_name())).is_ok() {
-                let _ = fs::remove_file(&p);
+        if p.extension().is_some_and(|x| x == "md5") && fs::create_dir_all(&destino).is_ok() {
+            let a = destino.join(e.file_name());
+            if fs::rename(&p, &a).is_ok() || (fs::copy(&p, &a).is_ok() && fs::remove_file(&p).is_ok()) {
                 n += 1;
             }
         }
@@ -238,6 +252,29 @@ mod tests {
         }
         assert!(is_suspect(r, "rapido"), "limpiar no cambia el estado: lo decide el build que sigue");
         assert_eq!(clean_profile(r, "no-hay", "figuras-cache"), 0);
+    }
+
+    #[test]
+    fn el_md5_movido_conserva_contenido_y_fecha_y_no_deja_copia() {
+        let d = tempfile::tempdir().unwrap();
+        let r = d.path();
+        escribir(r, ".lv/build/rapido/figuras-cache/B-dos-1.md5", "contenido");
+        let antes = mtime(&r.join(".lv/build/rapido/figuras-cache/B-dos-1.md5")).unwrap();
+        assert_eq!(move_md5(r, "rapido", "figuras-cache"), 1);
+        assert_eq!(fs::read_to_string(r.join("figuras-cache/B-dos-1.md5")).unwrap(), "contenido");
+        assert_eq!(mtime(&r.join("figuras-cache/B-dos-1.md5")).unwrap(), antes, "rename conserva la fecha");
+        assert!(!r.join(".lv/build/rapido/figuras-cache/B-dos-1.md5").exists());
+    }
+
+    #[test]
+    fn crea_las_dos_carpetas_del_cache_aunque_ya_existan() {
+        let d = tempfile::tempdir().unwrap();
+        ensure_cache_dirs(d.path(), "rapido", "figuras-cache").unwrap();
+        assert!(d.path().join("figuras-cache").is_dir());
+        assert!(d.path().join(".lv/build/rapido/figuras-cache").is_dir());
+        ensure_cache_dirs(d.path(), "rapido", "figuras-cache").unwrap();
+        ensure_cache_dirs(d.path(), "parcial", "img/cache").unwrap();
+        assert!(d.path().join("img/cache").is_dir() && d.path().join(".lv/build/parcial/img/cache").is_dir());
     }
 
     #[test]

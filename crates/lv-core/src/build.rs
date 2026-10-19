@@ -411,6 +411,9 @@ impl Builder {
             .args(&args)
             .current_dir(root)
             .env("LV_PERFIL", &spec.perfil)
+            // TeX Live no conoce `-max-print-line` (avisa y sigue con el log cortado a 79 columnas): se lo pide por el entorno,
+            // que MiKTeX ignora y que alcanza también a los pdflatex que lanzan pgf y biber.
+            .env("max_print_line", "10000")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());

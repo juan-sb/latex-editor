@@ -560,6 +560,7 @@ impl Session {
                     aux::clean_profile(root, nombre, &plan.cache_dir);
                 }
                 aux::ensure_include_dirs(root, nombre, &plan.dirs)?;
+                aux::ensure_cache_dirs(root, nombre, &plan.cache_dir)?;
                 if let Some((excluidas, fuentes)) = &plan.seed {
                     aux::seed(root, nombre, excluidas, fuentes)?;
                 }

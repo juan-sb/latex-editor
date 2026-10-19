@@ -198,6 +198,17 @@ fn siembra_los_aux_de_las_partes_excluidas_y_el_marcador_vive_durante_el_build()
 }
 
 #[test]
+fn las_carpetas_del_cache_existen_cuando_arranca_latexmk() {
+    let d = proyecto();
+    // El latexmk falso informa si las dos carpetas (TeX Live no las crea) ya estaban al arrancar.
+    let script = "$p = $env:LV_PERFIL\n$d = \".lv/build/$p\"\nNew-Item -ItemType Directory -Force $d | Out-Null\n\"RAIZ=$(Test-Path 'figuras-cache') PERFIL=$(Test-Path \"$d/figuras-cache\")\"\nSet-Content \"$d/lv-$p.pdf\" 'x'\n";
+    let (s, r) = abrir(&d, script);
+    s.request_build(Some("rapido")).unwrap();
+    esperar_finales(&r, 1, 60);
+    assert!(r.log().contains("RAIZ=True PERFIL=True"), "{}", r.log());
+}
+
+#[test]
 fn el_completo_limpia_sus_auxiliares_antes_de_compilar() {
     let d = proyecto();
     let p = d.path();

@@ -40,6 +40,17 @@ fn finished(e: BuildEvent) -> (bool, Option<i32>, bool, Option<String>, bool) {
 }
 
 #[test]
+fn el_entorno_del_build_pide_el_log_sin_cortes_para_tex_live() {
+    let d = proyecto();
+    let b = falso(d.path(), &format!("\"max_print_line=$env:max_print_line\"\n{CREA_PDF}"));
+    let r = Recolector::nuevo();
+    b.start(d.path(), "main.tex", "completo", r.sink.clone()).unwrap();
+    let (ok, ..) = finished(r.esperar(60));
+    assert!(ok);
+    assert!(r.log().contains("max_print_line=10000"), "{}", r.log());
+}
+
+#[test]
 fn bytes_invalidos_y_sin_salto_final_no_cortan_la_salida() {
     let d = proyecto();
     let script = format!(
