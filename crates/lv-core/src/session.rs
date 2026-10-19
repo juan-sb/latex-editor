@@ -3,8 +3,9 @@
 //! Es lo que la capa de Tauri expone: la interfaz le pide "compilar el perfil X" y acá se resuelve qué lleva el driver,
 //! qué auxiliares hay que sembrar o limpiar, y qué hacer si ya hay un build corriendo.
 //!
-//! **Cola (5.6 del plan).** Un solo build activo por proyecto. Un pedido mientras corre otro queda *pendiente* y corre una
-//! sola vez cuando termine (los pedidos se coalescen: gana el último). Guardar no mata el build en curso; sólo cancelar,
+//! **Cola (5.6 del plan, y `cola.rs`).** Un solo trabajo activo por proyecto (hoy sólo builds; la cocción de figuras y, en
+//! F7, exportar y fragmentos usan la misma cola). Un pedido mientras corre otro queda *pendiente* y corre una sola vez cuando
+//! termine (los pedidos de una misma clase se coalescen: gana el último). Guardar no mata el build en curso; sólo cancelar,
 //! explícitamente, lo hace, y cancelar descarta el pendiente.
 //!
 //! **Reparación (5.5).** Si el build falla con el error de un `.aux` truncado, se borran los auxiliares del perfil y se
@@ -12,6 +13,7 @@
 
 use crate::auxiliares as aux;
 use crate::build::{render_driver_spec, BuildEvent, Builder, DriverSpec, RunSpec, Sink};
+use crate::cola::{Clase, Cola, Pedido, Trabajo};
 use crate::config::{self, comandos_por_defecto, infer_config, PartsSel, ProjectConfig, State, StatePatch};
 use crate::error::{Error, Result};
 use crate::fsio;
@@ -147,13 +149,28 @@ pub struct Session {
     sink: Sink,
     builder: Builder,
     datos: Mutex<Datos>,
-    pendiente: Mutex<Option<String>>,
+    /// El único ejecutor de la sesión: quién corre y quién espera (`cola.rs`).
+    cola: Cola<Job>,
     /// Las partes que la interfaz vio por última vez (`view`/`refresh`): `file_info` avisa cuando ya no coinciden.
     partes_vistas: Mutex<Vec<String>>,
     /// Los problemas del último build de cada perfil (`logparse`), para que la interfaz los pida sin releer el log.
     problemas: Mutex<std::collections::HashMap<String, Vec<Problem>>>,
     /// El `.synctex.gz` cargado de cada perfil, con el mtime con el que se leyó: un build nuevo lo invalida.
     synctex: Mutex<std::collections::HashMap<String, (std::time::SystemTime, Arc<Synctex>)>>,
+}
+
+/// Un trabajo de la cola. En F6 se suma `Bake` (cocción de figuras); en F7, `Export` y `Fragment`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Job {
+    Build { perfil: String },
+}
+
+impl Trabajo for Job {
+    fn clase(&self) -> Clase {
+        match self {
+            Job::Build { .. } => Clase::Build,
+        }
+    }
 }
 
 /// Todo lo que hace falta para lanzar un build, resuelto bajo el candado de los datos.
@@ -206,7 +223,7 @@ impl Session {
             sink,
             builder,
             datos: Mutex::new(Datos { root_file, config_saved: config.is_some(), config, config_error, state, index: None }),
-            pendiente: Mutex::new(None),
+            cola: Cola::new(),
             partes_vistas: Mutex::new(vec![]),
             problemas: Mutex::new(Default::default()),
             synctex: Mutex::new(Default::default()),
@@ -323,7 +340,7 @@ impl Session {
     }
 
     pub fn set_root(&self, rel: &str) -> Result<ProjectView> {
-        if self.builder.is_running() {
+        if self.cola.ocupado() {
             return Err(Error::Busy);
         }
         let ruta = fsio::resolver(&self.root, rel, false)?;
@@ -501,27 +518,36 @@ impl Session {
         })
     }
 
-    /// Pide un build del perfil (el activo si no se dice). Si ya hay uno corriendo queda pendiente.
+    /// Pide un build del perfil (el activo si no se dice). Si hay otro trabajo corriendo queda pendiente.
     pub fn request_build(self: &Arc<Self>, perfil: Option<&str>) -> Result<BuildAck> {
         let perfil = match perfil {
             Some(p) => p.to_string(),
             None => self.lock()?.state.active_profile.clone().ok_or_else(|| otro("no hay perfil activo"))?,
         };
-        match self.lanzar(&perfil, false) {
-            Ok(id) => Ok(BuildAck::Started { id }),
-            Err(Error::Busy) => {
-                *self.pendiente.lock().map_err(|_| otro("cola envenenada"))? = Some(perfil.clone());
+        match self.cola.pedir(Job::Build { perfil: perfil.clone() }) {
+            Pedido::Correr(trabajo) => match self.ejecutar(&trabajo, false) {
+                Ok(id) => Ok(BuildAck::Started { id }),
+                Err(e) => {
+                    // No arrancó: el ejecutor vuelve a estar libre (nadie pudo dejar un pendiente en el medio).
+                    self.cola.liberar();
+                    Err(e)
+                }
+            },
+            Pedido::Encolado => {
                 (self.sink)(BuildEvent::Queued { perfil });
                 Ok(BuildAck::Queued)
             }
-            Err(e) => Err(e),
+        }
+    }
+
+    /// Lanza un trabajo que la cola ya le dio al ejecutor.
+    fn ejecutar(self: &Arc<Self>, trabajo: &Job, retry: bool) -> Result<u64> {
+        match trabajo {
+            Job::Build { perfil } => self.lanzar(perfil, retry),
         }
     }
 
     fn lanzar(self: &Arc<Self>, perfil: &str, retry: bool) -> Result<u64> {
-        if self.builder.is_running() {
-            return Err(Error::Busy);
-        }
         let plan = self.plan(perfil, retry)?;
         let root = self.root.clone();
         let nombre = perfil.to_string();
@@ -583,8 +609,10 @@ impl Session {
         if let Ok(mut m) = self.problemas.lock() {
             m.insert(perfil.to_string(), encontrados);
         }
+        // El ejecutor se libera antes de avisar que terminó: quien mira `is_building` después del aviso ve la verdad.
+        let siguiente = self.cola.liberar();
         (self.sink)(ev);
-        self.correr_pendiente();
+        self.correr_siguiente(siguiente);
     }
 
     /// Los problemas del último build del perfil. Si todavía no se leyeron (la app recién abrió el proyecto), se leen del log.
@@ -595,24 +623,32 @@ impl Session {
         logparse::problems_of_profile(&self.root, perfil)
     }
 
-    fn correr_pendiente(self: &Arc<Self>) {
-        let p = self.pendiente.lock().ok().and_then(|mut g| g.take());
-        if let Some(perfil) = p {
-            if let Err(e) = self.lanzar(&perfil, false) {
-                (self.sink)(BuildEvent::Error { message: format!("no se pudo lanzar el build pendiente ({perfil}): {e}") });
+    /// Lanza el trabajo que la cola dejó como activo. Si no se puede lanzar se avisa, se libera el ejecutor y se sigue con el
+    /// que venga después: un pendiente roto no deja a los demás esperando para siempre.
+    fn correr_siguiente(self: &Arc<Self>, siguiente: Option<Job>) {
+        let mut actual = siguiente;
+        while let Some(trabajo) = actual {
+            match self.ejecutar(&trabajo, false) {
+                Ok(_) => return,
+                Err(e) => {
+                    let cual = match &trabajo {
+                        Job::Build { perfil } => format!("el build pendiente ({perfil})"),
+                    };
+                    (self.sink)(BuildEvent::Error { message: format!("no se pudo lanzar {cual}: {e}") });
+                    actual = self.cola.liberar();
+                }
             }
         }
     }
 
+    /// ¿Hay un trabajo corriendo (build, y desde F6 también cocción)?
     pub fn is_building(&self) -> bool {
-        self.builder.is_running()
+        self.cola.ocupado()
     }
 
-    /// Cancela el build en curso y descarta el pendiente. Devuelve si había un build corriendo.
+    /// Cancela el trabajo en curso y descarta los pendientes. Devuelve si había algo corriendo.
     pub fn cancel(&self) -> bool {
-        if let Ok(mut p) = self.pendiente.lock() {
-            p.take();
-        }
+        self.cola.descartar();
         self.builder.cancel()
     }
 
@@ -640,7 +676,7 @@ impl Session {
     /// Reemplaza en disco. Los archivos abiertos con cambios sin guardar los tiene que haber resuelto quien llama: acá se
     /// reescribe lo que hay en disco.
     pub fn replace(&self, o: &SearchOptions, reemplazo: &str, solo: Option<&[String]>) -> Result<ReplaceReport> {
-        if self.builder.is_running() {
+        if self.cola.ocupado() {
             return Err(Error::Busy);
         }
         let (ix, _) = self.indice_fresco()?;
