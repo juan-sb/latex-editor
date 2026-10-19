@@ -120,9 +120,9 @@ latex-viewer-2/
 
 ### 3.4 API core ↔ UI (borrador, ajustar al implementar)
 
-Comandos: `open_project(path)`, `get_index()`, `read_file(rel)` → `{text (normalizado a \n), eol, bom, mixed, version}`, `write_file(rel, text, expected_version)` (restaura el EOL y el BOM **del archivo en disco**; `version` es el md5 del contenido; si el disco ya tiene otra, error `conflict`; no escribe si el contenido es idéntico), `set_selection(parts[])`, `set_variable(name, value)`, `build(profile)`, `cancel_build()`, `synctex_forward(rel, line, col)`, `synctex_inverse(profile, page, x, y)`, `search(query, opts)`, `replace(...)`, `bake_figures()`, `clean_figure_cache()`, `export_parts(parts[] | "all")`, `preview_fragment(rel, from, to)`, `doctor()`.
+Comandos: `open_project(path)` → vista del proyecto (raíz, configuración, estado, partes), `get_project()` (relee el disco), `set_root_file(rel)`, `read_file(rel)` → `{text (normalizado a \n), eol, bom, mixed, version}`, `write_file(rel, text, expected_version)` (restaura el EOL y el BOM **del archivo en disco**; `version` es el md5 del contenido; si el disco ya tiene otra, error `conflict`; no escribe si el contenido es idéntico), `set_state(patch)` (perfil activo, partes elegidas, variables, modo de auto-compilación; reemplaza a `set_selection` y `set_variable`), `save_config()`, `file_info(rel)` (a qué parte pertenece un archivo y si el perfil activo lo usa), `build(profile?)` → `started | queued`, `cancel_build()`, `publish(profile)`, `synctex_forward(rel, line, col)`, `synctex_inverse(profile, page, x, y)`, `search(query, opts)`, `replace(...)`, `bake_figures()`, `clean_figure_cache()`, `export_parts(parts[] | "all")`, `preview_fragment(rel, from, to)`, `doctor()`.
 
-Eventos: `build:queued|started|pass|log|finished`, `figures:progress`, `fs:changed`, `index:updated`.
+Eventos: `build:queued|started|log|finished|error` (en F2; `pass` y los demás vienen con sus fases), `figures:progress`, `fs:changed`, `index:updated`.
 
 ---
 
@@ -137,7 +137,7 @@ Eventos: `build:queued|started|pass|log|finished`, `figures:progress`, `fs:chang
 | `.lv/state.json` | no | perfil activo, partes elegidas, valores de variables, layout |
 | settings y keybindings globales (dir de config de la app) | n/a | preferencias del usuario, atajos |
 
-Sin `latexviewer.json`, la app lo infiere al abrir (la raíz es el `.tex` con `\documentclass` y `\begin{document}`; si hay varios, pregunta) y ofrece guardarlo. En el libro la inferencia por sí sola no alcanza: hay 5 archivos con `\documentclass` y el `\begin{document}` está en `libro_cuerpo.tex`, que entra por `\input`. **En F1** la raíz se elige entre las candidatas (o viene de `LV_ROOT`) y se recuerda sólo durante la sesión; `latexviewer.json` es de F2.
+Sin `latexviewer.json`, la app lo infiere al abrir (la raíz es el `.tex` con `\documentclass` y `\begin{document}`; si hay varios, pregunta) y ofrece guardarlo. En el libro la inferencia por sí sola no alcanza: hay 5 archivos con `\documentclass` y el `\begin{document}` está en `libro_cuerpo.tex`, que entra por `\input`. **Desde F2** la raíz sale de `latexviewer.json`; si el usuario la cambia en esta máquina queda en `.lv/state.json` (`root`) y esa pisa a la del archivo. Sin `latexviewer.json` la app infiere la configuración (con partes: parcial, rápido y completo; sin partes: sólo completo) y **ofrece guardarla** desde el menú ⋯: nunca escribe un archivo del proyecto por su cuenta. Un `latexviewer.json` que no se puede leer se avisa y no se pisa: se trabaja con la configuración inferida. Es JSON estricto (sin comentarios: el ejemplo de abajo está comentado sólo para explicarlo), y los campos que esta versión no conoce (`figureCache`, `export`, los de fases futuras) se conservan al guardar. `.lv/` se agrega al `.gitignore` del proyecto sólo si ya es un repositorio.
 
 Ejemplo para el libro:
 
@@ -229,7 +229,7 @@ latexmk -pdf (o -xelatex/-lualatex) -synctex=1 -interaction=nonstopmode -file-li
 
 - El perfil activo se elige en la barra superior. Lo que compila Ctrl+S es siempre el perfil activo.
 - **Partes elegidas:** checkboxes en el panel Partes y en el esquema. "Sólo esta" con un clic. Atajo para "compilar la parte del archivo abierto" (opción 1 del menú de inspo).
-- **Guardar un archivo que el perfil activo no usa** (no está en su `.fls` ni en su grafo): por defecto aviso no intrusivo con botón "Compilar esta parte". Configurable: avisar | cambiar la selección a esa parte | compilar igual.
+- **Guardar un archivo que el perfil activo no usa**: por defecto aviso no intrusivo con botón "Compilar esta parte". Configurable: avisar | cambiar la selección a esa parte | compilar igual. **Se decide con el grafo de inclusión** (`file_info`: el archivo es de una parte que la selección no incluye, y los archivos globales como el preámbulo afectan siempre; uno que no está en el grafo no dispara nada), **no con el `.fls`**: `\include` abre los `.tex` de las partes excluidas para comprobar que existen, así que el `.fls` de un parcial los lista aunque no se compilen (F2). El `.fls` queda para el historial de F8.
 - **Modo de auto-compilación:** al guardar (default) | al dejar de tipear N ms (con autoguardado) | manual.
 - Opción por perfil `draftImages`: `\PassOptionsToPackage{draft}{graphicx}` en el driver, para proyectos con muchas imágenes.
 
@@ -255,13 +255,14 @@ Objetivo: que alternar perfiles no cueste pasadas extra ni pueda dejar un `.aux`
 
 - Un solo build activo por proyecto (los perfiles comparten el cache de figuras).
 - Guardar durante un build lo marca **pendiente**; al terminar, corre una sola vez más (se coalescen los guardados). No se mata un build por un guardado.
-- Cancelar es explícito (botón). Mata el árbol de procesos con Job Objects y marca los `.aux` del perfil como sospechosos (5.5): no se reutilizan ni se siembran desde ahí (5.4, S1) hasta que un build del perfil termine bien.
+- Cancelar es explícito (botón). Mata el árbol de procesos con Job Objects y marca los `.aux` del perfil como sospechosos (5.5): no se reutilizan ni se siembran desde ahí (5.4, S1) hasta que un build del perfil termine bien. **Implementado en F2:** `procs::Job` (con `KILL_ON_JOB_CLOSE`: si la app muere sin cancelar, el árbol muere con ella) más `taskkill /T` de respaldo, porque un hijo que latexmk lance antes de que el proceso entre en el Job podría escaparse. Cancelar también **descarta el pendiente**.
+- **Cómo queda la cola (F2).** `Session::request_build` devuelve `started` o `queued`; los pedidos pendientes se coalescen (gana el último perfil) y el pendiente se vuelve a planear al arrancar (la selección o las variables pudieron cambiar). El marcador de sospechoso es el archivo `.lv/build/<perfil>/.sospechoso`: se crea **antes** de compilar y se borra sólo cuando el build sale ok, así sobrevive a un cierre brusco de la app. Limpiar y sembrar los auxiliares ocurre dentro del lanzamiento del build, después de comprobar que no hay otro corriendo (hacerlo antes borraría los `.aux` de un build en curso).
 - Al abrir un proyecto: si hay `pdflatex`/`latexmk` huérfanos del proyecto, avisar y ofrecer matarlos.
 
 ### 5.7 Recarga del PDF
 
 - Si el build terminó bien, recargar el PDF sin parpadeo: render en segundo plano y swap, conservando página, zoom y desplazamiento dentro de la página. **[decidido por S3]** Se hacen con **dos visores superpuestos**: el nuevo se arma y se pinta detrás, recibe la misma posición, y cuando sus páginas visibles terminaron de pintarse pasa adelante y el viejo se destruye. Medido con el libro (183 y 194 páginas): 0 cuadros en blanco y 0 de deriva en más de 130 recargas, ~220 a 230 ms hasta lo visible. El `setDocument` sobre el mismo visor deja 4 a 9 cuadros en blanco por recarga y a veces pierde la posición (salto de 59 páginas): descartado (`docs/spikes/S3.md`).
-- **Alcance por fase:** el visor de F1 (`src/pdf/viewer.ts`) desarma el visor viejo por completo pero recarga con `setDocument`-equivalente (arma uno nuevo en el mismo contenedor y restaura página, zoom y desplazamiento): puede parpadear y a veces perder la posición. **El swap de dos visores es de F2**, como dice el ítem "Recarga del PDF sin parpadeo" de esa fase.
+- **Alcance por fase:** el visor de F1 desarmaba el viejo por completo pero recargaba en el mismo contenedor (podía parpadear y perder la posición). **Desde F2** `src/pdf/viewer.ts` hace el swap de dos visores de S3: el nuevo se arma detrás (`z-index` 1), recibe página, escala y desplazamiento dentro de la página, y pasa al frente (`z-index` 2) cuando lo visible terminó de pintarse (con un tope de 20 s: si no termina, cambia igual); después se desarma el viejo. El smoke de F2 lo mide como S3 (`cargarMedido`): cuadros en blanco, deriva en páginas y px, y que quede un solo visor armado.
 - **`ok` de un build** es "latexmk salió con 0 **y** existe el PDF"; aparte se informa `updated` (si ese build reescribió el PDF). Un build sin cambios sale con 0 sin tocar el PDF y no es un error; una salida distinta de 0 con PDF (latexmk deja el último en `nonstopmode` con errores) tampoco es ok. El visor sólo se recarga con un build ok y actualizado (o si todavía no mostraba ningún PDF).
 - **El visor viejo se desarma por completo, y eso lleva test:** `abortSignal` en `PDFViewer` (abortada al destruirlo), `viewer.cleanup()`, canvas a tamaño cero, `await loadingTask.destroy()` y `await doc.destroy()`. Sin eso la memoria crece ~33 MB por recarga sin estabilizarse (1785 MB a las 40 recargas del rápido); con eso queda en ~0,7 GB. Criterio de aceptación: memoria estable a 40 recargas seguidas.
 - Si falló o no hay PDF nuevo, queda el último bueno, con un borde o cartel de "desactualizado" y el panel de problemas abierto.
@@ -503,18 +504,20 @@ Aceptación: abrir `fixtures/libro-tc`, editar un capítulo, guardar sin alterar
 
 ### F2. Motor de compilación y perfiles
 
-- [ ] `latexviewer.json` (leer, inferir, guardar), `.lv/state.json`.
-- [ ] Grafo de inclusión, partes, parte de un archivo.
-- [ ] Drivers generados, perfiles, aislamiento de `.aux` según S1, sembrado.
-- [ ] Cola, coalescencia de guardados, cancelación con Job Objects, reparación de `.aux` truncado.
-- [ ] Auto-compilación (al guardar / al dejar de tipear / manual), aviso cuando el archivo guardado no está en el perfil.
-- [ ] Panel Partes con checkboxes, barra superior con perfil, partes, duración y estado.
-- [ ] Recarga del PDF sin parpadeo; último PDF bueno si falla.
-- [ ] Publicar (copia).
+- [x] `latexviewer.json` (leer, inferir, guardar), `.lv/state.json` (`lv-core::config`; los campos que no conoce se conservan; `latexviewer.json` roto se avisa y no se pisa; la configuración inferida se ofrece guardar, no se escribe sola).
+- [x] Grafo de inclusión, partes, parte de un archivo (`lv-core::graph`: el libro, 50 `.tex` y 8 partes en 8 ms).
+- [x] Drivers generados, perfiles, aislamiento de `.aux` según S1, sembrado (`lv-core::build` y `auxiliares`; flags, variables, `\includeonly` por hook, `-shell-escape` y motor por perfil, `cleanBefore`, `draftImages`).
+- [x] Cola, coalescencia de guardados, cancelación con Job Objects, reparación de `.aux` truncado (`lv-core::session` y `procs`).
+- [x] Auto-compilación (al guardar / al dejar de tipear / manual), aviso cuando el archivo guardado no está en el perfil (las tres políticas de 5.3).
+- [x] Panel Partes con checkboxes, barra superior con perfil, partes, duración y estado (más "compilar la parte del archivo abierto" con Ctrl+Mayús+Enter, menú ⋯ con variables, publicar y guardar `latexviewer.json`).
+- [x] Recarga del PDF sin parpadeo (swap de dos visores de S3: 0 cuadros en blanco y 0 de deriva en 40 recargas); último PDF bueno si falla, marcado como desactualizado.
+- [x] Publicar (copia del PDF y del `.synctex.gz` a `publish.dir`; nunca se renombra el de trabajo).
 
 Aceptación (sobre el libro, cache tibio): parcial ≤ 3,5 s de guardar a PDF visible; rápido ≤ 8 s; latexmk sin cambios ≤ 1 s y 0 pasadas; alternar parcial → rápido → parcial sin pasadas extra; referencias a capítulos excluidos resueltas en el parcial.
 
 > **Ajuste por la línea de base (F0).** En la máquina de desarrollo (Ryzen 7 3700X, MiKTeX 26.5) los scripts de inspo dan parcial **4,7 s** y rápido **9,4 s** con cache tibio (`docs/benchmarks.md`), y el esquema de S1 4,5 a 5,0 s y 8,4 a 9,6 s: 3,5 s y 8 s quedan por debajo de lo que logra inspo acá y no se alcanzan sin mejoras de F10 (formato precompilado). Los umbrales de arriba valen para la máquina del autor, donde los números de inspo son ~3 s y ~7 s. En esta máquina el criterio es **no ser más lento que inspo**: parcial ≤ 5,0 s y rápido ≤ 9,6 s de guardar a PDF. Lo demás (≤ 1 s y 0 pasadas sin cambios, alternar sin pasadas extra, referencias resueltas) no cambia y ya se cumple en S1.
+
+> **Resultado de F2 (smoke dentro de la app, `scripts/aceptacion-f2.ps1`, tres corridas iguales).** Parcial **4,93 s** de Ctrl+S a PDF visible (límite 5,0 s: está en el borde), rápido **9,25 s** (límite 9,6 s), sin cambios **0,6 s y 0 pasadas**, alternar P R P R **0 pasadas**, **0 referencias sin resolver** en el parcial, recarga del PDF **0 cuadros en blanco y 0 de deriva** en 40 recargas con la memoria plana después del primer cuarto. Detalle en `docs/benchmarks.md`.
 
 ### F3. Errores y avisos
 

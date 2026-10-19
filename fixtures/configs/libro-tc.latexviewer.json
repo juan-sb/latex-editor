@@ -1,0 +1,55 @@
+{
+  "root": "Funciones de Aproximación.tex",
+  "engine": "pdflatex",
+  "parts": {
+    "commands": [
+      "include",
+      "Capitulo"
+    ]
+  },
+  "flags": {
+    "partial": [
+      "CompilacionReducida"
+    ],
+    "externalize": [
+      "TikzExternalizar"
+    ],
+    "figureList": [
+      "TikzListaYMake"
+    ]
+  },
+  "figureCache": {
+    "mode": "project",
+    "dir": "figuras-cache",
+    "stampFiles": [
+      "estilo_figuras.tex"
+    ],
+    "onlyInFigureEnv": true,
+    "parallelJobs": "auto"
+  },
+  "profiles": {
+    "parcial": {
+      "label": "Partes elegidas",
+      "partial": true,
+      "externalize": true,
+      "parts": "selection"
+    },
+    "rapido": {
+      "label": "Libro rápido",
+      "partial": true,
+      "externalize": true,
+      "parts": "all"
+    },
+    "completo": {
+      "label": "Libro completo",
+      "cleanBefore": true,
+      "autoCompile": false
+    }
+  },
+  "publish": {
+    "dir": "../PDF",
+    "names": {
+      "completo": "Funciones de Aproximación.pdf"
+    }
+  }
+}

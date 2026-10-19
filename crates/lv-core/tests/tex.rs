@@ -100,6 +100,57 @@ fn indice_con_estilo_del_proyecto_y_bibliografia() {
     assert!(p.join(".lv/build/completo/lv-completo.bbl").is_file(), "biber generó la bibliografía");
 }
 
+/// El comportamiento de S1 con el motor de F2 y TeX de verdad: perfiles parcial y rápido sobre las mismas partes, con
+/// sembrado, sin pasadas de más al alternar y con las referencias a la parte excluida resueltas.
+#[test]
+fn la_sesion_alterna_parcial_y_rapido_sin_pasadas_extra_y_con_las_referencias_resueltas() {
+    use lv_core::config::StatePatch;
+    use lv_core::session::{BuildAck, Session};
+    let tmp = TempDir::new().unwrap();
+    let p = tmp.path().join("pr ñ oyecto");
+    copiar(&fixture("libro-include"), &p);
+    let r = Recolector::nuevo();
+    let s = Session::open(&p, r.sink.clone()).unwrap();
+    let v = s.view().unwrap();
+    assert_eq!(v.parts.len(), 3, "las tres \\include de la raíz son partes");
+    let analisis = v.parts.iter().find(|x| x.name.contains("lisis de datos")).expect("la parte del análisis").name.clone();
+    s.set_state(StatePatch { selection: Some(vec![analisis.clone()]), ..Default::default() }).unwrap();
+
+    let pasadas = |e: &BuildEvent| match e {
+        BuildEvent::Finished { ok, passes, updated, .. } => (*ok, *passes, *updated),
+        _ => unreachable!(),
+    };
+    let correr = |perfil: &str| {
+        assert!(matches!(s.request_build(Some(perfil)).unwrap(), BuildAck::Started { .. }));
+        pasadas(&r.esperar(300))
+    };
+
+    let (ok, n, _) = correr("rapido");
+    assert!(ok && n >= 2, "el rápido en frío necesita varias pasadas ({n}): {}", r.log());
+    let (ok, n, _) = correr("parcial");
+    assert!(ok, "{}", r.log());
+    assert!(n >= 1, "el parcial es otra raíz y tiene que compilar ({n})");
+    // `\includeonly` por hook: el parcial imprime menos páginas que el rápido (el `.fls` no sirve, porque `\include` abre
+    // los `.tex` excluidos para comprobar que existen).
+    let paginas = |perfil: &str| -> u32 {
+        let log = fs::read_to_string(p.join(format!(".lv/build/{perfil}/lv-{perfil}.log"))).unwrap();
+        let salida = &log[log.find("Output written on").expect("el log dice qué escribió")..];
+        let fin = salida.find(" page").expect("y cuántas páginas");
+        salida[..fin].rsplit('(').next().unwrap().trim().parse().unwrap()
+    };
+    assert!(paginas("parcial") < paginas("rapido"), "parcial {} contra rápido {}", paginas("parcial"), paginas("rapido"));
+    let ultimo = fs::read_to_string(p.join(".lv/build/parcial/lv-parcial.log")).unwrap();
+    assert!(!ultimo.contains("There were undefined references"), "el sembrado resuelve las referencias a partes excluidas");
+
+    // Alternar sin tocar nada: ninguna pasada (S1: 0 en las cuatro).
+    for perfil in ["parcial", "rapido", "parcial", "rapido"] {
+        let (ok, n, updated) = correr(perfil);
+        assert!(ok && n == 0 && !updated, "{perfil}: ok={ok} pasadas={n} actualizado={updated}");
+    }
+    assert!(p.join(".lv/build/rapido/lv-rapido.pdf").is_file() && p.join(".lv/build/parcial/lv-parcial.pdf").is_file());
+    assert!(!p.join(".lv/build/rapido/.sospechoso").exists() && !p.join(".lv/build/parcial/.sospechoso").exists());
+}
+
 #[test]
 fn un_segundo_build_sin_cambios_es_ok_y_no_reescribe_el_pdf() {
     let tmp = TempDir::new().unwrap();

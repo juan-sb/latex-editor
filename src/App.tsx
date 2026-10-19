@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { PdfPane } from './pdf/PdfPane';
 import { EditorPane } from './panels/EditorPane';
-import { FileTree } from './panels/FileTree';
+import { Sidebar } from './panels/Sidebar';
 import { LogPanel } from './panels/LogPanel';
 import { Aviso, Dialogo } from './panels/Overlays';
 import { TopBar } from './panels/TopBar';
@@ -27,6 +27,11 @@ function useAtajosGlobales() {
         e.preventDefault();
         e.stopPropagation();
         void store.compilar();
+      } else if (ctrl && !e.altKey && e.shiftKey && e.key === 'Enter') {
+        // Compilar la parte del archivo abierto (la opción 1 del menú de inspo).
+        e.preventDefault();
+        e.stopPropagation();
+        void store.compilarParteActiva();
       } else if (e.key === 'F5' || (ctrl && (k === 'r' || k === 'p'))) {
         e.preventDefault();
         e.stopPropagation();
@@ -51,7 +56,7 @@ export default function App() {
         // El smoke de aceptación sólo se carga cuando se pide: no entra en el uso normal.
         if (opts.smoke && !smokeIniciado) {
           smokeIniciado = true;
-          void import('./smoke').then((m) => m.correrSmoke(opts));
+          void (opts.smokeMode === 'f2' ? import('./smoke-f2').then((m) => m.correrSmokeF2(opts)) : import('./smoke').then((m) => m.correrSmoke(opts)));
         }
       })
       .catch((e) => avisar(`No se pudo iniciar: ${e instanceof Error ? e.message : e}`, 'error'));
@@ -64,7 +69,7 @@ export default function App() {
         <Panel defaultSize={76} minSize={25}>
           <PanelGroup direction="horizontal" autoSaveId="lv-horizontal">
             <Panel defaultSize={17} minSize={8} maxSize={40}>
-              <FileTree />
+              <Sidebar />
             </Panel>
             <PanelResizeHandle className="asa" />
             <Panel defaultSize={42} minSize={18}>

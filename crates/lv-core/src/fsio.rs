@@ -246,7 +246,7 @@ pub fn write_file(root: &Path, rel: &str, text: &str, expected_version: Option<&
 /// truncado. En Windows el rename falla mientras alguien tiene el destino abierto sin compartir borrado (pdflatex
 /// leyendo un `\input`, el antivirus, OneDrive), y guardar durante un build de 6 minutos es el caso normal: se
 /// reintenta con espera creciente antes de rendirse.
-fn escribir_atomico(destino: &Path, bytes: &[u8]) -> std::io::Result<()> {
+pub(crate) fn escribir_atomico(destino: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let n = TEMPORAL.fetch_add(1, Ordering::Relaxed);
     let temporal = destino.with_file_name(format!(".lvtmp-{}-{n}.tmp", std::process::id()));
     let limpiar = |t: &Path| {

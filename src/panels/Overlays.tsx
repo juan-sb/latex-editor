@@ -50,13 +50,25 @@ export function Aviso() {
   const cerrar = useApp((s) => s.cerrarAviso);
   useEffect(() => {
     if (!notice || notice.nivel === 'error') return;
-    const t = setTimeout(cerrar, 9000);
+    const t = setTimeout(cerrar, notice.accion ? 20000 : 9000);
     return () => clearTimeout(t);
   }, [notice, cerrar]);
   if (!notice) return null;
   return (
     <div className={`aviso ${notice.nivel}`} role="status">
       <span>{notice.texto}</span>
+      {notice.accion && (
+        <button
+          className="boton chico"
+          onClick={() => {
+            const run = notice.accion!.run;
+            cerrar();
+            run();
+          }}
+        >
+          {notice.accion.label}
+        </button>
+      )}
       <button className="icono-boton" onClick={cerrar} title="Cerrar">×</button>
     </div>
   );

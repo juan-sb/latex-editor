@@ -15,6 +15,7 @@
 
 use crate::error::{Error, Result};
 use crate::fsio;
+use crate::procs::Job;
 use serde::Serialize;
 use std::ffi::OsString;
 use std::io::Read;
@@ -34,9 +35,28 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum BuildEvent {
-    Started { id: u64, perfil: String, cmdline: String },
+    /// Hay un build en curso y este quedó pendiente: corre una sola vez cuando termine (5.6 del plan).
+    Queued { perfil: String },
+    /// `retry`: es el reintento después de reparar un `.aux` truncado (el panel no borra el log).
+    Started { id: u64, perfil: String, cmdline: String, retry: bool },
     Log { id: u64, text: String },
-    Finished { id: u64, ok: bool, code: Option<i32>, cancelled: bool, ms: u64, pdf: Option<String>, updated: bool },
+    /// `passes`: pasadas de pdflatex (o del motor) que contó latexmk. `truncated_aux`: el log trae el error de un `.aux`
+    /// cortado. `repaired`: este build es el reintento después de borrar los auxiliares.
+    Finished {
+        id: u64,
+        perfil: String,
+        ok: bool,
+        code: Option<i32>,
+        cancelled: bool,
+        ms: u64,
+        pdf: Option<String>,
+        updated: bool,
+        passes: u32,
+        truncated_aux: bool,
+        repaired: bool,
+    },
+    /// Algo que no es un build (por ejemplo, el pendiente no se pudo lanzar).
+    Error { message: String },
 }
 
 pub type Sink = Arc<dyn Fn(BuildEvent) + Send + Sync>;
@@ -61,18 +81,80 @@ pub fn pdf_rel(perfil: &str) -> String {
     format!(".lv/build/{perfil}/lv-{perfil}.pdf")
 }
 
-/// Driver ASCII del perfil: define `\lvPerfil` y `\lvParcial` y carga la raíz real del proyecto (4.2 del plan). El
-/// nombre del driver es el `\jobname`, así que va sin espacios ni tildes aunque la raíz los tenga (S4).
-pub fn render_driver(perfil: &str, root_rel: &str) -> Result<String> {
-    perfil_valido(perfil)?;
-    if let Some(c) = root_rel.chars().find(|c| PROHIBIDOS_EN_LA_RAIZ.contains(*c)) {
-        return Err(Error::InvalidPath(format!("{root_rel:?}: el carácter {c:?} rompe \\input")));
+/// Qué lleva el driver de un perfil (4.2 del plan).
+#[derive(Debug, Clone, Default)]
+pub struct DriverSpec {
+    pub perfil: String,
+    pub root_rel: String,
+    /// `\lvParcial{1}`: el perfil no compila el documento entero.
+    pub partial: bool,
+    /// Macros que se definen vacías antes de cargar la raíz (`\def\CompilacionReducida{}`).
+    pub flags: Vec<String>,
+    /// Variables del proyecto: `\def\Nombre{valor}`.
+    pub vars: Vec<(String, String)>,
+    /// Partes que entran, por `\includeonly`. `None` = no se toca.
+    pub includeonly: Option<Vec<String>>,
+    pub draft_images: bool,
+}
+
+/// Lo que va dentro de `{...}` en una macro que genera la app. En lugar de intentar escapar, se rechaza: un valor con
+/// llaves, barras o `%` rompería el driver de una forma difícil de ver.
+fn texto_seguro(t: &str, que: &str) -> Result<()> {
+    if t.is_empty() || t.contains(|c: char| matches!(c, '\\' | '{' | '}' | '%' | '#' | '^' | '~' | '$' | '&' | '\n' | '\r')) {
+        return Err(Error::Other(format!("{que} {t:?} no se puede escribir en el driver (sin \\ {{ }} % # ^ ~ $ & ni saltos de línea)")));
     }
-    let base = root_rel.strip_suffix(".tex").or_else(|| root_rel.strip_suffix(".TEX")).unwrap_or(root_rel);
-    Ok(format!(
-        "% {} (generado por LaTeX Viewer, no editar)\n\\def\\lvPerfil{{{perfil}}}\n\\def\\lvParcial{{0}}\n\\input{{\"{base}\"}}\n",
-        driver_rel(perfil)
-    ))
+    Ok(())
+}
+
+/// Driver ASCII del perfil: define `\lvPerfil` y `\lvParcial`, los flags y las variables, inyecta `\includeonly` por hook
+/// y carga la raíz real del proyecto (4.2 del plan). El nombre del driver es el `\jobname`, así que va sin espacios ni
+/// tildes aunque la raíz los tenga (S4). El orden es el de `spikes/s4-driver/gen-driver.mjs`, el que se midió.
+pub fn render_driver_spec(s: &DriverSpec) -> Result<String> {
+    let perfil = &s.perfil;
+    perfil_valido(perfil)?;
+    if let Some(c) = s.root_rel.chars().find(|c| PROHIBIDOS_EN_LA_RAIZ.contains(*c)) {
+        return Err(Error::InvalidPath(format!("{:?}: el carácter {c:?} rompe \\input", s.root_rel)));
+    }
+    let mut l = vec![
+        format!("% {} (generado por LaTeX Viewer, no editar)", driver_rel(perfil)),
+        format!("\\def\\lvPerfil{{{perfil}}}"),
+        format!("\\def\\lvParcial{{{}}}", if s.partial { 1 } else { 0 }),
+    ];
+    if s.draft_images {
+        l.push("\\PassOptionsToPackage{draft}{graphicx}".into());
+    }
+    for f in &s.flags {
+        if !crate::config::macro_valida(f) {
+            return Err(Error::Other(format!("{f:?} no sirve como nombre de macro")));
+        }
+        l.push(format!("\\def\\{f}{{}}"));
+    }
+    for (k, v) in &s.vars {
+        if !crate::config::macro_valida(k) {
+            return Err(Error::Other(format!("{k:?} no sirve como nombre de variable")));
+        }
+        texto_seguro(v, &format!("el valor de {k}"))?;
+        l.push(format!("\\def\\{k}{{{v}}}"));
+    }
+    if let Some(partes) = &s.includeonly {
+        for p in partes {
+            texto_seguro(p, "la parte")?;
+            if p.contains(',') {
+                return Err(Error::Other(format!("la parte {p:?} lleva una coma: no se puede nombrar en \\includeonly")));
+            }
+        }
+        // `\includeonly` sólo vale en el preámbulo. El hook corre al principio de `\begin{document}`, antes de que LaTeX
+        // lo prohíba, y así no hay que editar la raíz del usuario (S4: el PDF sale idéntico píxel a píxel).
+        l.push(format!("\\AddToHook{{begindocument/before}}{{\\includeonly{{{}}}}}", partes.join(",")));
+    }
+    let base = s.root_rel.strip_suffix(".tex").or_else(|| s.root_rel.strip_suffix(".TEX")).unwrap_or(&s.root_rel);
+    l.push(format!("\\input{{\"{base}\"}}"));
+    Ok(l.join("\n") + "\n")
+}
+
+/// El driver del perfil sin flags ni partes: el del completo de F1.
+pub fn render_driver(perfil: &str, root_rel: &str) -> Result<String> {
+    render_driver_spec(&DriverSpec { perfil: perfil.into(), root_rel: root_rel.into(), ..Default::default() })
 }
 
 /// `.lv/latexmkrc`: auxiliares y PDF por perfil (S1, opción A). Se lee después del del proyecto, que en el libro
@@ -113,20 +195,81 @@ pub fn write_if_changed(path: &Path, text: &str) -> Result<bool> {
     Ok(true)
 }
 
+/// `-shell-escape` sólo si el perfil externaliza figuras (5.1 del plan).
+pub fn latexmk_args_for(perfil: &str, engine: &str, shell_escape: bool) -> Result<Vec<String>> {
+    let motor = match engine {
+        "pdflatex" => "-pdf",
+        "xelatex" => "-xelatex",
+        "lualatex" => "-lualatex",
+        otro => return Err(Error::Other(format!("motor desconocido: {otro:?}"))),
+    };
+    Ok([motor]
+        .into_iter()
+        .chain(shell_escape.then_some("-shell-escape"))
+        .chain(["-synctex=1", "-interaction=nonstopmode", "-file-line-error", "-latexoption=-max-print-line=10000", "-r", ".lv/latexmkrc"])
+        .map(String::from)
+        .chain([driver_rel(perfil)])
+        .collect())
+}
+
 pub fn latexmk_args(perfil: &str) -> Vec<String> {
-    [
-        "-pdf",
-        "-synctex=1",
-        "-interaction=nonstopmode",
-        "-file-line-error",
-        "-latexoption=-max-print-line=10000",
-        "-r",
-        ".lv/latexmkrc",
-    ]
-    .iter()
-    .map(|s| s.to_string())
-    .chain([driver_rel(perfil)])
-    .collect()
+    latexmk_args_for(perfil, "pdflatex", false).expect("pdflatex es un motor válido")
+}
+
+/// Todo lo que el `Builder` necesita saber de un build, ya resuelto por quien lo pide.
+#[derive(Debug, Clone)]
+pub struct RunSpec {
+    pub perfil: String,
+    pub root_rel: String,
+    /// Texto del driver (`render_driver_spec`).
+    pub driver: String,
+    pub engine: String,
+    pub shell_escape: bool,
+    /// Es el reintento después de reparar un `.aux` truncado.
+    pub retry: bool,
+}
+
+impl RunSpec {
+    /// El perfil de F1: sin flags ni partes, con pdflatex.
+    pub fn simple(perfil: &str, root_rel: &str) -> Result<RunSpec> {
+        Ok(RunSpec {
+            perfil: perfil.into(),
+            root_rel: root_rel.into(),
+            driver: render_driver(perfil, root_rel)?,
+            engine: "pdflatex".into(),
+            shell_escape: false,
+            retry: false,
+        })
+    }
+}
+
+/// Cuenta pasadas y busca el error de un `.aux` truncado mientras pasa la salida de latexmk, sin guardarla entera (el
+/// log del libro completo pesa megas). Las agujas pueden quedar partidas entre dos fragmentos: se conserva la cola del
+/// anterior y sólo se cuentan las coincidencias que terminan en el fragmento nuevo, para no contar dos veces.
+#[derive(Default)]
+pub(crate) struct Contador {
+    cola: String,
+    pub pasadas: u32,
+    pub truncado: bool,
+}
+
+const AGUJAS_PASADA: [&str; 3] = ["of rule 'pdflatex'", "of rule 'xelatex'", "of rule 'lualatex'"];
+/// El error que documenta el libro (`\@newl@bel`) y su variante del `.out` de bookmark (`\BKM@entry`).
+const AGUJAS_TRUNCADO: [&str; 2] = ["File ended while scanning use of \\@newl@bel", "File ended while scanning use of \\BKM@entry"];
+const LARGO_DE_COLA: usize = 64;
+
+impl Contador {
+    pub(crate) fn push(&mut self, s: &str) {
+        let previo = self.cola.len();
+        let ventana = format!("{}{}", self.cola, s);
+        let nuevas = |aguja: &str| ventana.match_indices(aguja).filter(|(i, _)| i + aguja.len() > previo).count();
+        self.pasadas += AGUJAS_PASADA.iter().map(|a| nuevas(a) as u32).sum::<u32>();
+        if AGUJAS_TRUNCADO.iter().any(|a| nuevas(a) > 0) {
+            self.truncado = true;
+        }
+        let desde = ventana.char_indices().rev().nth(LARGO_DE_COLA - 1).map(|(i, _)| i).unwrap_or(0);
+        self.cola = ventana[desde..].to_string();
+    }
 }
 
 // --- salida en streaming --------------------------------------------------------------------------------------------
@@ -203,6 +346,7 @@ fn leer_flujo<R: Read>(mut r: R, tx: mpsc::Sender<String>) {
 struct Activo {
     pid: u32,
     cancelado: Arc<AtomicBool>,
+    job: Option<Arc<Job>>,
 }
 
 pub struct Builder {
@@ -233,27 +377,36 @@ impl Builder {
         self.estado.lock().map(|g| g.is_some()).unwrap_or(false)
     }
 
+    /// El build de F1: perfil sin flags ni partes.
+    pub fn start(&self, root: &Path, root_rel: &str, perfil: &str, sink: Sink) -> Result<u64> {
+        self.start_with(root, &RunSpec::simple(perfil, root_rel)?, sink, &|| Ok(()))
+    }
+
     /// Lanza el build y devuelve su id enseguida; los eventos llegan por `sink` desde otro hilo. Los errores que se
     /// pueden saber antes de lanzar (ocupado, ruta inválida, sin latexmk) vuelven acá.
-    pub fn start(&self, root: &Path, root_rel: &str, perfil: &str, sink: Sink) -> Result<u64> {
+    ///
+    /// `antes` corre una vez comprobado que el builder está libre y que la raíz existe, y antes de escribir el driver:
+    /// es donde se limpian y se siembran los auxiliares. Tiene que ir después de la comprobación de "ocupado", porque
+    /// borrar los `.aux` de un perfil mientras otro build los está usando sería destructivo.
+    pub fn start_with(&self, root: &Path, spec: &RunSpec, sink: Sink, antes: &dyn Fn() -> Result<()>) -> Result<u64> {
         let mut guardia = self.estado.lock().map_err(|_| Error::Other("estado del build envenenado".into()))?;
         if guardia.is_some() {
             return Err(Error::Busy);
         }
-        let raiz = fsio::resolver(root, root_rel, false)?;
+        let raiz = fsio::resolver(root, &spec.root_rel, false)?;
         if !raiz.is_file() {
-            return Err(Error::NotFound(root_rel.to_string()));
+            return Err(Error::NotFound(spec.root_rel.clone()));
         }
-        let driver = render_driver(perfil, root_rel)?;
-        write_if_changed(&root.join(driver_rel(perfil)), &driver)?;
+        let args = latexmk_args_for(&spec.perfil, &spec.engine, spec.shell_escape)?;
+        antes()?;
+        write_if_changed(&root.join(driver_rel(&spec.perfil)), &spec.driver)?;
         write_if_changed(&root.join(".lv").join("latexmkrc"), &render_latexmkrc())?;
 
-        let args = latexmk_args(perfil);
         let mut cmd = Command::new(&self.programa);
         cmd.args(&self.pre_args)
             .args(&args)
             .current_dir(root)
-            .env("LV_PERFIL", perfil)
+            .env("LV_PERFIL", &spec.perfil)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -268,10 +421,12 @@ impl Builder {
             }
             _ => Error::NoLatexmk(e.to_string()),
         })?;
+        // Todo el árbol de latexmk en un Job Object: cancelar lo mata entero y, si la app muere, también.
+        let job = Job::new().filter(|j| j.assign(&child)).map(Arc::new);
 
         let id = self.siguiente.fetch_add(1, Ordering::Relaxed);
         let cancelado = Arc::new(AtomicBool::new(false));
-        *guardia = Some(Activo { pid: child.id(), cancelado: cancelado.clone() });
+        *guardia = Some(Activo { pid: child.id(), cancelado: cancelado.clone(), job: job.clone() });
         drop(guardia);
 
         let (tx, rx) = mpsc::channel::<String>();
@@ -291,17 +446,22 @@ impl Builder {
             self.programa.to_string_lossy(),
             self.pre_args.iter().map(|a| a.to_string_lossy().to_string()).chain(args).collect::<Vec<_>>().join(" ")
         );
-        let perfil = perfil.to_string();
+        let perfil = spec.perfil.clone();
+        let reintento = spec.retry;
         let pdf_ruta = root.join(pdf_rel(&perfil));
         let pdf_relativo = pdf_rel(&perfil);
 
         std::thread::spawn(move || {
-            sink(BuildEvent::Started { id, perfil: perfil.clone(), cmdline });
+            sink(BuildEvent::Started { id, perfil: perfil.clone(), cmdline, retry: reintento });
             let mut buf = String::new();
             let mut ultimo = Instant::now();
+            let mut contador = Contador::default();
             loop {
                 match rx.recv_timeout(Duration::from_millis(50)) {
-                    Ok(s) => buf.push_str(&s),
+                    Ok(s) => {
+                        contador.push(&s);
+                        buf.push_str(&s);
+                    }
                     Err(RecvTimeoutError::Timeout) => {}
                     Err(RecvTimeoutError::Disconnected) => break,
                 }
@@ -326,26 +486,36 @@ impl Builder {
             if let Ok(mut g) = estado.lock() {
                 *g = None;
             }
+            // El Job se cierra acá: lo que haya quedado vivo del árbol muere con él.
+            drop(job);
             // Mismo hilo que los `Log`: el final nunca llega antes que las últimas líneas.
             sink(BuildEvent::Finished {
                 id,
+                perfil,
                 ok,
                 code,
                 cancelled: fue_cancelado,
                 ms: inicio.elapsed().as_millis() as u64,
                 pdf: existe.then_some(pdf_relativo),
                 updated,
+                passes: contador.pasadas,
+                truncated_aux: contador.truncado,
+                repaired: reintento,
             });
         });
         Ok(id)
     }
 
     /// Cancela el build en curso matando todo el árbol (latexmk lanza perl, pdflatex, biber...). Devuelve si había uno.
-    /// Los Job Objects de Windows son de F2/F8: `taskkill /T` alcanza para F1.
+    /// El Job Object lo hace por el sistema; `taskkill /T` queda de respaldo para lo que se haya escapado antes de que
+    /// el hijo entrara en el Job.
     pub fn cancel(&self) -> bool {
         let Ok(g) = self.estado.lock() else { return false };
         let Some(a) = g.as_ref() else { return false };
         a.cancelado.store(true, Ordering::SeqCst);
+        if let Some(j) = &a.job {
+            j.terminate();
+        }
         matar_arbol(a.pid);
         true
     }
@@ -431,5 +601,79 @@ mod tests {
         assert!(a.contains(&"-latexoption=-max-print-line=10000".to_string()));
         assert!(!a.iter().any(|x| x.contains("$pdflatex") || x.starts_with("-pdflatex")));
         assert_eq!(a.last().unwrap(), ".lv/drivers/lv-completo.tex");
+    }
+
+    #[test]
+    fn contador_cuenta_pasadas_y_agujas_partidas_entre_fragmentos() {
+        let log = "Run number 1 of rule 'pdflatex'\nxx Run number 2 of rule 'pdflatex'\nRun number 1 of rule 'biber'\n! File ended while scanning use of \\@newl@bel.\n";
+        for corte in 0..=log.len() {
+            if !log.is_char_boundary(corte) {
+                continue;
+            }
+            let mut c = Contador::default();
+            c.push(&log[..corte]);
+            c.push(&log[corte..]);
+            assert_eq!(c.pasadas, 2, "corte en {corte}");
+            assert!(c.truncado, "corte en {corte}");
+        }
+        let mut c = Contador::default();
+        c.push("todo bien, Run number 1 of rule 'xelatex'\n");
+        c.push(&"x".repeat(500));
+        c.push("File ended while scanning use of \\BKM@entry");
+        assert_eq!((c.pasadas, c.truncado), (1, true));
+        let mut c = Contador::default();
+        c.push("File ended while scanning use of \\foo");
+        assert!(!c.truncado, "otros errores de fin de archivo no disparan la reparación");
+    }
+
+    #[test]
+    fn el_driver_con_flags_variables_y_partes_sigue_el_orden_medido_en_s4() {
+        let d = render_driver_spec(&DriverSpec {
+            perfil: "parcial".into(),
+            root_rel: "Funciones de Aproximación.tex".into(),
+            partial: true,
+            flags: vec!["CompilacionReducida".into(), "TikzExternalizar".into()],
+            vars: vec![("OpcionPie".into(), "autor".into())],
+            includeonly: Some(vec!["Secciones/Desnormalización".into(), "Secciones/Uno".into()]),
+            draft_images: true,
+        })
+        .unwrap();
+        assert_eq!(
+            d,
+            "% .lv/drivers/lv-parcial.tex (generado por LaTeX Viewer, no editar)\n\\def\\lvPerfil{parcial}\n\\def\\lvParcial{1}\n\\PassOptionsToPackage{draft}{graphicx}\n\\def\\CompilacionReducida{}\n\\def\\TikzExternalizar{}\n\\def\\OpcionPie{autor}\n\\AddToHook{begindocument/before}{\\includeonly{Secciones/Desnormalización,Secciones/Uno}}\n\\input{\"Funciones de Aproximación\"}\n"
+        );
+    }
+
+    #[test]
+    fn el_driver_rechaza_lo_que_romperia_tex() {
+        let base = || DriverSpec { perfil: "p".into(), root_rel: "main.tex".into(), ..Default::default() };
+        for valor in ["", "a}b", "a\\b", "50%", "a#b"] {
+            let mut s = base();
+            s.vars = vec![("X".into(), valor.into())];
+            assert!(render_driver_spec(&s).is_err(), "valor {valor:?}");
+        }
+        for parte in ["a,b", "a}", "%x", ""] {
+            let mut s = base();
+            s.includeonly = Some(vec![parte.into()]);
+            assert!(render_driver_spec(&s).is_err(), "parte {parte:?}");
+        }
+        let mut s = base();
+        s.flags = vec!["con espacio".into()];
+        assert!(render_driver_spec(&s).is_err());
+        let mut s = base();
+        s.includeonly = Some(vec![]);
+        assert!(render_driver_spec(&s).unwrap().contains("\\includeonly{}"), "ninguna parte es válido (vista previa de fragmento)");
+    }
+
+    #[test]
+    fn los_argumentos_siguen_al_motor_y_al_shell_escape() {
+        let a = latexmk_args_for("rapido", "xelatex", true).unwrap();
+        assert_eq!(a[0], "-xelatex");
+        assert_eq!(a[1], "-shell-escape");
+        assert_eq!(a.last().unwrap(), ".lv/drivers/lv-rapido.tex");
+        let a = latexmk_args_for("p", "lualatex", false).unwrap();
+        assert_eq!(a[0], "-lualatex");
+        assert!(!a.contains(&"-shell-escape".to_string()));
+        assert!(latexmk_args_for("p", "word", false).is_err());
     }
 }

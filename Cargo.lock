@@ -1758,10 +1758,12 @@ name = "lv-core"
 version = "0.1.0"
 dependencies = [
  "dunce",
+ "indexmap 2.14.2",
  "md-5",
  "serde",
  "serde_json",
  "tempfile",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

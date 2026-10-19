@@ -116,3 +116,61 @@ La app vacía ocupaba 327 a 344 MB en S3, así que el PDF del libro suma unos 16
 ### Hallazgo del paso 0
 
 El completo con el esquema A tal como lo dejó S1 **falló**: latexmk corre makeindex desde el directorio de salida y el `$makeindex = 'makeindex -s StyleInd.ist ...'` del libro nombra su estilo relativo a la raíz ("Index style file StyleInd.ist not found", código 12, 532 referencias sin resolver, sin índice ni bibliografía). S1 no lo vio porque ni el parcial ni el rápido llevan índice. Se corrige con `INDEXSTYLE` apuntando a la raíz en `.lv/latexmkrc`; se probaron dos correcciones en `fixtures/biblio-indice` (`INDEXSTYLE`, y reescribir el `-s` del `$makeindex` a ruta absoluta) y las dos funcionan; se eligió la primera porque también cubre estilos en subcarpetas y no toca el `$makeindex` del usuario. Con la corrección, el resultado de la tabla de arriba. Ver `docs/spikes/S1.md` y 5.1 del plan.
+## F2: motor de compilación y perfiles
+
+Todo medido por el smoke de aceptación dentro de la app real (`scripts/aceptacion-f2.ps1`), sobre una copia **tibia** del libro (790 figuras del sello actual en `figuras-cache/`, ningún `.aux`, con `fixtures/configs/libro-tc.latexviewer.json`), tres corridas completas con los mismos resultados dentro del ruido. Entre paréntesis, lo que dan los scripts de inspo (línea de base de arriba) y lo que midió S1 con el esquema A.
+
+### Criterios de aceptación de F2 (umbrales de esta máquina, ver el ajuste en plan.md)
+
+| Criterio | Umbral | Medido | inspo / S1 |
+|---|---|---|---|
+| Parcial, de Ctrl+S a PDF visible | ≤ 5,0 s | **4,93 s** (latexmk 4,63 a 4,73 s, 1 pasada) | 4,7 s / 4,5 a 5,0 s |
+| Rápido, de Ctrl+S a PDF visible | ≤ 9,6 s | **9,25 s** (latexmk 8,84 a 8,90 s, 1 pasada) | 9,4 s / 8,4 a 9,6 s |
+| latexmk sin cambios | ≤ 1 s y 0 pasadas | **0,59 a 0,60 s**, 0 pasadas | 0,6 s |
+| Alternar parcial, rápido, parcial, rápido | 0 pasadas | **0, 0, 0, 0** | 0 |
+| Referencias a capítulos excluidos en el parcial | resueltas | **0 sin resolver** (`.log` de la última pasada) | |
+
+El parcial queda 0,2 s por encima de latexmk a secas porque el tiempo es de punta a punta: guardar, preguntar al core qué afecta, lanzar, leer el PDF y pintar lo visible (0,2 a 0,3 s). Está en el borde del umbral: una máquina más cargada lo puede pasar, y por eso el smoke lo muestra con su margen.
+
+### Los demás tiempos
+
+| Escenario | Tiempo | Pasadas |
+|---|---|---|
+| Rápido con auxiliares limpios (cache de figuras tibio) | 37,5 a 38,4 s | 4 |
+| Parcial con los `.aux` sembrados desde el rápido | 14,9 a 15,0 s | 3 |
+| Índice de inclusión y partes del libro (50 `.tex`, 8 partes) | **8 a 9 ms** (objetivo: < 1 s) | |
+| Cuatro pedidos de build seguidos con uno corriendo | 2 builds (el primero y UN pendiente) | |
+| Cancelar con un pendiente: no corre el pendiente y el siguiente build sale bien | 8,8 a 9,0 s, 1 pasada, sin reparar | |
+| Procesos de TeX vivos al cerrar la app | 0 | |
+
+### Recarga del PDF sin parpadeo (swap de dos visores)
+
+Rápido de 183 a 194 páginas, 40 recargas seguidas con el visor en la página 60 (la medición de S3, ahora en el visor de la app):
+
+| | Medido | S3 |
+|---|---|---|
+| Cuadros en blanco | **0 de 490** | 0 en más de 130 recargas |
+| Deriva de posición | **0 páginas, 0 px** | 0 |
+| Hasta lo visible | hasta 227 a 241 ms | 220 a 230 ms |
+| Visores armados al terminar | 1 | |
+| Memoria del WebView (antes, a 1/4, 1/2 y 3/4 de las recargas, pico, después) | 545, 641, 661, 662 MB, pico 679, **después 672 MB** | ~0,7 GB estable con el desarmado completo |
+
+Sube en el primer cuarto (PDF.js arma su caché y su worker) y después queda plana: es lo que S3 llamó estable (sin el desarmado completo eran +33 MB por recarga, 1,3 GB a las 40).
+
+### Regresión de F1 con el motor nuevo
+
+El smoke de F1 (`scripts/aceptacion-f1.ps1`) sigue pasando en los tres proyectos con el motor de F2. Sobre el libro: completo en frío 307,4 s (F1: 317 a 347 s, línea de base 338,5 s), 194 páginas, marcador en la página 143, arranque hasta proyecto abierto 410 ms.
+
+### Pruebas
+
+| | Cantidad | Qué cubren |
+|---|---|---|
+| `cargo test -p lv-core` | 84 | lo de F1 (39) más: configuración (`latexviewer.json` con campos desconocidos, BOM, JSON roto, estado ilegible, `.gitignore` sin cambiar el EOL), grafo de inclusión y partes (comentarios, `\%`, llaves, tildes, parámetros de macro, ciclos, `\Capitulo` dentro de un archivo que entra por `\input`), auxiliares (sembrado, sospechoso, `.md5`, reparación), driver con flags y variables, contador de pasadas con agujas partidas entre fragmentos, y la sesión con un latexmk falso: cola y coalescencia, cancelar descarta el pendiente, reparación de `.aux` truncado una sola vez, publicar, estado |
+| `cargo test -p lv-core --features tex` | +5 | lo de F1 (4) más la sesión con TeX real: parcial y rápido alternando sin pasadas extra y con las referencias a la parte excluida resueltas |
+| `npx vitest run` | 54 | lo de F1 (32) más perfiles y partes, auto-compilación (al guardar, al dejar de tipear con relojes falsos, manual, archivo de otra parte con las tres políticas) y los eventos nuevos del build (cola, reintento, PDF desactualizado) |
+| Smoke de F2 dentro de la app | 16 pasos | los de la tabla de arriba, más: guardar un archivo de una parte que el perfil no incluye avisa y no compila, y publicar |
+
+### Hallazgos de F2
+
+- **`.fls` no sirve para saber qué compiló un parcial**: `\include` abre los `.tex` de las partes excluidas para comprobar que existen. Se miró la cantidad de páginas del log.
+- **El smoke de F2 tuvo una carrera propia que lo colgó**: cuando sube `pdfEpoch`, el visor todavía muestra el PDF viejo (con sus páginas pintadas y un solo contenedor), así que "PDF visible" se daba por cumplido antes de tiempo y la búsqueda del marcador corría contra un documento que el swap destruía a mitad de camino. Ahora el host guarda la etiqueta del último PDF cargado (`<ruta>#<época>`) y el smoke espera a que coincida con la del store; `paginaConTexto` además aborta si el visor cambia.

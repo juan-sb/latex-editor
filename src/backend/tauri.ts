@@ -26,23 +26,35 @@ async function llamar<T>(cmd: string, args?: Record<string, unknown>): Promise<T
 
 export const tauriBackend: Backend = {
   async launchOptions() {
-    const o = await llamar<{ open: string | null; root: string | null; smoke: boolean; smoke_file: string | null; smoke_pausa_ms: number }>('launch_options');
-    const l: LaunchOptions = { open: o.open, root: o.root, smoke: o.smoke, smokeFile: o.smoke_file, smokePausaMs: o.smoke_pausa_ms };
+    const o = await llamar<{
+      open: string | null;
+      root: string | null;
+      smoke: boolean;
+      smoke_mode: 'f1' | 'f2';
+      smoke_file: string | null;
+      smoke_pausa_ms: number;
+    }>('launch_options');
+    const l: LaunchOptions = { open: o.open, root: o.root, smoke: o.smoke, smokeMode: o.smoke_mode, smokeFile: o.smoke_file, smokePausaMs: o.smoke_pausa_ms };
     return l;
   },
   pickFolder: () => llamar('pick_folder'),
   openProject: (path) => llamar('open_project', { path }),
+  getProject: () => llamar('get_project'),
   setRootFile: (rel) => llamar('set_root_file', { rel }),
+  setState: (patch) => llamar('set_state', { patch }),
+  saveConfig: () => llamar('save_config'),
+  fileInfo: (rel) => llamar('file_info', { rel }),
   listDir: (rel) => llamar('list_dir', { rel }),
   readFile: (rel) => llamar('read_file', { rel }),
   writeFile: (rel, text, expectedVersion) => llamar('write_file', { rel, text, expectedVersion }),
   async readPdf(rel) {
     return new Uint8Array(await llamar<ArrayBuffer>('read_pdf', { rel }));
   },
-  build: () => llamar('build'),
+  build: (profile) => llamar('build', { profile: profile ?? null }),
   cancelBuild: () => llamar('cancel_build'),
+  publish: (profile) => llamar('publish', { profile }),
   async onBuildEvent(cb) {
-    const nombres = ['build:started', 'build:log', 'build:finished'];
+    const nombres = ['build:queued', 'build:started', 'build:log', 'build:finished', 'build:error'];
     const desuscribir = await Promise.all(nombres.map((n) => listen<BuildEvent>(n, (e) => cb(e.payload))));
     return () => desuscribir.forEach((d) => d());
   },

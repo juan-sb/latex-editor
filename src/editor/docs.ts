@@ -29,6 +29,13 @@ export function setDirtyListener(fn: (rel: string, dirty: boolean) => void): voi
   alCambiarDirty = fn;
 }
 
+let alEditar: (rel: string) => void = () => {};
+
+/** El store se entera de cada edición por acá (el autoguardado "al dejar de tipear" la usa). */
+export function setEditListener(fn: (rel: string) => void): void {
+  alEditar = fn;
+}
+
 export const estaModificado = (e: DocEntry): boolean => !e.state.doc.eq(e.saved);
 
 function construirEstado(entry: DocEntry, doc: string | Text, selection?: EditorState['selection']): EditorState {
@@ -36,6 +43,7 @@ function construirEstado(entry: DocEntry, doc: string | Text, selection?: Editor
     const antes = estaModificado(entry);
     entry.state = u.state;
     if (u.docChanged && estaModificado(entry) !== antes) alCambiarDirty(entry.rel, estaModificado(entry));
+    if (u.docChanged) alEditar(entry.rel);
   });
   return EditorState.create({
     doc,

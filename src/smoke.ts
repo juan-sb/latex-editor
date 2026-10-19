@@ -13,6 +13,7 @@ import { getBackend, type LaunchOptions } from './backend';
 import { editarDoc, getDoc, textoDe } from './editor/docs';
 import { pdfActual } from './pdf/viewer';
 import { useApp } from './store/app';
+import { bytesEsperados, dormir, esperarHasta, iguales, puntoDeInsercion } from './smoke-util';
 
 const MARCADOR = 'LVSMOKEXQZ';
 const INSERCION = `\\mbox{${MARCADOR}} `;
@@ -23,45 +24,6 @@ interface Paso {
   ok: boolean;
   ms: number;
   detalle?: string;
-}
-
-const dormir = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-async function esperarHasta(cond: () => boolean, limiteMs: number, que: string): Promise<void> {
-  const t0 = Date.now();
-  while (!cond()) {
-    if (Date.now() - t0 > limiteMs) throw new Error(`tiempo agotado esperando: ${que}`);
-    await dormir(200);
-  }
-}
-
-function iguales(a: Uint8Array, b: Uint8Array): string | null {
-  if (a.length !== b.length) return `largo ${a.length} contra ${b.length}`;
-  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return `primer byte distinto en ${i}`;
-  return null;
-}
-
-function bytesEsperados(texto: string, eol: 'lf' | 'crlf' | 'cr', bom: boolean): Uint8Array {
-  const sep = eol === 'crlf' ? '\r\n' : eol === 'cr' ? '\r' : '\n';
-  const cuerpo = new TextEncoder().encode(sep === '\n' ? texto : texto.replace(/\n/g, sep));
-  if (!bom) return cuerpo;
-  const out = new Uint8Array(cuerpo.length + 3);
-  out.set([0xef, 0xbb, 0xbf]);
-  out.set(cuerpo, 3);
-  return out;
-}
-
-/** Posición (en el texto normalizado) donde se inserta el marcador: después de la primera palabra de un párrafo plano. */
-function puntoDeInsercion(texto: string): number {
-  let inicio = 0;
-  for (const linea of texto.split('\n')) {
-    if (linea.length > 100 && /^[A-Za-zÁÉÍÓÚÑáéíóúñ]/.test(linea) && !/[\\$%{}]/.test(linea.slice(0, 100))) {
-      const espacio = linea.indexOf(' ');
-      if (espacio > 0) return inicio + espacio + 1;
-    }
-    inicio += linea.length + 1;
-  }
-  throw new Error('no encontré un párrafo de texto plano donde insertar el marcador');
 }
 
 export async function correrSmoke(opts: LaunchOptions): Promise<void> {
@@ -88,6 +50,8 @@ export async function correrSmoke(opts: LaunchOptions): Promise<void> {
   };
 
   const trabajo = (async () => {
+    // Con la auto-compilación de F2, Ctrl+S ya compila: este smoke compila cuando quiere, y el perfil que prueba es el completo.
+    await store().setAutoCompile('manual');
     await paso('proyecto abierto y raíz elegida', async () => {
       if (!store().project) throw new Error('no hay proyecto abierto (¿LV_OPEN?)');
       if (!store().rootFile) throw new Error('no hay raíz elegida (¿LV_ROOT?)');
@@ -146,7 +110,7 @@ export async function correrSmoke(opts: LaunchOptions): Promise<void> {
 
     await paso('compilar el completo', async () => {
       const t0 = Date.now();
-      await store().compilar();
+      await store().compilar('completo');
       await esperarHasta(() => store().build.status !== 'idle' && store().build.status !== 'running', LIMITE_TOTAL_MS, 'el build');
       datos.buildMs = Date.now() - t0;
       datos.buildStatus = store().build.status;

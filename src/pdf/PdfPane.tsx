@@ -8,8 +8,7 @@ import { pdfActual, PdfViewerHost, type PdfEstado } from './viewer';
 const VACIO: PdfEstado = { pagina: 0, paginas: 0, escala: 1, modo: 'ancho' };
 
 export function PdfPane() {
-  const contRef = useRef<HTMLDivElement>(null);
-  const visorRef = useRef<HTMLDivElement>(null);
+  const areaRef = useRef<HTMLDivElement>(null);
   const hostRef = useRef<PdfViewerHost | null>(null);
   const [estado, setEstado] = useState<PdfEstado>(VACIO);
   const [cargando, setCargando] = useState(false);
@@ -17,10 +16,11 @@ export function PdfPane() {
   const pdfRel = useApp((s) => s.pdfRel);
   const pdfEpoch = useApp((s) => s.pdfEpoch);
   const status = useApp((s) => s.build.status);
+  const stale = useApp((s) => s.pdfStale);
   const avisar = useApp((s) => s.avisar);
 
   useEffect(() => {
-    const host = new PdfViewerHost(contRef.current!, visorRef.current!);
+    const host = new PdfViewerHost(areaRef.current!);
     hostRef.current = host;
     pdfActual.host = host;
     const baja = host.suscribir((e) => setEstado(e));
@@ -40,7 +40,7 @@ export function PdfPane() {
     (async () => {
       try {
         const bytes = await getBackend().readPdf(pdfRel);
-        if (vigente) await hostRef.current?.cargar(bytes);
+        if (vigente) await hostRef.current?.cargar(bytes, `${pdfRel}#${pdfEpoch}`);
       } catch (e) {
         avisar(`No se pudo mostrar el PDF: ${e instanceof Error ? e.message : e}`, 'error');
       } finally {
@@ -56,7 +56,7 @@ export function PdfPane() {
 
   // Ctrl + rueda hace zoom (el listener no puede ser pasivo: tiene que impedir el zoom de la página entera).
   useEffect(() => {
-    const el = contRef.current!;
+    const el = areaRef.current!;
     const rueda = (e: WheelEvent) => {
       if (!e.ctrlKey) return;
       e.preventDefault();
@@ -106,14 +106,13 @@ export function PdfPane() {
         </button>
         {cargando && <span className="cargando">Cargando…</span>}
       </div>
-      <div className="pdf-area">
-        <div className="pdf-contenedor" ref={contRef} tabIndex={0} onKeyDown={teclas}>
-          <div className="pdfViewer" ref={visorRef} />
-        </div>
+      <div className={`pdf-area${stale ? ' desactualizado' : ''}`} ref={areaRef} tabIndex={0} onKeyDown={teclas}>
+        {/* Los contenedores de cada visor los arma `PdfViewerHost` adentro de este elemento. */}
         {!hayPdf && !cargando && (
           <div className="vacio">{status === 'running' ? 'Compilando…' : 'Todavía no hay PDF. Compilá con Ctrl+Enter.'}</div>
         )}
       </div>
+      {stale && hayPdf && <div className="pdf-aviso">El último build no terminó bien: este es el último PDF bueno.</div>}
     </div>
   );
 }
