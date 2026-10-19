@@ -42,6 +42,13 @@ export const COMANDOS: Comando[] = [
   { id: 'build.compilarParte', titulo: 'Compilar la parte del archivo abierto', categoria: 'Compilación', atajos: ['Ctrl+Alt+C', 'Ctrl+Shift+Enter'], ejecutar: () => void app().compilarParteActiva() },
   { id: 'build.cancelar', titulo: 'Cancelar la compilación', categoria: 'Compilación', atajos: [], ejecutar: () => void app().cancelarBuild() },
   { id: 'build.publicar', titulo: 'Publicar el PDF', categoria: 'Compilación', atajos: [], ejecutar: () => void app().publicar() },
+  // F7: el menú de compilación de 10.3 (como el Ctrl+Alt+T de inspo), exportar y la vista previa de un fragmento.
+  { id: 'build.menu', titulo: 'Menú de compilación: perfiles, variables, exportar, cocinar y limpiar', categoria: 'Compilación', atajos: ['Ctrl+Alt+T'], ejecutar: () => app().menuCompilacion() },
+  { id: 'build.exportarParte', titulo: 'Exportar la parte del archivo abierto a PDF', categoria: 'Compilación', atajos: [], ejecutar: () => void app().exportarParteActiva() },
+  { id: 'build.exportarElegidas', titulo: 'Exportar las partes elegidas a PDF', categoria: 'Compilación', atajos: [], ejecutar: () => void app().exportarPartes(app().project?.state.selection) },
+  { id: 'build.exportarTodas', titulo: 'Exportar todas las partes a PDF', categoria: 'Compilación', atajos: [], ejecutar: () => void app().exportarPartes() },
+  { id: 'fragmento.vistaPrevia', titulo: 'Vista previa del fragmento (selección o entorno actual)', categoria: 'Compilación', atajos: ['Ctrl+Alt+F'], ejecutar: () => void app().previsualizarFragmento() },
+  { id: 'vista.layout', titulo: 'Alternar el layout (editor y PDF, sólo editor, sólo PDF)', categoria: 'Vista', atajos: ['Ctrl+\\'], ejecutar: () => app().alternarLayout() },
   { id: 'problemas.siguiente', titulo: 'Problema siguiente', categoria: 'Compilación', atajos: ['F8'], ejecutar: () => void app().saltarProblema(1) },
   { id: 'problemas.anterior', titulo: 'Problema anterior', categoria: 'Compilación', atajos: ['Shift+F8'], ejecutar: () => void app().saltarProblema(-1) },
 

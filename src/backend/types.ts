@@ -32,6 +32,8 @@ export interface ConfigInfo {
   variables: VariableInfo[];
   /** Dónde publica el proyecto (`publish.dir`), si lo dice. */
   publishDir: string | null;
+  /** Dónde van los PDF de las partes exportadas (`export.dir`, `export` por defecto), relativo a la raíz. */
+  exportDir: string;
 }
 
 export type AutoCompileMode = 'save' | 'idle' | 'manual';
@@ -292,7 +294,16 @@ export type BuildEvent =
       remaining: number;
       ms: number;
       error: string | null;
-    };
+    }
+  // la exportación de partes (eventos `export:*`)
+  | { type: 'exportqueued' }
+  | { type: 'exportstarted'; id: number; total: number }
+  | { type: 'exportprogress'; id: number; done: number; total: number; part: string; num: string | null; file: string | null; ok: boolean }
+  | { type: 'exportfinished'; id: number; ok: boolean; cancelled: boolean; exported: number; failed: number; ms: number; dir: string; error: string | null };
+
+/** Los perfiles de servicio de la app (ocultos): lo que compila cada parte exportada y la vista previa de un fragmento. */
+export const PERFIL_EXPORT = 'export';
+export const PERFIL_FRAGMENTO = 'fragmento';
 
 /** Una figura del cache: `aldia`, `pendiente` (hay que cocinarla), `fallo` (su subcompilación falló) o `falta` (sin PDF). */
 export type EstadoFigura = 'aldia' | 'pendiente' | 'fallo' | 'falta';
@@ -353,7 +364,7 @@ export interface LaunchOptions {
   root: string | null;
   smoke: boolean;
   /** Qué smoke de aceptación corre la interfaz con `LV_SMOKE`: el de F1, F2, F3 o F4. */
-  smokeMode: 'f1' | 'f2' | 'f3' | 'f4' | 'f5' | 'f6';
+  smokeMode: 'f1' | 'f2' | 'f3' | 'f4' | 'f5' | 'f6' | 'f7';
   smokeFile: string | null;
   /** Milisegundos que el smoke deja la interfaz abierta al terminar (para sacarle una captura). */
   smokePausaMs: number;
@@ -422,8 +433,14 @@ export interface Backend {
   writeUserConfig(name: string, text: string): Promise<string>;
   /** Copia el PDF del perfil a `publish.dir`. */
   publish(profile: string): Promise<Published>;
+  /** Exporta las partes (por su nombre; sin lista, todas) a PDF sueltos con el número de capítulo impreso. Pendiente si hay otro trabajo. */
+  exportParts(parts?: string[]): Promise<BuildAck>;
+  /** Compila un fragmento con el documento de contexto; el PDF queda en `.lv/build/fragmento/lv-fragmento.pdf`. */
+  previewFragment(text: string): Promise<BuildAck>;
   /** Devuelve la función que deja de escuchar. */
   onBuildEvent(cb: (e: BuildEvent) => void): Promise<() => void>;
+  /** Archivos del proyecto que cambiaron afuera de la app (no los que escribe la compilación), en ráfagas. */
+  onFsChanged(cb: (files: string[]) => void): Promise<() => void>;
   /** `permitir` decide si se cierra la ventana (por ejemplo, si hay pestañas sin guardar). */
   onCloseRequested(permitir: () => Promise<boolean>): Promise<() => void>;
   exitApp(): Promise<void>;

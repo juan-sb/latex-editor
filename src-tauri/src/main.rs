@@ -8,6 +8,7 @@ use lv_core::config::{State, StatePatch};
 use lv_core::error::{Error, ErrorInfo};
 use lv_core::figcache::Limpieza;
 use lv_core::fsio::{self, FileRead, WriteOutcome};
+use lv_core::fswatch::Observador;
 use lv_core::logparse::Problem;
 use lv_core::project::{self, DirEntry};
 use lv_core::search::{ReplaceReport, SearchOptions, SearchResult};
@@ -22,6 +23,14 @@ use tauri_plugin_dialog::DialogExt;
 #[derive(Default)]
 struct AppState {
     session: Mutex<Option<Arc<Session>>>,
+    /// Observa el proyecto abierto (`fs:changed`); al reemplazarlo se deja de observar el anterior.
+    observador: Mutex<Option<Observador>>,
+}
+
+/// Lo que viaja en `fs:changed`: los archivos que cambiaron afuera, relativos a la raíz y con `/`.
+#[derive(Serialize, Clone)]
+struct CambiosAfuera {
+    files: Vec<String>,
 }
 
 type Res<T> = std::result::Result<T, ErrorInfo>;
@@ -68,6 +77,7 @@ async fn launch_options() -> LaunchOptions {
             Some("f4") => "f4".into(),
             Some("f5") => "f5".into(),
             Some("f6") => "f6".into(),
+            Some("f7") => "f7".into(),
             _ => "f1".into(),
         },
         smoke_file: var("LV_SMOKE_FILE"),
@@ -138,6 +148,10 @@ fn sink_de(app: AppHandle) -> Sink {
             BuildEvent::BakeStarted { .. } => "figures:started",
             BuildEvent::BakeProgress { .. } => "figures:progress",
             BuildEvent::BakeFinished { .. } => "figures:finished",
+            BuildEvent::ExportQueued => "export:queued",
+            BuildEvent::ExportStarted { .. } => "export:started",
+            BuildEvent::ExportProgress { .. } => "export:progress",
+            BuildEvent::ExportFinished { .. } => "export:finished",
         };
         let _ = app.emit(nombre, &ev);
     })
@@ -149,10 +163,36 @@ async fn open_project(app: AppHandle, state: TauriState<'_, AppState>, path: Str
     if let Some(vieja) = state.session.lock().unwrap().take() {
         vieja.cancel();
     }
-    let s = Session::open(std::path::Path::new(&path), sink_de(app)).map_err(|e| e.info())?;
+    // Y se deja de observar la carpeta anterior antes de abrir la nueva.
+    *state.observador.lock().unwrap() = None;
+    let s = Session::open(std::path::Path::new(&path), sink_de(app.clone())).map_err(|e| e.info())?;
     let vista = s.view().map_err(|e| e.info())?;
+    // Archivos cambiados afuera (10.1). Si el observador no arranca (carpeta de red, permisos) la app sigue sin él.
+    let aviso_app = app.clone();
+    let observador = s.observar(Arc::new(move |files| {
+        let _ = aviso_app.emit("fs:changed", CambiosAfuera { files });
+    }));
+    match observador {
+        Ok(o) => *state.observador.lock().unwrap() = Some(o),
+        Err(e) => eprintln!("no se pudo observar la carpeta: {e}"),
+    }
     *state.session.lock().unwrap() = Some(s);
     Ok(vista)
+}
+
+/// Exporta partes (por su nombre; ninguna o `None`: todas) a PDF sueltos con el número de capítulo impreso. Con otro trabajo en
+/// curso queda pendiente.
+#[tauri::command]
+async fn export_parts(state: TauriState<'_, AppState>, parts: Option<Vec<String>>) -> Res<BuildAck> {
+    let s = sesion(&state)?;
+    tauri::async_runtime::spawn_blocking(move || s.request_export(parts)).await.map_err(|e| otro(&e.to_string()))?.map_err(|e| e.info())
+}
+
+/// Vista previa de un fragmento: compila `text` con el documento de contexto (el PDF queda en `.lv/build/fragmento/`).
+#[tauri::command]
+async fn preview_fragment(state: TauriState<'_, AppState>, text: String) -> Res<BuildAck> {
+    let s = sesion(&state)?;
+    tauri::async_runtime::spawn_blocking(move || s.request_fragment(text)).await.map_err(|e| otro(&e.to_string()))?.map_err(|e| e.info())
 }
 
 /// Vuelve a leer el proyecto del disco (índice de partes incluido).
@@ -367,6 +407,8 @@ fn main() {
             synctex_forward,
             synctex_inverse,
             publish,
+            export_parts,
+            preview_fragment,
         ])
         .build(tauri::generate_context!())
         .expect("error al crear la aplicación");

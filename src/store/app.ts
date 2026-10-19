@@ -4,6 +4,8 @@ import { create } from 'zustand';
 import {
   BackendError,
   getBackend,
+  PERFIL_EXPORT,
+  PERFIL_FRAGMENTO,
   type AppStateInfo,
   type AutoCompileMode,
   type BuildEvent,
@@ -38,6 +40,7 @@ import {
 import { setFuenteSimbolos, setManejadorDefinicion } from '../editor/extensions';
 import { pdfApi } from '../pdf/api';
 import { describir, resolverDefinicion, resolverUsos, tokenEnCursor } from '../nav/definiciones';
+import { fragmentoDelCursor } from '../nav/fragmento';
 import { refinarForward, refinarInverse } from '../sync/saltos';
 import { logBuffer } from './logbuffer';
 import { FILTRO_INICIAL, listaDeProblemas, siguiente, visibles, type FiltroProblemas } from './problemas';
@@ -142,6 +145,31 @@ export const BUSQUEDA_INICIAL: EstadoBusqueda = {
 };
 export type PanelInferior = 'problemas' | 'log';
 
+/** La exportación de partes en curso, según sus eventos. */
+export interface ExportEstado {
+  hechas: number;
+  total: number;
+  /** La parte que acaba de terminar (null hasta la primera). */
+  parte: string | null;
+}
+
+/** Qué se ve en el visor: el documento o la vista previa de un fragmento (8.2 del plan). */
+export type VistaPdf = 'pdf' | 'fragmento';
+
+export interface FragmentoEstado {
+  estado: 'idle' | 'compilando' | 'ok' | 'fail';
+  /** El último PDF del fragmento que compiló bien y un contador que sube con cada uno (el visor lo recarga). */
+  pdfRel: string | null;
+  epoch: number;
+  ms: number | null;
+}
+
+export const FRAGMENTO_INICIAL: FragmentoEstado = { estado: 'idle', pdfRel: null, epoch: 0, ms: null };
+
+/** Ctrl+\ alterna entre editor y PDF, sólo el editor y sólo el PDF (10.1 del plan). */
+export type Layout = 'ambos' | 'editor' | 'pdf';
+export const SIGUIENTE_LAYOUT: Record<Layout, Layout> = { ambos: 'editor', editor: 'pdf', pdf: 'ambos' };
+
 interface AppState {
   project: ProjectInfo | null;
   rootFile: string | null;
@@ -169,6 +197,14 @@ interface AppState {
   figProgreso: Cocinando | null;
   /** Hay una cocción de figuras esperando a que termine otro trabajo. */
   figPendiente: boolean;
+  /** La exportación en curso y si hay una esperando a que termine otro trabajo. */
+  exportando: ExportEstado | null;
+  exportPendiente: boolean;
+  vistaPdf: VistaPdf;
+  fragmento: FragmentoEstado;
+  layout: Layout;
+  /** Sube cuando hay que volver a leer las carpetas del árbol de archivos (cambió algo afuera). */
+  arbolEpoch: number;
   /** Lo que el core sabe del proyecto sin compilar (etiquetas, citas, secciones...), con el lint. */
   simbolos: Simbolos | null;
   quick: QuickState | null;
@@ -216,6 +252,19 @@ interface AppState {
   cocinarFiguras(): Promise<void>;
   limpiarFiguras(): Promise<void>;
   manejarEventoFiguras(e: BuildEvent): void;
+  /** Exporta las partes (por su nombre; sin lista, todas) a PDF sueltos con el número de capítulo impreso. */
+  exportarPartes(partes?: string[]): Promise<void>;
+  /** Exporta la parte del archivo abierto. */
+  exportarParteActiva(): Promise<void>;
+  manejarEventoExport(e: BuildEvent): void;
+  /** Compila el fragmento del cursor (la selección o el entorno actual) y lo muestra en la pestaña Fragmento. */
+  previsualizarFragmento(): Promise<void>;
+  mostrarVista(v: VistaPdf): void;
+  alternarLayout(): void;
+  /** Ctrl+Alt+T: perfiles, variables, exportar, cocinar y limpiar. */
+  menuCompilacion(): void;
+  /** Archivos del proyecto que cambiaron afuera de la app (el observador del core). */
+  alCambiarAfuera(archivos: string[]): Promise<void>;
   cargarSimbolos(): Promise<void>;
   programarSimbolos(): void;
   abrirQuick(q: QuickState): void;
@@ -250,8 +299,9 @@ interface AppState {
   cerrarAviso(): void;
 }
 
-/** Los eventos de la cocción de figuras viajan por el mismo canal que los del build. */
+/** Los eventos de la cocción de figuras y los de la exportación viajan por el mismo canal que los del build. */
 const esDeFiguras = (e: BuildEvent): e is Extract<BuildEvent, { type: `bake${string}` }> => e.type.startsWith('bake');
+const esDeExport = (e: BuildEvent): e is Extract<BuildEvent, { type: `export${string}` }> => e.type.startsWith('export');
 const nombreDe = (rel: string) => rel.split('/').pop() ?? rel;
 const mensajeDe = (e: unknown) => (e instanceof Error ? e.message : String(e));
 export const BUILD_INICIAL: BuildState = {
@@ -330,6 +380,12 @@ export const useApp = create<AppState>()((set, get) => {
     figuras: null,
     figProgreso: null,
     figPendiente: false,
+    exportando: null,
+    exportPendiente: false,
+    vistaPdf: 'pdf',
+    fragmento: FRAGMENTO_INICIAL,
+    layout: 'ambos',
+    arbolEpoch: 0,
     quick: null,
     historial: [],
     histIdx: -1,
@@ -344,6 +400,7 @@ export const useApp = create<AppState>()((set, get) => {
       if (!inicializado) {
         inicializado = true;
         await b.onBuildEvent((e) => get().manejarEventoBuild(e));
+        await b.onFsChanged((archivos) => void get().alCambiarAfuera(archivos));
         await b.onCloseRequested(() => get().permitirCierre());
       }
       if (opts.open) {
@@ -391,6 +448,10 @@ export const useApp = create<AppState>()((set, get) => {
         figuras: null,
         figProgreso: null,
         figPendiente: false,
+        exportando: null,
+        exportPendiente: false,
+        vistaPdf: 'pdf',
+        fragmento: FRAGMENTO_INICIAL,
         quick: null,
         historial: [],
         histIdx: -1,
@@ -648,11 +709,29 @@ export const useApp = create<AppState>()((set, get) => {
     manejarEventoBuild(e) {
       if (esDeFiguras(e)) {
         get().manejarEventoFiguras(e);
+      } else if (esDeExport(e)) {
+        get().manejarEventoExport(e);
+      } else if (e.type === 'queued' && e.perfil === PERFIL_FRAGMENTO) {
+        set((s) => ({ fragmento: { ...s.fragmento, estado: 'compilando' } }));
       } else if (e.type === 'queued') {
         set((s) => ({ build: { ...s.build, pendiente: e.perfil } }));
       } else if (e.type === 'error') {
         set((s) => ({ build: { ...s.build, pendiente: null } }));
         get().avisar(e.message, 'error');
+      } else if (e.type === 'started' && (e.perfil === PERFIL_FRAGMENTO || e.perfil === PERFIL_EXPORT)) {
+        // Los builds de servicio (cada parte de una exportación, el fragmento) no son "el build": el log sí se muestra, pero el
+        // estado de la barra y el PDF del documento no se tocan.
+        logBuffer.clear();
+        logBuffer.append(`$ ${e.cmdline}\n`);
+        if (e.perfil === PERFIL_FRAGMENTO) set((s) => ({ fragmento: { ...s.fragmento, estado: 'compilando' } }));
+      } else if (e.type === 'finished' && e.perfil === PERFIL_FRAGMENTO) {
+        set((s) => ({
+          fragmento: e.ok && e.pdf ? { estado: 'ok', pdfRel: e.pdf, epoch: s.fragmento.epoch + 1, ms: e.ms } : { ...s.fragmento, estado: e.cancelled ? 'idle' : 'fail', ms: e.ms },
+        }));
+        logBuffer.append(`\n== el fragmento ${e.ok ? 'compiló' : e.cancelled ? 'se canceló' : 'falló'} en ${(e.ms / 1000).toFixed(1)} s\n`);
+        if (!e.ok && !e.cancelled) {
+          get().avisar('El fragmento no compiló.', 'error', { label: 'Ver los problemas', run: () => void get().cargarProblemas(PERFIL_FRAGMENTO, true) });
+        }
       } else if (e.type === 'started') {
         // El reintento después de reparar un .aux sigue en el mismo log: el panel no se borra.
         if (e.retry) logBuffer.append(`\n$ ${e.cmdline}\n`);
@@ -757,6 +836,182 @@ export const useApp = create<AppState>()((set, get) => {
         const s = get().build;
         if ((e.cancelled || e.error) && s.status === 'running' && s.id === null) set({ build: BUILD_INICIAL });
       }
+    },
+
+    // --- exportar, fragmento y layout (F7) ----------------------------------------------------------------------------
+
+    async exportarPartes(partes) {
+      const s = get();
+      if (!s.project?.config) return s.avisar('Abrí una carpeta primero.');
+      if (!s.rootFile) return s.avisar('Elegí la raíz del documento antes de exportar.');
+      if (s.project.parts.length === 0) return s.avisar('Este proyecto no tiene partes que exportar.');
+      // Se exporta lo que hay en disco: lo que se está editando se guarda antes (sin disparar la auto-compilación).
+      if (!(await get().guardarTodo({ auto: false }))) return;
+      const total = partes && partes.length ? partes.length : s.project.parts.length;
+      try {
+        const ack = await getBackend().exportParts(partes);
+        if (ack.kind === 'queued') set({ exportPendiente: true });
+        else set({ exportando: { hechas: 0, total, parte: null } });
+      } catch (e) {
+        get().avisar(mensajeDe(e), 'error');
+      }
+    },
+
+    async exportarParteActiva() {
+      const parte = get().parteActiva;
+      if (!parte) return get().avisar('El archivo abierto no es de ninguna parte: elegí qué exportar en el menú de compilación (Ctrl+Alt+T).');
+      await get().exportarPartes([parte]);
+    },
+
+    manejarEventoExport(e) {
+      if (e.type === 'exportqueued') {
+        set({ exportPendiente: true });
+      } else if (e.type === 'exportstarted') {
+        set({ exportPendiente: false, exportando: { hechas: 0, total: e.total, parte: null } });
+      } else if (e.type === 'exportprogress') {
+        set({ exportando: { hechas: e.done, total: e.total, parte: e.part } });
+        logBuffer.append(`\n== ${e.ok ? 'exportada' : 'falló'}: ${e.part}${e.num ? ` (n.º ${e.num})` : ''}${e.file ? ` -> ${e.file}` : ''}\n`);
+      } else if (e.type === 'exportfinished') {
+        set({ exportando: null, exportPendiente: false });
+        if (e.error) get().avisar(`No se pudo exportar: ${e.error}`, 'error');
+        else if (e.cancelled) get().avisar(`Exportación cancelada (${e.exported} de ${e.exported + e.failed} listas).`);
+        else if (e.failed > 0) {
+          get().avisar(`Se exportaron ${e.exported} partes y ${e.failed} fallaron.`, 'error', { label: 'Ver los problemas', run: () => void get().cargarProblemas(PERFIL_EXPORT, true) });
+        } else get().avisar(`Se exportaron ${e.exported} parte${e.exported === 1 ? '' : 's'} a ${e.dir}.`);
+      }
+    },
+
+    async previsualizarFragmento() {
+      const s = get();
+      const e = s.activeRel ? getDoc(s.activeRel) : undefined;
+      if (!s.project?.config || !s.rootFile) return s.avisar('Abrí un proyecto con raíz antes de pedir la vista previa de un fragmento.');
+      if (!e) return s.avisar('Abrí un archivo y poné el cursor adentro de lo que querés ver.');
+      const sel = e.state.selection.main;
+      const f = fragmentoDelCursor(e.state.doc.toString(), sel.from, sel.to);
+      if (!f) return s.avisar('No hay nada que compilar acá: elegí un texto o poné el cursor adentro de un entorno.');
+      set((x) => ({ vistaPdf: 'fragmento', fragmento: { ...x.fragmento, estado: 'compilando' } }));
+      try {
+        await getBackend().previewFragment(f.texto);
+      } catch (err) {
+        set((x) => ({ fragmento: { ...x.fragmento, estado: x.fragmento.epoch > 0 ? 'ok' : 'idle' } }));
+        get().avisar(mensajeDe(err), 'error');
+      }
+    },
+
+    mostrarVista(v) {
+      set({ vistaPdf: v });
+    },
+
+    alternarLayout() {
+      set((s) => ({ layout: SIGUIENTE_LAYOUT[s.layout] }));
+    },
+
+    menuCompilacion() {
+      const s = get();
+      const p = s.project;
+      if (!p?.config) return s.avisar('Abrí una carpeta primero.');
+      const cfg = p.config;
+      const items: QuickItem[] = [];
+      const corriendo = s.build.status === 'running' || s.exportando !== null || s.figProgreso !== null;
+      items.push({ id: 'compilar', titulo: 'Compilar el perfil activo', ejecutar: () => void get().compilar() });
+      if (corriendo) items.push({ id: 'cancelar', titulo: 'Cancelar lo que está corriendo', ejecutar: () => void get().cancelarBuild() });
+      for (const pr of cfg.profiles.filter((x) => !x.hidden)) {
+        items.push({
+          id: `perfil:${pr.id}`,
+          titulo: `Perfil: ${pr.label}${pr.id === p.state.activeProfile ? '  ✓' : ''}`,
+          detalle: pr.id,
+          ejecutar: () => void get().elegirPerfil(pr.id),
+        });
+      }
+      for (const v of cfg.variables) {
+        const actual = p.state.variables[v.name] ?? v.default ?? '';
+        items.push({
+          id: `variable:${v.name}`,
+          titulo: `Variable: ${v.label} = ${actual || '(sin valor)'}`,
+          detalle: 'cambiar…',
+          ejecutar: () =>
+            get().abrirQuick({
+              titulo: v.label,
+              placeholder: `Valor de ${v.name}…`,
+              items: v.choices.map((c) => ({ id: c, titulo: `${c}${c === actual ? '  ✓' : ''}`, ejecutar: () => get().setVariable(v.name, c) })),
+            }),
+        });
+      }
+      const parteActiva = s.parteActiva;
+      items.push({
+        id: 'exportar:activa',
+        titulo: `Exportar la parte del archivo abierto${parteActiva ? ` (${nombreDe(parteActiva)})` : ''}`,
+        detalle: `a ${cfg.exportDir}`,
+        ejecutar: () => get().exportarParteActiva(),
+      });
+      if (p.state.selection.length > 0 && p.parts.length > 0) {
+        items.push({ id: 'exportar:elegidas', titulo: `Exportar las partes elegidas (${p.state.selection.length})`, detalle: `a ${cfg.exportDir}`, ejecutar: () => get().exportarPartes(p.state.selection) });
+      }
+      if (p.parts.length > 0) {
+        items.push({ id: 'exportar:todas', titulo: `Exportar todas las partes (${p.parts.length})`, detalle: `a ${cfg.exportDir}`, ejecutar: () => get().exportarPartes() });
+      }
+      items.push({ id: 'fragmento', titulo: 'Vista previa del fragmento (selección o entorno actual)', ejecutar: () => get().previsualizarFragmento() });
+      items.push({ id: 'cocinar', titulo: 'Cocinar las figuras', ejecutar: () => get().cocinarFiguras() });
+      items.push({ id: 'limpiar', titulo: 'Limpiar el cache de figuras', ejecutar: () => get().limpiarFiguras() });
+      if (cfg.publishDir) items.push({ id: 'publicar', titulo: 'Publicar el PDF del último build', detalle: cfg.publishDir, ejecutar: () => get().publicar() });
+      get().abrirQuick({ titulo: 'Compilación', placeholder: 'Perfiles, variables, exportar, cocinar…', items });
+    },
+
+    async alCambiarAfuera(archivos) {
+      const p = get().project;
+      if (!p || archivos.length === 0) return;
+      const b = getBackend();
+      set((s) => ({ arbolEpoch: s.arbolEpoch + 1 }));
+      const cambiados: string[] = [];
+      const recargados: string[] = [];
+      const conflictos: string[] = [];
+      for (const rel of archivos) {
+        const e = getDoc(rel);
+        if (!e) {
+          cambiados.push(rel);
+          continue;
+        }
+        let r;
+        try {
+          r = await b.readFile(rel);
+        } catch (err) {
+          // Una pestaña cuyo archivo se borró afuera se deja como está: al guardar se vuelve a crear.
+          if (err instanceof BackendError && err.kind === 'not_found') get().avisar(`${nombreDe(rel)} se borró afuera de la aplicación.`);
+          continue;
+        }
+        // Lo que acaba de escribir la propia aplicación tiene la versión que ya conoce la pestaña: no es un cambio de afuera.
+        if (r.version === e.version) continue;
+        cambiados.push(rel);
+        if (estaModificado(e)) conflictos.push(rel);
+        else {
+          await get().recargarPestana(rel);
+          recargados.push(rel);
+        }
+      }
+      if (cambiados.length === 0) return;
+      void get().programarSimbolos();
+      // Un `\Capitulo` nuevo o un archivo que entró o salió del grafo: las partes se vuelven a leer.
+      if (cambiados.some((f) => /\.(tex|sty|cls)$/i.test(f))) await get().refrescarProyecto();
+      if (recargados.length) get().avisar(`Se recargó desde el disco: ${recargados.map(nombreDe).join(', ')}.`);
+      if (conflictos.length) {
+        get().avisar(`${conflictos.map(nombreDe).join(', ')} cambió afuera y tiene cambios sin guardar acá: al guardar te pregunto qué versión queda.`, 'error');
+      }
+      // Auto-compilación: un archivo que usa el perfil activo (un `.tex` generado por un script, una imagen) compila una sola vez.
+      const st = get().project?.state;
+      if (!st || st.autoCompile === 'manual' || !get().project?.config || !get().rootFile) return;
+      let compila = cambiados.length > 30; // un `git checkout`: no se pregunta archivo por archivo
+      for (const rel of compila ? [] : cambiados) {
+        try {
+          const info = await b.fileInfo(rel);
+          if (info.profileAuto && info.affects === 'yes') {
+            compila = true;
+            break;
+          }
+        } catch {
+          // un archivo que ya no está: no decide nada
+        }
+      }
+      if (compila) await get().compilar(undefined, { guardar: false });
     },
 
     // --- perfiles y partes ----------------------------------------------------------------------------------------------

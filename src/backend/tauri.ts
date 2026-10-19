@@ -30,7 +30,7 @@ export const tauriBackend: Backend = {
       open: string | null;
       root: string | null;
       smoke: boolean;
-      smoke_mode: 'f1' | 'f2' | 'f3' | 'f4' | 'f5' | 'f6';
+      smoke_mode: 'f1' | 'f2' | 'f3' | 'f4' | 'f5' | 'f6' | 'f7';
       smoke_file: string | null;
       smoke_pausa_ms: number;
     }>('launch_options');
@@ -65,6 +65,11 @@ export const tauriBackend: Backend = {
   readUserConfig: (name) => llamar('read_user_config', { name }),
   writeUserConfig: (name, text) => llamar('write_user_config', { name, text }),
   publish: (profile) => llamar('publish', { profile }),
+  exportParts: (parts) => llamar('export_parts', { parts: parts ?? null }),
+  previewFragment: (text) => llamar('preview_fragment', { text }),
+  async onFsChanged(cb) {
+    return listen<{ files: string[] }>('fs:changed', (e) => cb(e.payload.files));
+  },
   async onBuildEvent(cb) {
     const nombres = [
       'build:queued',
@@ -77,6 +82,10 @@ export const tauriBackend: Backend = {
       'figures:started',
       'figures:progress',
       'figures:finished',
+      'export:queued',
+      'export:started',
+      'export:progress',
+      'export:finished',
     ];
     const desuscribir = await Promise.all(nombres.map((n) => listen<BuildEvent>(n, (e) => cb(e.payload))));
     return () => desuscribir.forEach((d) => d());

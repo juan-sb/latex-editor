@@ -1,5 +1,5 @@
-import { useEffect } from 'react';
-import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
+import { useEffect, useRef } from 'react';
+import { Panel, PanelGroup, PanelResizeHandle, type ImperativePanelHandle } from 'react-resizable-panels';
 import { cargarKeybindings, manejarTecla } from './comandos/comandos';
 import { PdfPane } from './pdf/PdfPane';
 import { EditorPane } from './panels/EditorPane';
@@ -30,6 +30,24 @@ export default function App() {
   useAtajosGlobales();
   const init = useApp((s) => s.init);
   const avisar = useApp((s) => s.avisar);
+  const layout = useApp((s) => s.layout);
+  const editorRef = useRef<ImperativePanelHandle>(null);
+  const pdfRef = useRef<ImperativePanelHandle>(null);
+
+  // Ctrl+\ alterna entre editor y PDF, sólo el editor y sólo el PDF (10.1 del plan): el que no se ve se colapsa, no se desmonta,
+  // así conserva el estado (el texto, la página y el zoom).
+  useEffect(() => {
+    if (layout === 'ambos') {
+      editorRef.current?.expand();
+      pdfRef.current?.expand();
+    } else if (layout === 'editor') {
+      editorRef.current?.expand();
+      pdfRef.current?.collapse();
+    } else {
+      pdfRef.current?.expand();
+      editorRef.current?.collapse();
+    }
+  }, [layout]);
 
   useEffect(() => {
     init()
@@ -39,9 +57,11 @@ export default function App() {
         // El smoke de aceptación sólo se carga cuando se pide: no entra en el uso normal.
         if (opts.smoke && !smokeIniciado) {
           smokeIniciado = true;
-          void (opts.smokeMode === 'f6'
-            ? import('./smoke-f6').then((m) => m.correrSmokeF6(opts))
-            : opts.smokeMode === 'f5'
+          void (opts.smokeMode === 'f7'
+            ? import('./smoke-f7').then((m) => m.correrSmokeF7(opts))
+            : opts.smokeMode === 'f6'
+              ? import('./smoke-f6').then((m) => m.correrSmokeF6(opts))
+              : opts.smokeMode === 'f5'
               ? import('./smoke-f5').then((m) => m.correrSmokeF5(opts))
               : opts.smokeMode === 'f4'
               ? import('./smoke-f4').then((m) => m.correrSmokeF4(opts))
@@ -65,11 +85,11 @@ export default function App() {
               <Sidebar />
             </Panel>
             <PanelResizeHandle className="asa" />
-            <Panel defaultSize={42} minSize={18}>
+            <Panel ref={editorRef} defaultSize={42} minSize={18} collapsible collapsedSize={0}>
               <EditorPane />
             </Panel>
             <PanelResizeHandle className="asa" />
-            <Panel defaultSize={41} minSize={14}>
+            <Panel ref={pdfRef} defaultSize={41} minSize={14} collapsible collapsedSize={0}>
               <PdfPane />
             </Panel>
           </PanelGroup>

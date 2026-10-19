@@ -49,9 +49,14 @@ export function TopBar() {
   const guardarConfig = useApp((s) => s.guardarConfig);
   const mostrarPanel = useApp((s) => s.mostrarPanel);
   const figProgreso = useApp((s) => s.figProgreso);
+  const exportando = useApp((s) => s.exportando);
+  const exportPendiente = useApp((s) => s.exportPendiente);
+  const menuCompilacion = useApp((s) => s.menuCompilacion);
   const mostrarPanelInferior = useApp((s) => s.mostrarPanelInferior);
   const avisar = useApp((s) => s.avisar);
   const corriendo = build.status === 'running';
+  // Exportar es un trabajo más de la cola: mientras corre o espera, Cancelar lo corta.
+  const ocupado = corriendo || exportando !== null;
   const candidatas = project?.candidates ?? [];
   // La raíz puede ser un archivo que no está entre las candidatas (se eligió desde una pestaña).
   const opciones = rootFile && !candidatas.includes(rootFile) ? [rootFile, ...candidatas] : candidatas;
@@ -98,13 +103,16 @@ export function TopBar() {
                   {partes}
                 </button>
               )}
-              {corriendo ? (
+              {ocupado ? (
                 <button className="boton peligro" onClick={() => void cancelar()}>■ Cancelar</button>
               ) : (
                 <button className="boton primario" onClick={() => void compilar()} disabled={!rootFile} title="Guardar todo y compilar el perfil activo (Ctrl+Enter)">
                   ▶ Compilar
                 </button>
               )}
+              <button className="boton chico" onClick={() => menuCompilacion()} title="Menú de compilación: perfiles, variables, exportar, cocinar, limpiar (Ctrl+Alt+T)">
+                ☰
+              </button>
               <label className="raiz" title="Cuándo se compila solo">
                 Auto
                 <select value={estado.autoCompile} onChange={(e) => void setAutoCompile(e.target.value as AutoCompileMode)}>
@@ -158,6 +166,13 @@ export function TopBar() {
           {figProgreso && (
             <button className="figuras-barra" onClick={() => mostrarPanel('figuras')} title="Ver el panel Figuras">
               {textoDeProgreso(figProgreso)}
+            </button>
+          )}
+          {(exportando || exportPendiente) && (
+            <button className="exportar-barra" onClick={() => mostrarPanelInferior('log')} title="Ver el log de la exportación">
+              {exportando
+                ? `Exportando ${Math.min(exportando.hechas + 1, exportando.total)}/${exportando.total}${exportando.parte ? ` · listo «${nombreCorto(exportando.parte)}»` : ''}`
+                : 'Exportación en espera'}
             </button>
           )}
           <span className={`estado-build ${build.status}`}>

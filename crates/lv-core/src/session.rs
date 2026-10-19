@@ -20,6 +20,7 @@ use crate::cocinero::Cocinero;
 use crate::figcache;
 use crate::figures;
 use crate::fsio;
+use crate::fswatch;
 use crate::graph::{Affects, ProjectIndex};
 use crate::logparse::{self, Problem};
 use crate::project;
@@ -762,6 +763,29 @@ impl Session {
         let hay_build = self.builder.cancel();
         // Si lo que corre es una cocción de figuras, se la mata a ella (y a sus subcompilaciones).
         self.cancelar_bake() || hay_build || hay_export
+    }
+
+    // --- archivos cambiados afuera ----------------------------------------------------------------------------------------------
+
+    /// Las carpetas del proyecto que escribe la propia app y que el observador ignora: el cache de figuras, la exportación y la
+    /// publicación (si están adentro del proyecto).
+    fn carpetas_propias(&self) -> Vec<String> {
+        let Ok(d) = self.lock() else { return vec![] };
+        let Some(c) = d.config.as_ref() else { return vec![] };
+        let mut v = vec![c.figure_dir(), c.export_cfg().dir];
+        if let Some(p) = &c.publish {
+            v.push(p.dir.replace('\\', "/"));
+        }
+        v.retain(|x| !x.starts_with(".."));
+        v
+    }
+
+    /// Observa el proyecto (10.1): `aviso` recibe, en ráfagas, los archivos que cambiaron sin que los haya escrito la compilación. El
+    /// observador vive mientras viva el valor devuelto.
+    pub fn observar(self: &Arc<Self>, aviso: fswatch::Aviso) -> Result<fswatch::Observador> {
+        let me = Arc::downgrade(self);
+        let ignorar: fswatch::Ignorar = Arc::new(move |rel: &str| me.upgrade().is_some_and(|s| fswatch::ignorar_de_proyecto(rel, &s.carpetas_propias())));
+        fswatch::observar(&self.root, ignorar, aviso, std::time::Duration::from_millis(250))
     }
 
     // --- símbolos, búsqueda y reemplazo -----------------------------------------------------------------------------------------

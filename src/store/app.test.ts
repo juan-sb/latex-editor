@@ -21,7 +21,7 @@ import {
   type StatePatch,
 } from '../backend';
 import { cerrarTodos, editarDoc, getDoc, moverCursor, textoDe } from '../editor/docs';
-import { BUILD_INICIAL, BUSQUEDA_INICIAL, useApp } from './app';
+import { BUILD_INICIAL, BUSQUEDA_INICIAL, FRAGMENTO_INICIAL, useApp } from './app';
 import { logBuffer } from './logbuffer';
 import { pdfApi } from '../pdf/api';
 import { FILTRO_INICIAL } from './problemas';
@@ -70,6 +70,7 @@ function infoDe(o: Partial<ProjectInfo> = {}): ProjectInfo {
       profiles: [perfil('parcial', { partial: true, parts: 'selection' }), perfil('rapido', { partial: true }), perfil('completo', { autoCompile: false })],
       variables: [{ name: 'OpcionPie', label: 'Pie', choices: ['completo', 'autor'], default: 'completo' }],
       publishDir: '../PDF',
+      exportDir: '../PDF/Capítulos',
     },
     state: estadoBase(),
     parts: [
@@ -106,6 +107,11 @@ function falso(archivos: Record<string, Partial<Archivo> & { text: string }>, pr
     limpieza: { archivos: [], bytes: 0, figuras: 0 } as Limpieza,
     errorLimpieza: null as string | null,
     inverse: null as SyncInverse | null,
+    ackExport: { kind: 'started', id: 1 } as BuildAck,
+    errorExport: null as string | null,
+    /** Lo que `onBuildEvent` y `onFsChanged` le entregaron a la interfaz: los tests los disparan a mano. */
+    emitirBuild: (() => {}) as (e: BuildEvent) => void,
+    emitirCambios: (() => {}) as (archivos: string[]) => void,
   };
   const vista = (o: Partial<ProjectInfo> = {}) => infoDe({ ...proyecto, state: { ...estado }, ...o });
   const b: Backend = {
@@ -207,7 +213,23 @@ function falso(archivos: Record<string, Partial<Archivo> & { text: string }>, pr
       llamadas.push(`publish ${p}`);
       return { pdf: `C:/pub/${p}.pdf`, synctex: null };
     },
-    onBuildEvent: async () => () => {},
+    exportParts: async (partes) => {
+      llamadas.push(`exportar ${partes ? partes.join(',') : 'todas'}`);
+      if (control.errorExport) throw new BackendError('other', control.errorExport);
+      return control.ackExport;
+    },
+    previewFragment: async (text) => {
+      llamadas.push(`fragmento ${JSON.stringify(text)}`);
+      return { kind: 'started', id: 1 };
+    },
+    onBuildEvent: async (cb) => {
+      control.emitirBuild = cb;
+      return () => {};
+    },
+    onFsChanged: async (cb) => {
+      control.emitirCambios = cb;
+      return () => {};
+    },
     onCloseRequested: async () => () => {},
     exitApp: async () => {},
     smokeReadBytes: async () => new Uint8Array(),
@@ -249,6 +271,12 @@ beforeEach(() => {
     figuras: null,
     figProgreso: null,
     figPendiente: false,
+    exportando: null,
+    exportPendiente: false,
+    vistaPdf: 'pdf',
+    fragmento: FRAGMENTO_INICIAL,
+    layout: 'ambos',
+    arbolEpoch: 0,
     quick: null,
     historial: [],
     histIdx: -1,
@@ -1416,5 +1444,208 @@ describe('cache de figuras (F6)', () => {
     await vi.waitFor(() => expect(f.llamadas).toContain('figStatus'));
     expect(st().panelIzq).toBe('figuras');
     expect(st().figuras?.sello).toBe('6D06AB');
+  });
+});
+
+describe('exportar, fragmento, layout y archivos cambiados afuera (F7)', () => {
+  const evento = (e: Record<string, unknown>) => st().manejarEventoBuild(e as unknown as BuildEvent);
+  const terminado = (perfil: string, o: Record<string, unknown> = {}) => ({
+    type: 'finished', id: 3, perfil, ok: true, code: 0, cancelled: false, ms: 1500, pdf: `.lv/build/${perfil}/lv-${perfil}.pdf`, updated: true,
+    passes: 1, truncated_aux: false, repaired: false, errors: 0, warnings: 0, badboxes: 0, ...o,
+  });
+
+  it('exportar guarda todo antes, pide las partes y muestra el progreso con los eventos del core', async () => {
+    const f = falso({ 'a.tex': { text: 'uno\n' } });
+    await st().abrirArchivo('a.tex');
+    editarDoc('a.tex', { from: 0, to: 0, insert: 'x' });
+    await st().exportarPartes(['Secciones/Uno', 'Secciones/Dos']);
+    expect(f.llamadas).toContain('write a.tex');
+    expect(f.llamadas.indexOf('write a.tex')).toBeLessThan(f.llamadas.indexOf('exportar Secciones/Uno,Secciones/Dos'));
+    expect(st().exportando).toEqual({ hechas: 0, total: 2, parte: null });
+    evento({ type: 'exportprogress', id: 1, done: 1, total: 2, part: 'Secciones/Uno', num: '8', file: '../PDF/Capítulos/08 - Uno.pdf', ok: true });
+    expect(st().exportando).toEqual({ hechas: 1, total: 2, parte: 'Secciones/Uno' });
+    expect(logBuffer.slice(0, logBuffer.length).join('\n')).toContain('exportada: Secciones/Uno (n.º 8)');
+    evento({ type: 'exportfinished', id: 1, ok: true, cancelled: false, exported: 2, failed: 0, ms: 9000, dir: '../PDF/Capítulos', error: null });
+    expect(st().exportando).toBeNull();
+    expect(st().notice?.texto).toBe('Se exportaron 2 partes a ../PDF/Capítulos.');
+  });
+
+  it('exportar sin lista pide todas; con otro trabajo en curso queda esperando; y la exportación cancelada lo dice', async () => {
+    const f = falso({});
+    f.control.ackExport = { kind: 'queued' };
+    await st().exportarPartes();
+    expect(f.llamadas).toContain('exportar todas');
+    expect(st().exportPendiente).toBe(true);
+    expect(st().exportando).toBeNull();
+    evento({ type: 'exportstarted', id: 2, total: 3 });
+    expect(st().exportPendiente).toBe(false);
+    expect(st().exportando).toMatchObject({ total: 3 });
+    evento({ type: 'exportfinished', id: 2, ok: false, cancelled: true, exported: 1, failed: 0, ms: 10, dir: 'export', error: null });
+    expect(st().notice?.texto).toMatch(/cancelada \(1 de 1 listas\)/);
+  });
+
+  it('una exportación con partes que fallaron avisa y ofrece ver sus problemas', async () => {
+    const f = falso({});
+    evento({ type: 'exportfinished', id: 1, ok: false, cancelled: false, exported: 2, failed: 1, ms: 10, dir: 'export', error: null });
+    expect(st().notice).toMatchObject({ nivel: 'error' });
+    expect(st().notice?.texto).toMatch(/2 partes y 1 fallaron/);
+    st().notice?.accion?.run();
+    await vi.waitFor(() => expect(f.llamadas).toContain('problems export'));
+  });
+
+  it('exportar la parte activa necesita saber de qué parte es el archivo', async () => {
+    const f = falso({});
+    await st().exportarParteActiva();
+    expect(st().notice?.texto).toMatch(/no es de ninguna parte/);
+    expect(f.llamadas.some((l) => l.startsWith('exportar'))).toBe(false);
+    useApp.setState({ parteActiva: 'Secciones/Dos' });
+    await st().exportarParteActiva();
+    expect(f.llamadas).toContain('exportar Secciones/Dos');
+  });
+
+  it('los builds de servicio no tocan el estado del build ni el PDF del documento', () => {
+    falso({});
+    useApp.setState({ pdfRel: '.lv/build/parcial/lv-parcial.pdf', pdfEpoch: 4, build: { ...BUILD_INICIAL, status: 'ok', perfil: 'parcial' } });
+    evento({ type: 'started', id: 9, perfil: 'export', cmdline: 'latexmk export', retry: false });
+    expect(st().build).toMatchObject({ status: 'ok', perfil: 'parcial' });
+    evento({ type: 'started', id: 10, perfil: 'fragmento', cmdline: 'latexmk fragmento', retry: false });
+    expect(st().build).toMatchObject({ status: 'ok', perfil: 'parcial' });
+    expect(st().fragmento.estado).toBe('compilando');
+    evento(terminado('fragmento'));
+    expect(st().fragmento).toMatchObject({ estado: 'ok', pdfRel: '.lv/build/fragmento/lv-fragmento.pdf', epoch: 1 });
+    expect(st().pdfRel).toBe('.lv/build/parcial/lv-parcial.pdf');
+    expect(st().pdfEpoch).toBe(4);
+    expect(st().build.perfil).toBe('parcial');
+  });
+
+  it('un fragmento que no compila conserva el último bueno y lo dice', () => {
+    falso({});
+    useApp.setState({ fragmento: { estado: 'compilando', pdfRel: '.lv/build/fragmento/lv-fragmento.pdf', epoch: 2, ms: 1 } });
+    evento(terminado('fragmento', { ok: false, code: 12, pdf: null, errors: 1 }));
+    expect(st().fragmento).toMatchObject({ estado: 'fail', pdfRel: '.lv/build/fragmento/lv-fragmento.pdf', epoch: 2 });
+    expect(st().notice).toMatchObject({ nivel: 'error' });
+  });
+
+  it('la vista previa compila lo que rodea al cursor y muestra la pestaña Fragmento', async () => {
+    const f = falso({ 'a.tex': { text: 'Antes.\n\n\\begin{figure}\n\\begin{tikzpicture}\\draw (0,0);\\end{tikzpicture}\n\\caption{c}\n\\end{figure}\n' } });
+    await st().abrirArchivo('a.tex');
+    moverCursor('a.tex', textoDe('a.tex')!.indexOf('\\draw'));
+    await st().previsualizarFragmento();
+    const pedido = f.llamadas.find((l) => l.startsWith('fragmento '))!;
+    expect(JSON.parse(pedido.slice('fragmento '.length))).toBe('\\begin{figure}\n\\begin{tikzpicture}\\draw (0,0);\\end{tikzpicture}\n\\caption{c}\n\\end{figure}');
+    expect(st().vistaPdf).toBe('fragmento');
+    expect(st().fragmento.estado).toBe('compilando');
+    // Con selección, la selección.
+    moverCursor('a.tex', 0, 6);
+    await st().previsualizarFragmento();
+    expect(f.llamadas.filter((l) => l.startsWith('fragmento ')).pop()).toBe('fragmento "Antes."');
+    st().mostrarVista('pdf');
+    expect(st().vistaPdf).toBe('pdf');
+  });
+
+  it('sin archivo abierto la vista previa avisa y no pide nada', async () => {
+    const f = falso({});
+    await st().previsualizarFragmento();
+    expect(st().notice?.texto).toMatch(/Abrí un archivo/);
+    expect(f.llamadas.some((l) => l.startsWith('fragmento'))).toBe(false);
+  });
+
+  it('Ctrl+barra invertida recorre los tres layouts y vuelve al primero', () => {
+    falso({});
+    const visto = [st().layout];
+    for (let i = 0; i < 3; i++) {
+      st().alternarLayout();
+      visto.push(st().layout);
+    }
+    expect(visto).toEqual(['ambos', 'editor', 'pdf', 'ambos']);
+  });
+
+  it('el menú de compilación lista perfiles, variables, exportar, cocinar y limpiar, y las variables se eligen en un segundo selector', async () => {
+    const f = falso({});
+    useApp.setState({ parteActiva: 'Secciones/Uno' });
+    st().menuCompilacion();
+    const items = st().quick!.items;
+    const ids = items.map((i) => i.id);
+    expect(ids).toEqual(expect.arrayContaining(['compilar', 'perfil:parcial', 'perfil:rapido', 'perfil:completo', 'variable:OpcionPie', 'exportar:activa', 'exportar:elegidas', 'exportar:todas', 'fragmento', 'cocinar', 'limpiar', 'publicar']));
+    expect(items.find((i) => i.id === 'perfil:parcial')!.titulo).toContain('✓');
+    expect(items.find((i) => i.id === 'variable:OpcionPie')!.titulo).toBe('Variable: Pie = completo');
+    // Elegir una variable abre otro selector con sus opciones y la aplica.
+    await items.find((i) => i.id === 'variable:OpcionPie')!.ejecutar();
+    expect(st().quick!.items.map((i) => i.id)).toEqual(['completo', 'autor']);
+    await st().quick!.items[1].ejecutar();
+    expect(f.llamadas).toContain('estado {"variables":{"OpcionPie":"autor"}}');
+    // Exportar desde el menú: la parte del archivo abierto.
+    st().menuCompilacion();
+    await st().quick!.items.find((i) => i.id === 'exportar:activa')!.ejecutar();
+    expect(f.llamadas).toContain('exportar Secciones/Uno');
+  });
+
+  describe('archivos cambiados afuera', () => {
+    it('una pestaña sin cambios se recarga sola; la que tiene cambios avisa y no se pisa', async () => {
+      const f = falso({ 'a.tex': { text: 'uno\n' }, 'b.tex': { text: 'dos\n' } });
+      await st().abrirArchivo('a.tex');
+      await st().abrirArchivo('b.tex');
+      editarDoc('b.tex', { from: 0, to: 0, insert: 'mío ' });
+      f.disco.set('a.tex', { text: 'uno cambiado\n', version: 'v7', eol: 'lf', bom: false, mixed: false });
+      f.disco.set('b.tex', { text: 'dos cambiado\n', version: 'v8', eol: 'lf', bom: false, mixed: false });
+      await st().alCambiarAfuera(['a.tex', 'b.tex']);
+      expect(textoDe('a.tex')).toBe('uno cambiado\n');
+      expect(tab('a.tex').dirty).toBe(false);
+      expect(textoDe('b.tex')).toBe('mío dos\n');
+      expect(st().notice).toMatchObject({ nivel: 'error' });
+      expect(st().notice?.texto).toMatch(/b\.tex cambió afuera y tiene cambios sin guardar/);
+      expect(st().arbolEpoch).toBe(1);
+    });
+
+    it('lo que acaba de escribir la propia aplicación (la versión que ya conoce la pestaña) no es un cambio de afuera', async () => {
+      const f = falso({ 'a.tex': { text: 'uno\n' } });
+      await st().abrirArchivo('a.tex');
+      editarDoc('a.tex', { from: 0, to: 0, insert: 'x' });
+      await st().guardar('a.tex');
+      f.llamadas.length = 0;
+      Object.assign(f.estado, { autoCompile: 'save' });
+      useApp.setState({ project: infoDe({ state: { ...f.estado } }) });
+      await st().alCambiarAfuera(['a.tex']);
+      expect(f.llamadas).toEqual(['read a.tex']);
+      expect(st().notice).toBeNull();
+    });
+
+    it('un archivo que usa el perfil activo compila una sola vez aunque cambien varios', async () => {
+      const f = falso({});
+      Object.assign(f.estado, { autoCompile: 'save' });
+      useApp.setState({ project: infoDe({ state: { ...f.estado } }) });
+      await st().alCambiarAfuera(['Secciones/fig_a.tex', 'Secciones/fig_b.tex', 'Herramientas/preview/x.tex']);
+      expect(f.llamadas.filter((l) => l === 'build')).toHaveLength(1);
+    });
+
+    it('con la compilación en manual, o si el archivo no entra en el perfil, no se compila', async () => {
+      const f = falso({});
+      await st().alCambiarAfuera(['Secciones/fig_a.tex']);
+      expect(f.llamadas).not.toContain('build');
+      Object.assign(f.estado, { autoCompile: 'save' });
+      useApp.setState({ project: infoDe({ state: { ...f.estado } }) });
+      f.control.fileInfo = () => ({ part: 'Secciones/Dos', affects: 'other_part', profileAuto: true, partsChanged: false });
+      await st().alCambiarAfuera(['Secciones/Dos.tex']);
+      f.control.fileInfo = () => ({ part: null, affects: 'unrelated', profileAuto: true, partsChanged: false });
+      await st().alCambiarAfuera(['notas.txt']);
+      expect(f.llamadas).not.toContain('build');
+    });
+
+    it('un .tex que cambia las partes vuelve a leer el proyecto', async () => {
+      const f = falso({});
+      f.llamadas.length = 0;
+      await st().alCambiarAfuera(['libro_cuerpo.tex']);
+      expect(f.llamadas).toContain('getProject');
+    });
+
+    it('una ráfaga enorme (un git checkout) compila sin preguntar archivo por archivo', async () => {
+      const f = falso({});
+      Object.assign(f.estado, { autoCompile: 'save' });
+      useApp.setState({ project: infoDe({ state: { ...f.estado } }) });
+      f.llamadas.length = 0;
+      await st().alCambiarAfuera(Array.from({ length: 40 }, (_, i) => `x${i}.tex`));
+      expect(f.llamadas.filter((l) => l.startsWith('info '))).toHaveLength(0);
+      expect(f.llamadas.filter((l) => l === 'build')).toHaveLength(1);
+    });
   });
 });

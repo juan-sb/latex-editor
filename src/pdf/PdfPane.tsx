@@ -1,17 +1,24 @@
 // Panel del PDF: barra de zoom y navegación y el visor. El visor lo maneja `PdfViewerHost` (imperativo); acá sólo se lo
 // crea, se le pasan los bytes cuando el store avisa que hay un PDF nuevo y se refleja su estado en la barra.
+//
+// Hay dos visores, cada uno en su pestaña: el del documento y el de la vista previa de un fragmento (8.2 del plan). Cada uno
+// conserva su página y su zoom mientras se mira el otro (el que no se ve queda con `display: none`; PDF.js lo reacomoda al volver,
+// porque el visor sigue el tamaño de su contenedor). Las funciones de SyncTeX (→ PDF, ← Código, Seguir) son del documento.
 import { useEffect, useRef, useState } from 'react';
 import { getBackend } from '../backend';
 import { useApp } from '../store/app';
-import { pdfApi } from './api';
 import { pdfActual, PdfViewerHost, type PdfEstado } from './viewer';
+import { pdfApi } from './api';
 
 const VACIO: PdfEstado = { pagina: 0, paginas: 0, escala: 1, modo: 'ancho' };
 
 export function PdfPane() {
   const areaRef = useRef<HTMLDivElement>(null);
   const hostRef = useRef<PdfViewerHost | null>(null);
-  const [estado, setEstado] = useState<PdfEstado>(VACIO);
+  const fragAreaRef = useRef<HTMLDivElement>(null);
+  const fragHostRef = useRef<PdfViewerHost | null>(null);
+  const [estadoDoc, setEstadoDoc] = useState<PdfEstado>(VACIO);
+  const [estadoFrag, setEstadoFrag] = useState<PdfEstado>(VACIO);
   const [cargando, setCargando] = useState(false);
   const [paginaTexto, setPaginaTexto] = useState('');
   const pdfRel = useApp((s) => s.pdfRel);
@@ -23,19 +30,28 @@ export function PdfPane() {
   const irAlPdf = useApp((s) => s.irAlPdf);
   const irAlCodigo = useApp((s) => s.irAlCodigo);
   const setSeguir = useApp((s) => s.setSeguir);
+  const vista = useApp((s) => s.vistaPdf);
+  const mostrarVista = useApp((s) => s.mostrarVista);
+  const fragmento = useApp((s) => s.fragmento);
 
   useEffect(() => {
     const host = new PdfViewerHost(areaRef.current!);
     hostRef.current = host;
     pdfActual.host = host;
     pdfApi.host = host;
-    const baja = host.suscribir((e) => setEstado(e));
+    const baja = host.suscribir((e) => setEstadoDoc(e));
+    const frag = new PdfViewerHost(fragAreaRef.current!);
+    fragHostRef.current = frag;
+    const bajaFrag = frag.suscribir((e) => setEstadoFrag(e));
     return () => {
       baja();
+      bajaFrag();
       pdfActual.host = null;
       pdfApi.host = null;
       hostRef.current = null;
+      fragHostRef.current = null;
       void host.destruir();
+      void frag.destruir();
     };
   }, []);
 
@@ -59,23 +75,49 @@ export function PdfPane() {
     };
   }, [pdfRel, pdfEpoch, avisar]);
 
+  // Lo mismo con el fragmento: `fragmento.epoch` sube con cada vista previa que compiló.
+  useEffect(() => {
+    if (!fragmento.pdfRel || fragmento.epoch === 0) return;
+    let vigente = true;
+    (async () => {
+      try {
+        const bytes = await getBackend().readPdf(fragmento.pdfRel!);
+        if (vigente) await fragHostRef.current?.cargar(bytes, `${fragmento.pdfRel}#${fragmento.epoch}`);
+      } catch (e) {
+        avisar(`No se pudo mostrar el fragmento: ${e instanceof Error ? e.message : e}`, 'error');
+      }
+    })();
+    return () => {
+      vigente = false;
+    };
+  }, [fragmento.pdfRel, fragmento.epoch, avisar]);
+
+  const enFragmento = vista === 'fragmento';
+  const estado = enFragmento ? estadoFrag : estadoDoc;
   useEffect(() => setPaginaTexto(estado.pagina ? String(estado.pagina) : ''), [estado.pagina]);
 
   // Ctrl + rueda hace zoom (el listener no puede ser pasivo: tiene que impedir el zoom de la página entera).
   useEffect(() => {
-    const el = areaRef.current!;
-    const rueda = (e: WheelEvent) => {
-      if (!e.ctrlKey) return;
-      e.preventDefault();
-      if (e.deltaY < 0) hostRef.current?.zoomMas();
-      else hostRef.current?.zoomMenos();
+    const poner = (el: HTMLElement, host: () => PdfViewerHost | null) => {
+      const rueda = (e: WheelEvent) => {
+        if (!e.ctrlKey) return;
+        e.preventDefault();
+        if (e.deltaY < 0) host()?.zoomMas();
+        else host()?.zoomMenos();
+      };
+      el.addEventListener('wheel', rueda, { passive: false });
+      return () => el.removeEventListener('wheel', rueda);
     };
-    el.addEventListener('wheel', rueda, { passive: false });
-    return () => el.removeEventListener('wheel', rueda);
+    const a = poner(areaRef.current!, () => hostRef.current);
+    const b = poner(fragAreaRef.current!, () => fragHostRef.current);
+    return () => {
+      a();
+      b();
+    };
   }, []);
 
+  const h = enFragmento ? fragHostRef.current : hostRef.current;
   const teclas = (e: React.KeyboardEvent) => {
-    const h = hostRef.current;
     if (!h) return;
     if (e.ctrlKey && (e.key === '=' || e.key === '+')) h.zoomMas();
     else if (e.ctrlKey && e.key === '-') h.zoomMenos();
@@ -85,10 +127,20 @@ export function PdfPane() {
     e.preventDefault();
   };
 
-  const h = hostRef.current;
   const hayPdf = estado.paginas > 0;
+  const hayFragmento = fragmento.estado !== 'idle' || fragmento.epoch > 0;
   return (
     <div className="pdf-panel">
+      {hayFragmento && (
+        <div className="pdf-pestanas" role="tablist">
+          <button role="tab" aria-selected={!enFragmento} className={`pdf-pestana${enFragmento ? '' : ' activa'}`} onClick={() => mostrarVista('pdf')}>
+            Documento
+          </button>
+          <button role="tab" aria-selected={enFragmento} className={`pdf-pestana${enFragmento ? ' activa' : ''}`} onClick={() => mostrarVista('fragmento')} title="Vista previa del fragmento (Ctrl+Alt+F)">
+            Fragmento{fragmento.estado === 'compilando' ? ' …' : fragmento.estado === 'fail' ? ' ✘' : ''}
+          </button>
+        </div>
+      )}
       <div className="pdf-barra">
         <button className="icono-boton" disabled={!hayPdf} onClick={() => h?.anterior()} title="Página anterior">◀</button>
         <input
@@ -109,22 +161,25 @@ export function PdfPane() {
         <span className="zoom">{Math.round(estado.escala * 100)} %</span>
         <button className="icono-boton" disabled={!hayPdf} onClick={() => h?.zoomMas()} title="Acercar (Ctrl+=)">+</button>
         <span className="sep" />
-        <button className="boton chico" onClick={() => void irAlPdf()} title="Ir al PDF desde el cursor (Ctrl+Alt+J)">
+        <button className="boton chico" disabled={enFragmento} onClick={() => void irAlPdf()} title="Ir al PDF desde el cursor (Ctrl+Alt+J)">
           → PDF
         </button>
-        <button className="boton chico" disabled={!hayPdf} onClick={() => void irAlCodigo()} title="Ir al código desde el centro de lo que se ve (o doble clic en el PDF)">
+        <button className="boton chico" disabled={!hayPdf || enFragmento} onClick={() => void irAlCodigo()} title="Ir al código desde el centro de lo que se ve (o doble clic en el PDF)">
           ← Código
         </button>
-        <button className={`boton chico${seguir ? ' activo' : ''}`} onClick={() => setSeguir(!seguir)} title="Seguir al cursor: el PDF acompaña al cursor del editor">
+        <button className={`boton chico${seguir ? ' activo' : ''}`} disabled={enFragmento} onClick={() => setSeguir(!seguir)} title="Seguir al cursor: el PDF acompaña al cursor del editor">
           Seguir
         </button>
         <span className="sep" />
         <button className={`boton chico${estado.modo === 'ancho' ? ' activo' : ''}`} disabled={!hayPdf} onClick={() => h?.ajustarAncho()} title="Ajustar al ancho de la página (W)">
           Ancho
         </button>
-        {cargando && <span className="cargando">Cargando…</span>}
+        {(cargando || (enFragmento && fragmento.estado === 'compilando')) && <span className="cargando">{enFragmento ? 'Compilando…' : 'Cargando…'}</span>}
       </div>
-      <div className={`pdf-area${stale ? ' desactualizado' : ''}`} ref={areaRef}
+      <div
+        className={`pdf-area${stale ? ' desactualizado' : ''}`}
+        ref={areaRef}
+        style={enFragmento ? { display: 'none' } : undefined}
         tabIndex={0}
         onKeyDown={teclas}
         // Doble clic (o Ctrl+clic) en el PDF: al código (6.3 del plan).
@@ -139,11 +194,23 @@ export function PdfPane() {
         }}
       >
         {/* Los contenedores de cada visor los arma `PdfViewerHost` adentro de este elemento. */}
-        {!hayPdf && !cargando && (
+        {!estadoDoc.paginas && !cargando && (
           <div className="vacio">{status === 'running' ? 'Compilando…' : 'Todavía no hay PDF. Compilá con Ctrl+Enter.'}</div>
         )}
       </div>
-      {stale && hayPdf && <div className="pdf-aviso">El último build no terminó bien: este es el último PDF bueno.</div>}
+      <div className="pdf-area" ref={fragAreaRef} style={enFragmento ? undefined : { display: 'none' }} tabIndex={0} onKeyDown={teclas}>
+        {!estadoFrag.paginas && (
+          <div className="vacio">
+            {fragmento.estado === 'compilando'
+              ? 'Compilando el fragmento…'
+              : fragmento.estado === 'fail'
+                ? 'El fragmento no compiló: mirá el log o los problemas.'
+                : 'Elegí un entorno o una selección y pedí la vista previa (Ctrl+Alt+F).'}
+          </div>
+        )}
+      </div>
+      {stale && estadoDoc.paginas > 0 && !enFragmento && <div className="pdf-aviso">El último build no terminó bien: este es el último PDF bueno.</div>}
+      {enFragmento && fragmento.estado === 'fail' && <div className="pdf-aviso">El último fragmento no compiló: este es el último que salió bien.</div>}
     </div>
   );
 }

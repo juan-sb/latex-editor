@@ -11,6 +11,7 @@ pub mod error;
 pub mod figcache;
 pub mod figures;
 pub mod fsio;
+pub mod fswatch;
 pub mod graph;
 pub mod logparse;
 pub mod procs;

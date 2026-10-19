@@ -13,6 +13,8 @@ export function PartsPanel() {
   const compilarParte = useApp((s) => s.compilarParte);
   const compilarActiva = useApp((s) => s.compilarParteActiva);
   const abrirArchivo = useApp((s) => s.abrirArchivo);
+  const exportarPartes = useApp((s) => s.exportarPartes);
+  const exportando = useApp((s) => s.exportando);
 
   if (!project) return <div className="vacio">Abrí una carpeta para empezar.</div>;
   const partes = project.parts;
@@ -60,9 +62,19 @@ export function PartsPanel() {
               </span>
               <button className="icono-boton" onClick={() => void solo(p.name)} disabled={!eligen} title="Sólo esta parte">1</button>
               <button className="icono-boton" onClick={() => void compilarParte(p.name)} title="Compilar sólo esta parte">▶</button>
+              <button className="icono-boton" onClick={() => void exportarPartes([p.name])} disabled={exportando !== null} title={`Exportar esta parte a PDF (a ${project.config?.exportDir ?? 'export'})`}>⇩</button>
             </div>
           );
         })}
+      </div>
+      <div className="partes-exportar">
+        <span>Exportar a PDF</span>
+        <button className="boton chico" onClick={() => void exportarPartes(seleccion)} disabled={exportando !== null || seleccion.length === 0} title="Las partes tildadas, cada una a su PDF con el número de capítulo impreso">
+          Elegidas
+        </button>
+        <button className="boton chico" onClick={() => void exportarPartes()} disabled={exportando !== null} title={`Todas las partes, a ${project.config?.exportDir ?? 'export'}`}>
+          Todas
+        </button>
       </div>
       <div className="partes-pie">
         {seleccion.length} de {partes.length} elegidas · {project.indexMs} ms de índice

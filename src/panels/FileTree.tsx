@@ -32,6 +32,14 @@ export function FileTree() {
     if (project) void listar('');
   }, [project?.root, listar]);
 
+  // Algo cambió afuera de la aplicación (el observador del core): se vuelven a leer las carpetas abiertas, sin vaciar el árbol.
+  const arbolEpoch = useApp((s) => s.arbolEpoch);
+  useEffect(() => {
+    if (arbolEpoch === 0) return;
+    abiertas.forEach((r) => void listar(r));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [arbolEpoch]);
+
   const alternar = (rel: string) => {
     setAbiertas((a) => {
       const n = new Set(a);
