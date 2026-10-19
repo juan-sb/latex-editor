@@ -4,6 +4,7 @@
 import { useEffect, useState } from 'react';
 import type { AutoCompileMode, OutsideSave } from '../backend';
 import { perfilActivo, useApp } from '../store/app';
+import { resumen } from '../store/problemas';
 import { Menu } from './Menu';
 
 function Cronometro({ activo }: { activo: boolean }) {
@@ -46,6 +47,7 @@ export function TopBar() {
   const publicar = useApp((s) => s.publicar);
   const guardarConfig = useApp((s) => s.guardarConfig);
   const mostrarPanel = useApp((s) => s.mostrarPanel);
+  const mostrarPanelInferior = useApp((s) => s.mostrarPanelInferior);
   const avisar = useApp((s) => s.avisar);
   const corriendo = build.status === 'running';
   const candidatas = project?.candidates ?? [];
@@ -145,6 +147,11 @@ export function TopBar() {
                 )}
               </Menu>
             </>
+          )}
+          {(build.status === 'ok' || build.status === 'fail') && resumen(build.errors ?? 0, build.warnings ?? 0, 0) && (
+            <button className={`problemas-resumen ${build.errors ? 'error' : 'warning'}`} onClick={() => mostrarPanelInferior('problemas')} title="Ver los problemas">
+              {resumen(build.errors ?? 0, build.warnings ?? 0, 0)}
+            </button>
           )}
           <span className={`estado-build ${build.status}`}>
             {build.status === 'running' && (

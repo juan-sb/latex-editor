@@ -1760,6 +1760,7 @@ dependencies = [
  "dunce",
  "indexmap 2.14.2",
  "md-5",
+ "regex",
  "serde",
  "serde_json",
  "tempfile",

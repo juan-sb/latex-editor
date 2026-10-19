@@ -54,6 +54,10 @@ pub enum BuildEvent {
         passes: u32,
         truncated_aux: bool,
         repaired: bool,
+        /// Lo que encontró el parser del log (`logparse`): el `Builder` los deja en 0 y la sesión los completa.
+        errors: u32,
+        warnings: u32,
+        badboxes: u32,
     },
     /// Algo que no es un build (por ejemplo, el pendiente no se pudo lanzar).
     Error { message: String },
@@ -501,6 +505,9 @@ impl Builder {
                 passes: contador.pasadas,
                 truncated_aux: contador.truncado,
                 repaired: reintento,
+                errors: 0,
+                warnings: 0,
+                badboxes: 0,
             });
         });
         Ok(id)

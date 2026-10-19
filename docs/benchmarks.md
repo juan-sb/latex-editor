@@ -174,3 +174,35 @@ El smoke de F1 (`scripts/aceptacion-f1.ps1`) sigue pasando en los tres proyectos
 
 - **`.fls` no sirve para saber qué compiló un parcial**: `\include` abre los `.tex` de las partes excluidas para comprobar que existen. Se miró la cantidad de páginas del log.
 - **El smoke de F2 tuvo una carrera propia que lo colgó**: cuando sube `pdfEpoch`, el visor todavía muestra el PDF viejo (con sus páginas pintadas y un solo contenedor), así que "PDF visible" se daba por cumplido antes de tiempo y la búsqueda del marcador corría contra un documento que el swap destruía a mitad de camino. Ahora el host guarda la etiqueta del último PDF cargado (`<ruta>#<época>`) y el smoke espera a que coincida con la del store; `paginaConTexto` además aborta si el visor cambia.
+
+## F3: errores y avisos
+
+### El parser sobre logs reales
+
+Medido con el ejemplo `cargo run --release -p lv-core --example problemas`, tres corridas.
+
+| Log | Tamaño | Tiempo | Problemas |
+|---|---|---|---|
+| Rápido del libro (`.lv/build/rapido/lv-rapido.log`, 2706 líneas) | 127 KB | **4,1 a 4,3 ms** | 0 errores, 0 avisos, **51 cajas mal llenas** (un `grep` de `^(Overfull|Underfull) ` del log da 51) |
+| `fixtures/logs/errores.log` (un pasada con errores) | 17,8 KB | ~1 ms | 2 errores, 5 avisos, 1 caja mal llena |
+
+El libro está limpio de errores y avisos; lo único que hay son cajas mal llenas (51, de las que sólo 4 tienen línea; las otras son `\vbox ... while \output is active` y no se pueden ubicar). Hay que recordar que el parser corre una vez por build, así que 4 ms no pesan.
+
+### Smoke de aceptación de F3 (dentro de la app real)
+
+`scripts/aceptacion-f3.ps1` sobre `fixtures/errores`, 10 pasos, unos 14 s en total (casi todo es el build con errores, 3,0 s, y el siguiente tras arreglar, 6,7 s por biber): conteo del log en el `Finished`, panel abierto solo, clic que abre el archivo en su línea, gutter en las líneas 2 y 4, F8 y Mayús+F8 con eventos de teclado reales dando la vuelta, filtro de cajas mal llenas, marcas que bajan una línea cuando se inserta una arriba (11 y 16 pasan a 12 y 17), arreglo con el error de biber que queda (`refs.bib:10`) y archivo faltante con su línea (`faltante.tex:5`).
+
+### Pruebas
+
+| | Cantidad | Qué cubren |
+|---|---|---|
+| `cargo test -p lv-core` | 96 | lo de F2 (84) más el parser (11: logs reales, atribución del overfull al archivo que se cerró, resúmenes descartados, biber y makeindex, bytes inválidos y rutas con espacios y paréntesis sueltos, errores sin `file-line-error`, deduplicación) y el conteo en el `Finished` de la sesión |
+| `cargo test -p lv-core --features tex` | +5 | sin cambios |
+| `npx vitest run` | 69 | lo de F2 (54) más filtro, F8, marcas por archivo, resumen, el campo de CodeMirror (las marcas siguen a las ediciones) y el store de problemas |
+
+### Hallazgos de F3
+
+- **Los `Info` de LaTeX no terminan en una línea en blanco**: la versión que saltaba cada bloque de mensaje hasta la línea en blanco se tragaba el `)` que cierra un archivo y desalineaba la pila (todos los avisos quedaban sin archivo). Los `Info` son ahora la línea más sus continuaciones `(paquete)`.
+- **latexmk no corre biber ni makeindex con errores de LaTeX**: sus problemas aparecen recién cuando los de LaTeX están resueltos (ver 5.8).
+- **Un nombre de módulo `aux` no se puede versionar en Windows** (nombre reservado): se descubrió al commitear F2 y se renombró a `auxiliares`.
+- Una captura de pantalla de la ventana para revisar el aspecto tomó el programa que estaba encima y no la app: se borró de inmediato y quedó escrito en `CLAUDE.md` que no se hacen capturas ni se mueve el mouse para probar.

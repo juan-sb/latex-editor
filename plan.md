@@ -273,6 +273,17 @@ Objetivo: que alternar perfiles no cueste pasadas extra ni pueda dejar un `.aux`
 - Parser del log propio: pila de archivos por paréntesis, `archivo:línea:` de `-file-line-error`, `l.<n>`, `LaTeX Warning: Reference ... on input line N`, `Overfull/Underfull \hbox ... at lines a--b`, citas indefinidas, errores de biber y makeindex (sus propios logs).
 - Marcas en el gutter, subrayado de la línea, panel de problemas con filtro, F8 / Shift+F8 para recorrerlos.
 - Tests con logs reales guardados en `fixtures/logs/`.
+- **Implementado en F3 (`lv-core::logparse`), con lo que enseñaron los logs reales:**
+  - Los errores salen en dos formatos a la vez: `archivo:línea: mensaje` (`-file-line-error`) y `! mensaje` con `l.<n>` (un `! LaTeX Error: File ... not found` sale con `!` aunque lo demás no, y su línea la trae el `Emergency stop` que sigue).
+  - Los archivos se abren con `(ruta` y se cierran con `)`, con espacios y tildes **sin comillas** (`(Secciones/Aproximación de Butterworth.tex`). Sólo cuentan los paréntesis de las líneas de traza: un bloque de mensaje (error, aviso, overfull) termina en la primera línea en blanco, pero los `Info` no terminan en una en blanco (los sigue un `)` que cierra un archivo): son la línea más sus continuaciones `(paquete)`. Un `(` abre archivo sólo si lo que sigue parece una ruta.
+  - Un `Overfull ... at lines 2--1` (final antes que principio) es un párrafo que terminó al empezar otro archivo: se atribuye al archivo que se cerró recién y no al nuevo.
+  - El log trae bytes que no son UTF-8 (palabras cortadas con guion en T1): se decodifica con reemplazo.
+  - Los `Overfull`/`Underfull` son una severidad aparte (`badbox`) y el panel los trae apagados. Los `\vbox ... while \output is active` no tienen línea y no se atribuyen a ningún archivo.
+  - Los avisos de resumen ("There were undefined references", "Please (re)run Biber", "Label(s) may have changed") no son problemas del documento y se descartan.
+  - biber (`.blg`): `ERROR -`/`WARN -`, con el archivo de la última línea `Found BibTeX data source` y sin la ruta del temporal; makeindex (`.ilg`): `!!` y `## Warning`.
+  - **latexmk no corre biber ni makeindex mientras haya errores de LaTeX** (sale con "Errors, so I did not complete making targets"): los problemas de la bibliografía y del índice aparecen recién cuando los de LaTeX están resueltos. No se pasa `-f` para forzarlo: haría pasadas de más con el documento roto.
+  - El parser lee el `.log` de la **última pasada** del perfil (el que deja latexmk en `.lv/build/<perfil>/`): los avisos de pasadas anteriores ya resueltos no cuentan, que es lo que se quiere. El libro completo (127 KB de log, 51 cajas mal llenas) se parsea en 4 ms.
+  - La sesión lee los problemas una vez por build, los deja en el `Finished` como conteo (`errors`, `warnings`, `badboxes`) y la interfaz pide la lista con `problems(perfil)`. Un build cancelado no reemplaza los problemas del anterior.
 
 ---
 
@@ -521,8 +532,10 @@ Aceptación (sobre el libro, cache tibio): parcial ≤ 3,5 s de guardar a PDF vi
 
 ### F3. Errores y avisos
 
-- [ ] Parser de log con fixtures reales (error de sintaxis, `\ref` indefinida, cita indefinida, overfull, error de biber, archivo faltante).
-- [ ] Gutter, panel de problemas, F8/Shift+F8, contador en la barra.
+- [x] Parser de log con fixtures reales (`fixtures/errores` y `fixtures/logs/`: error de sintaxis, comando indefinido, `\ref` y cita indefinidas, overfull, error de biber, archivo faltante; 11 pruebas más las de la sesión).
+- [x] Gutter (marcador por severidad y línea subrayada, que sigue a las ediciones), panel de problemas con filtro por severidad y texto (pestaña Problemas | Log, que se abre sola cuando hay errores), F8 / Mayús+F8, contador en la barra superior.
+
+Aceptación: el smoke `scripts/aceptacion-f3.ps1` (dentro de la app real sobre `fixtures/errores`) pasa los 10 pasos: build que falla con el conteo del log, panel, clic, gutter, F8 con teclado real, filtros, marcas que siguen a una edición, arreglo con el error de biber que queda y archivo faltante con su línea. Sobre el libro: el parser cuenta 51 cajas mal llenas, igual que un `grep` del log, en 4 ms.
 
 ### F4. SyncTeX
 

@@ -7,6 +7,7 @@ import { highlightSelectionMatches, search, searchKeymap } from '@codemirror/sea
 import { EditorState, type Extension } from '@codemirror/state';
 import { drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers } from '@codemirror/view';
 import { tags as t } from '@lezer/highlight';
+import { extensionProblemas } from './problemas';
 
 /**
  * La gramática de LaTeX. En F1 es el modo `stex` de `@codemirror/legacy-modes`; la definitiva (que sepa si el cursor
@@ -57,6 +58,7 @@ export function extensionesBase(): Extension[] {
     latexLanguage(),
     syntaxHighlighting(resaltado),
     keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap]),
+    extensionProblemas(),
     tema,
   ];
 }

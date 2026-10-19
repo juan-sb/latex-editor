@@ -16,6 +16,7 @@ use crate::config::{self, comandos_por_defecto, infer_config, PartsSel, ProjectC
 use crate::error::{Error, Result};
 use crate::fsio;
 use crate::graph::{Affects, ProjectIndex};
+use crate::logparse::{self, Problem};
 use crate::project;
 use serde::Serialize;
 use std::collections::BTreeSet;
@@ -128,6 +129,8 @@ pub struct Session {
     pendiente: Mutex<Option<String>>,
     /// Las partes que la interfaz vio por última vez (`view`/`refresh`): `file_info` avisa cuando ya no coinciden.
     partes_vistas: Mutex<Vec<String>>,
+    /// Los problemas del último build de cada perfil (`logparse`), para que la interfaz los pida sin releer el log.
+    problemas: Mutex<std::collections::HashMap<String, Vec<Problem>>>,
 }
 
 /// Todo lo que hace falta para lanzar un build, resuelto bajo el candado de los datos.
@@ -182,6 +185,7 @@ impl Session {
             datos: Mutex::new(Datos { root_file, config_saved: config.is_some(), config, config_error, state, index: None }),
             pendiente: Mutex::new(None),
             partes_vistas: Mutex::new(vec![]),
+            problemas: Mutex::new(Default::default()),
         };
         {
             let mut d = s.datos.lock().map_err(|_| otro("estado envenenado"))?;
@@ -527,25 +531,44 @@ impl Session {
     }
 
     fn al_terminar(self: &Arc<Self>, ev: BuildEvent, perfil: &str, cache_dir: &str, retry: bool) {
+        let mut ev = ev;
         let BuildEvent::Finished { id, ok, cancelled, truncated_aux, .. } = &ev else { return };
+        let (id, ok, cancelled, truncated_aux) = (*id, *ok, *cancelled, *truncated_aux);
         aux::move_md5(&self.root, perfil, cache_dir);
-        if *ok {
+        if ok {
             aux::clear_suspect(&self.root, perfil);
         }
-        if !*ok && *truncated_aux && !*cancelled && !retry {
+        if !ok && truncated_aux && !cancelled && !retry {
             (self.sink)(BuildEvent::Log {
-                id: *id,
+                id,
                 text: format!("\n== .aux truncado en el perfil «{perfil}»: borro sus auxiliares y reintento una vez\n"),
             });
             let n = aux::clean_profile(&self.root, perfil, cache_dir);
-            (self.sink)(BuildEvent::Log { id: *id, text: format!("== {n} auxiliares borrados\n") });
+            (self.sink)(BuildEvent::Log { id, text: format!("== {n} auxiliares borrados\n") });
             match self.lanzar(perfil, true) {
                 Ok(_) => return, // el `Finished` de este intento no se informa: el del reintento lo reemplaza
                 Err(e) => (self.sink)(BuildEvent::Error { message: format!("no se pudo reintentar: {e}") }),
             }
         }
+        // Los problemas del log se leen una vez por build y viajan resumidos en el `Finished`; la lista la pide la interfaz.
+        let encontrados = logparse::problems_of_profile(&self.root, perfil);
+        if let BuildEvent::Finished { errors, warnings, badboxes, .. } = &mut ev {
+            let c = logparse::count(&encontrados);
+            (*errors, *warnings, *badboxes) = (c.errors, c.warnings, c.badboxes);
+        }
+        if let Ok(mut m) = self.problemas.lock() {
+            m.insert(perfil.to_string(), encontrados);
+        }
         (self.sink)(ev);
         self.correr_pendiente();
+    }
+
+    /// Los problemas del último build del perfil. Si todavía no se leyeron (la app recién abrió el proyecto), se leen del log.
+    pub fn problems(&self, perfil: &str) -> Vec<Problem> {
+        if let Some(p) = self.problemas.lock().ok().and_then(|m| m.get(perfil).cloned()) {
+            return p;
+        }
+        logparse::problems_of_profile(&self.root, perfil)
     }
 
     fn correr_pendiente(self: &Arc<Self>) {

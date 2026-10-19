@@ -11,6 +11,10 @@
   --acento-texto: #ffffff;
   --acento-suave: #dff1f2;
   --peligro: #c0392b;
+  --aviso: #b7791f;
+  --fondo-error: rgba(192, 57, 43, 0.10);
+  --fondo-aviso: rgba(183, 121, 31, 0.10);
+  --fondo-badbox: rgba(120, 120, 120, 0.08);
   --activo: #e4eef5;
   --hover: #eaeef2;
   --pdf-fondo: #8a8f98;
@@ -44,6 +48,10 @@
     --acento-texto: #06191b;
     --acento-suave: #12383b;
     --peligro: #f0766a;
+    --aviso: #e0b050;
+    --fondo-error: rgba(240, 118, 106, 0.14);
+    --fondo-aviso: rgba(224, 176, 80, 0.12);
+    --fondo-badbox: rgba(150, 150, 150, 0.08);
     --activo: #26313a;
     --hover: #232a31;
     --pdf-fondo: #4a4f57;
@@ -210,3 +218,34 @@ button, input, select { font: inherit; color: inherit; }
 .pdf-area.desactualizado { box-shadow: inset 0 0 0 3px var(--peligro); }
 .pdf-area.desactualizado .pdf-contenedor { filter: saturate(0.6); }
 .pdf-aviso { padding: 3px 10px; font-size: 12px; background: var(--peligro); color: #fff; }
+
+/* panel inferior con pestañas y panel de problemas */
+.inferior { height: 100%; display: flex; flex-direction: column; background: var(--panel); }
+.inferior-pestanas { display: flex; border-bottom: 1px solid var(--borde); }
+.inferior-pestanas button { background: none; border: none; padding: 4px 14px; cursor: pointer; color: var(--texto-suave); border-bottom: 2px solid transparent; }
+.inferior-pestanas button:hover { background: var(--hover); }
+.inferior-pestanas button.activa { color: var(--texto); border-bottom-color: var(--acento); }
+.inferior-pestanas .contador { margin-left: 6px; padding: 0 6px; border-radius: 8px; font-size: 11px; color: #fff; }
+.inferior-pestanas .contador.error { background: var(--peligro); }
+.inferior-pestanas .contador.warning { background: var(--aviso); }
+.inferior-cuerpo { flex: 1; min-height: 0; }
+.problemas { height: 100%; display: flex; flex-direction: column; }
+.problemas-cabecera { display: flex; align-items: center; gap: 14px; padding: 3px 10px; border-bottom: 1px solid var(--borde); flex-wrap: wrap; }
+.problemas-cabecera .filtro { display: flex; align-items: center; gap: 4px; cursor: pointer; white-space: nowrap; }
+.problemas-cabecera .filtro.error { color: var(--peligro); }
+.problemas-cabecera .filtro.warning { color: var(--aviso); }
+.problemas-cabecera .buscar { background: var(--panel); border: 1px solid var(--borde); border-radius: 4px; padding: 2px 6px; width: 180px; }
+.problemas-cabecera .detalle { margin-left: auto; color: var(--texto-suave); font-size: 12px; }
+.problemas-lista { flex: 1; overflow: auto; }
+.problema { display: flex; align-items: baseline; gap: 8px; padding: 2px 10px; cursor: pointer; border-left: 3px solid transparent; }
+.problema:hover { background: var(--hover); }
+.problema.actual { background: var(--activo); border-left-color: var(--acento); }
+.problema .icono { width: 12px; flex: none; text-align: center; font-size: 10px; }
+.problema.error .icono { color: var(--peligro); }
+.problema.warning .icono { color: var(--aviso); }
+.problema.badbox .icono { color: var(--texto-suave); }
+.problema .mensaje { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.problema .donde { color: var(--texto-suave); font-family: var(--fuente-mono); font-size: 12px; flex: none; }
+.problemas-resumen { background: none; border: 1px solid currentColor; border-radius: 10px; padding: 1px 9px; cursor: pointer; font-size: 12px; }
+.problemas-resumen.error { color: var(--peligro); }
+.problemas-resumen.warning { color: var(--aviso); }

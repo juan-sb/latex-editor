@@ -76,6 +76,7 @@ function Editor() {
   const anterior = useRef<string | null>(null);
   const activeRel = useApp((s) => s.activeRel);
   const epoch = useApp((s) => s.tabs.find((t) => t.rel === s.activeRel)?.epoch ?? 0);
+  const irA = useApp((s) => s.irA);
 
   useEffect(() => {
     const view = new EditorView({ parent: ref.current! });
@@ -107,6 +108,15 @@ function Editor() {
     if (doc.scroll) view.dispatch({ effects: doc.scroll });
     view.focus();
   }, [activeRel, epoch]);
+
+  // Un pedido de ir a una línea (un clic en el panel de problemas, F8): se atiende cuando la pestaña ya está en la vista.
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view || !irA || irA.rel !== activeRel) return;
+    const linea = view.state.doc.line(Math.min(Math.max(1, irA.line), view.state.doc.lines));
+    view.dispatch({ selection: { anchor: linea.from }, effects: EditorView.scrollIntoView(linea.from, { y: 'center' }) });
+    view.focus();
+  }, [irA, activeRel, epoch]);
 
   return <div className={`editor${activeRel ? '' : ' oculto'}`} ref={ref} />;
 }

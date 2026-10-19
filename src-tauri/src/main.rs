@@ -7,6 +7,7 @@ use lv_core::build::{BuildEvent, Sink};
 use lv_core::config::{State, StatePatch};
 use lv_core::error::{Error, ErrorInfo};
 use lv_core::fsio::{self, FileRead, WriteOutcome};
+use lv_core::logparse::Problem;
 use lv_core::project::{self, DirEntry};
 use lv_core::session::{BuildAck, FileInfo, ProjectView, Published, Session};
 use serde::Serialize;
@@ -39,7 +40,7 @@ struct LaunchOptions {
     open: Option<String>,
     root: Option<String>,
     smoke: bool,
-    /// `f1` (por defecto) o `f2`: qué smoke de aceptación corre la interfaz con `LV_SMOKE`.
+    /// `f1` (por defecto), `f2` o `f3`: qué smoke de aceptación corre la interfaz con `LV_SMOKE`.
     smoke_mode: String,
     smoke_file: Option<String>,
     smoke_pausa_ms: u64,
@@ -60,6 +61,7 @@ async fn launch_options() -> LaunchOptions {
         smoke: smoke.is_some(),
         smoke_mode: match smoke.as_deref() {
             Some("f2") => "f2".into(),
+            Some("f3") => "f3".into(),
             _ => "f1".into(),
         },
         smoke_file: var("LV_SMOKE_FILE"),
@@ -201,6 +203,13 @@ async fn build(state: TauriState<'_, AppState>, profile: Option<String>) -> Res<
         .map_err(|e| e.info())
 }
 
+/// Los problemas del último build del perfil (errores, avisos y cajas mal llenas), con archivo y línea.
+#[tauri::command]
+async fn problems(state: TauriState<'_, AppState>, profile: String) -> Res<Vec<Problem>> {
+    let s = sesion(&state)?;
+    tauri::async_runtime::spawn_blocking(move || s.problems(&profile)).await.map_err(|e| otro(&e.to_string()))
+}
+
 #[tauri::command]
 async fn cancel_build(state: TauriState<'_, AppState>) -> Res<bool> {
     Ok(sesion(&state)?.cancel())
@@ -238,6 +247,7 @@ fn main() {
             read_pdf,
             build,
             cancel_build,
+            problems,
             publish,
         ])
         .build(tauri::generate_context!())

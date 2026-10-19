@@ -1,0 +1,18 @@
+\documentclass{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish]{babel}
+\usepackage[backend=biber]{biblatex}
+\addbibresource{refs.bib}
+
+% Fixture con problemas a propósito (F3): cada archivo trae uno o más de los que el parser tiene que encontrar.
+\begin{document}
+
+Una referencia rota \ref{no-existe} y una cita rota \cite{fantasma}; la cita buena es \cite{real}.
+
+\input{capitulo-ok}
+\input{capitulo-roto}
+
+\printbibliography
+
+\end{document}

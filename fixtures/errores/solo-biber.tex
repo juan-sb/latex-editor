@@ -1,0 +1,12 @@
+\documentclass{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[backend=biber]{biblatex}
+\addbibresource{refs.bib}
+
+% Sin errores de LaTeX: sólo los de biber (la entrada `roto` de refs.bib no cierra bien y se cita una clave que no existe).
+\begin{document}
+Una cita buena \cite{real} y otra a una clave que no existe \cite{fantasma}.
+
+\printbibliography
+\end{document}

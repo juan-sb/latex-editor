@@ -8,6 +8,7 @@ pub mod config;
 pub mod error;
 pub mod fsio;
 pub mod graph;
+pub mod logparse;
 pub mod procs;
 pub mod project;
 pub mod session;

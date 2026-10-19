@@ -30,7 +30,7 @@ export const tauriBackend: Backend = {
       open: string | null;
       root: string | null;
       smoke: boolean;
-      smoke_mode: 'f1' | 'f2';
+      smoke_mode: 'f1' | 'f2' | 'f3';
       smoke_file: string | null;
       smoke_pausa_ms: number;
     }>('launch_options');
@@ -52,6 +52,7 @@ export const tauriBackend: Backend = {
   },
   build: (profile) => llamar('build', { profile: profile ?? null }),
   cancelBuild: () => llamar('cancel_build'),
+  problems: (profile) => llamar('problems', { profile }),
   publish: (profile) => llamar('publish', { profile }),
   async onBuildEvent(cb) {
     const nombres = ['build:queued', 'build:started', 'build:log', 'build:finished', 'build:error'];

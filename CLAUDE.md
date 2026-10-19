@@ -42,6 +42,8 @@ Si un spike o la implementación contradicen el plan, se actualiza `plan.md` y s
 - `cargo run -p lv-core --example build -- <carpeta> [perfil] [--root <raíz.tex>] [--parts "A,B"]`: compila con el mismo motor que la app (perfiles, partes, sembrado, reparación), sin interfaz.
 - `scripts/aceptacion-f1.ps1 -Proyecto libro-tc|libro-include|articulo-simple`: el smoke de F1 dentro de la app real (`LV_SMOKE=1`).
 - `scripts/aceptacion-f2.ps1`: el smoke de F2 sobre una copia tibia del libro (`LV_SMOKE=f2`, unos 6 minutos): perfiles, sembrado, guardar a PDF visible, cola, cancelar, recarga sin parpadeo, publicar. Necesita el cache de figuras tibio de `fixtures\libro-tc`.
+- `scripts/aceptacion-f3.ps1`: el smoke de F3 sobre `fixtures/errores` (`LV_SMOKE=f3`, medio minuto): problemas, gutter, F8, panel.
+- `cargo run -p lv-core --example problemas -- <raíz> <log|blg|ilg>`: lo que el parser saca de un log, para mirar uno nuevo antes de escribir su prueba. Los logs de `fixtures/logs/` se generan con `--example build` sobre `fixtures/errores` (copiado a `spikes/work`).
 - `scripts/compilar-fixtures.ps1`: compila los fixtures con latexmk a secas.
 - Variables de entorno de la app: `LV_OPEN` (carpeta a abrir), `LV_ROOT` (raíz del documento), `LV_SMOKE` (`1` o `f2`), `LV_SMOKE_FILE`, `LV_SMOKE_OUT`, `LV_LATEXMK` (otro ejecutable en lugar de latexmk).
 
@@ -75,6 +77,7 @@ inspo/         referencia, intocable, no se versiona
 
 - **No escribir código con backslashes a través de un heredoc de bash** (ni siquiera Rust o TS: `\\` llega como `\`). Siempre Write/Edit. Es lo mismo que pasa con el LaTeX.
 - **Nada de archivos o módulos llamados `aux`, `con`, `nul`, `prn`, `com1`...** (nombres reservados de Windows): el archivo se crea y compila, pero `git add` falla y no se puede ni borrar con las herramientas comunes (hay que usar la ruta `\\?\` por .NET). Por eso el módulo de aislamiento de auxiliares es `auxiliares`.
+- **No sacar capturas de pantalla de la ventana ni mover el mouse para probar la interfaz**: la captura toma lo que esté encima (una vez salió otro programa de la persona) y el mouse pisa lo que esté haciendo. La interfaz se prueba con los smokes dentro de la app.
 - `cargo` y `rustc` no están en el `PATH` de las herramientas: `$env:PATH = "$env:USERPROFILE\.cargo\bin;" + $env:PATH` antes de usar cargo en PowerShell.
 - En un script `.ps1`, `"...$var: ..."` es una referencia a una unidad: va `${var}:`.
 

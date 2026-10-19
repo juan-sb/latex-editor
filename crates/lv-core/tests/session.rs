@@ -324,6 +324,28 @@ fn cuenta_las_pasadas_que_informa_latexmk() {
 }
 
 #[test]
+fn el_finished_trae_el_conteo_de_problemas_del_log_y_la_lista_se_pide_aparte() {
+    let d = proyecto();
+    let script = format!(
+        "{OK}Set-Content \"$d/lv-$p.log\" @('main.tex:3: Undefined control sequence.', 'l.3 \\foo', '', 'LaTeX Warning: Reference `x'' on page 1 undefined on input line 4.', '', 'Overfull \\hbox (3pt too wide) in paragraph at lines 5--6', '')\n"
+    );
+    let (s, r) = abrir(&d, &script);
+    s.request_build(Some("rapido")).unwrap();
+    esperar_finales(&r, 1, 60);
+    match &finales(&r)[0] {
+        BuildEvent::Finished { errors, warnings, badboxes, .. } => assert_eq!((*errors, *warnings, *badboxes), (1, 1, 1)),
+        _ => unreachable!(),
+    }
+    let p = s.problems("rapido");
+    assert_eq!(p.len(), 3, "{p:#?}");
+    assert_eq!((p[0].file.as_deref(), p[0].line), (Some("main.tex"), Some(3)));
+    // Un perfil que nunca compiló no tiene problemas, y la lista se puede pedir sin haber compilado en esta sesión.
+    assert!(s.problems("completo").is_empty());
+    let (s2, _) = abrir(&d, OK);
+    assert_eq!(s2.problems("rapido").len(), 3, "se lee del log que dejó el build");
+}
+
+#[test]
 fn mueve_los_md5_del_perfil_al_cache_compartido_al_terminar() {
     let d = proyecto();
     let p = d.path();

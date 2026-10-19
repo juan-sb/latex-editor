@@ -8,6 +8,7 @@ import {
   type BuildEvent,
   type Eol,
   type FileInfo,
+  type Problema,
   type ProfileInfo,
   type ProjectInfo,
   type StatePatch,
@@ -15,6 +16,7 @@ import {
 import { cerrarTodos, editarDoc, getDoc } from '../editor/docs';
 import { BUILD_INICIAL, useApp } from './app';
 import { logBuffer } from './logbuffer';
+import { FILTRO_INICIAL } from './problemas';
 
 interface Archivo {
   text: string;
@@ -84,6 +86,7 @@ function falso(archivos: Record<string, Partial<Archivo> & { text: string }>, pr
     demoraEscritura: null as Promise<void> | null,
     fileInfo: ((): FileInfo => ({ part: null, affects: 'yes', profileAuto: true, partsChanged: false })) as (rel: string) => FileInfo,
     ack: { kind: 'started', id: 1 } as BuildAck,
+    problemas: [] as Problema[],
   };
   const vista = (o: Partial<ProjectInfo> = {}) => infoDe({ ...proyecto, state: { ...estado }, ...o });
   const b: Backend = {
@@ -138,6 +141,10 @@ function falso(archivos: Record<string, Partial<Archivo> & { text: string }>, pr
       llamadas.push('cancel');
       return true;
     },
+    problems: async (p) => {
+      llamadas.push(`problems ${p}`);
+      return control.problemas;
+    },
     publish: async (p) => {
       llamadas.push(`publish ${p}`);
       return { pdf: `C:/pub/${p}.pdf`, synctex: null };
@@ -175,6 +182,11 @@ beforeEach(() => {
     pdfStale: false,
     panelIzq: 'archivos',
     parteActiva: null,
+    problems: [],
+    filtro: FILTRO_INICIAL,
+    problemaIdx: -1,
+    panelInferior: 'log',
+    irA: null,
     notice: null,
     dialog: null,
   });
@@ -410,6 +422,9 @@ describe('eventos del build', () => {
     passes: 2,
     truncated_aux: false,
     repaired: false,
+    errors: 0,
+    warnings: 0,
+    badboxes: 0,
     ...o,
   });
 
@@ -785,5 +800,79 @@ describe('cierre de la ventana y cambio de proyecto', () => {
     falso({}, { configSaved: false });
     await st().abrirProyecto('/libro');
     expect(st().notice?.texto).toContain('no tiene latexviewer.json');
+  });
+});
+
+describe('problemas del build', () => {
+  const prob = (o: Partial<Problema>): Problema => ({ severity: 'error', kind: 'tex', message: 'Undefined control sequence.', file: 'cap.tex', line: 2, line_end: null, context: '', ...o });
+  const finMal = (o: Partial<Extract<BuildEvent, { type: 'finished' }>> = {}): BuildEvent => ({
+    type: 'finished', id: 1, perfil: 'rapido', ok: false, code: 12, cancelled: false, ms: 900, pdf: null, updated: false, passes: 1, truncated_aux: false, repaired: false, errors: 1, warnings: 1, badboxes: 0, ...o,
+  });
+
+  it('al terminar un build se piden los problemas del perfil y, si hubo errores, se abre el panel', async () => {
+    const f = falso({});
+    f.control.problemas = [prob({}), prob({ severity: 'warning', message: 'w', line: 5 })];
+    st().manejarEventoBuild(finMal());
+    await vi.waitFor(() => expect(st().problems).toHaveLength(2));
+    expect(f.llamadas).toContain('problems rapido');
+    expect(st().panelInferior).toBe('problemas');
+    expect(st().build).toMatchObject({ errors: 1, warnings: 1, badboxes: 0 });
+  });
+
+  it('sin errores el panel no se abre solo, y un build cancelado no toca los problemas', async () => {
+    const f = falso({});
+    f.control.problemas = [prob({ severity: 'warning' })];
+    st().manejarEventoBuild(finMal({ ok: true, code: 0, errors: 0 }));
+    await vi.waitFor(() => expect(st().problems).toHaveLength(1));
+    expect(st().panelInferior).toBe('log');
+    f.llamadas.length = 0;
+    st().manejarEventoBuild(finMal({ cancelled: true }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(f.llamadas).not.toContain('problems rapido');
+    expect(st().problems).toHaveLength(1);
+  });
+
+  it('ir a un problema abre el archivo y pide la línea; uno sin ubicación avisa', async () => {
+    falso({ 'cap.tex': { text: 'a\nb\nc\n' } });
+    useApp.setState({ problems: [prob({}), prob({ file: null, line: null, message: 'del sistema' })] });
+    await st().irAProblema(0);
+    expect(st().activeRel).toBe('cap.tex');
+    expect(st().irA).toMatchObject({ rel: 'cap.tex', line: 2 });
+    expect(st().problemaIdx).toBe(0);
+    useApp.setState({ filtro: { ...FILTRO_INICIAL, avisos: true } });
+    await st().irAProblema(1);
+    expect(st().notice?.texto).toContain('no tiene una ubicación');
+  });
+
+  it('F8 recorre los visibles y da la vuelta; cambiar el filtro reinicia el recorrido', async () => {
+    falso({ 'cap.tex': { text: 'a\nb\nc\nd\ne\n' }, 'main.tex': { text: 'x' } });
+    useApp.setState({ problems: [prob({ line: 2 }), prob({ severity: 'warning', file: 'main.tex', line: 1, message: 'w' }), prob({ line: 4, message: 'otro' })] });
+    await st().saltarProblema(1);
+    expect(st().problemaIdx).toBe(0);
+    await st().saltarProblema(1);
+    expect(st().activeRel).toBe('main.tex');
+    await st().saltarProblema(1);
+    await st().saltarProblema(1);
+    expect(st().problemaIdx).toBe(0);
+    await st().saltarProblema(-1);
+    expect(st().problemaIdx).toBe(2);
+    st().setFiltro({ avisos: false });
+    expect(st().problemaIdx).toBe(-1);
+    await st().saltarProblema(-1); // desde cero hacia atrás: el último de los visibles
+    expect(st().problemaIdx).toBe(1);
+  });
+
+  it('sin problemas, F8 avisa en lugar de hacer nada', async () => {
+    falso({});
+    await st().saltarProblema(1);
+    expect(st().notice?.texto).toContain('No hay problemas');
+  });
+
+  it('abrir otro proyecto limpia los problemas', async () => {
+    falso({});
+    useApp.setState({ problems: [prob({})], problemaIdx: 0 });
+    await st().abrirProyecto('/otro');
+    expect(st().problems).toEqual([]);
+    expect(st().problemaIdx).toBe(-1);
   });
 });

@@ -3,7 +3,7 @@ import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import { PdfPane } from './pdf/PdfPane';
 import { EditorPane } from './panels/EditorPane';
 import { Sidebar } from './panels/Sidebar';
-import { LogPanel } from './panels/LogPanel';
+import { BottomPanel } from './panels/BottomPanel';
 import { Aviso, Dialogo } from './panels/Overlays';
 import { TopBar } from './panels/TopBar';
 import { useApp } from './store/app';
@@ -32,6 +32,11 @@ function useAtajosGlobales() {
         e.preventDefault();
         e.stopPropagation();
         void store.compilarParteActiva();
+      } else if (e.key === 'F8' && !ctrl && !e.altKey) {
+        // Recorrer los problemas del último build (F8 siguiente, Mayús+F8 anterior).
+        e.preventDefault();
+        e.stopPropagation();
+        void store.saltarProblema(e.shiftKey ? -1 : 1);
       } else if (e.key === 'F5' || (ctrl && (k === 'r' || k === 'p'))) {
         e.preventDefault();
         e.stopPropagation();
@@ -56,7 +61,11 @@ export default function App() {
         // El smoke de aceptación sólo se carga cuando se pide: no entra en el uso normal.
         if (opts.smoke && !smokeIniciado) {
           smokeIniciado = true;
-          void (opts.smokeMode === 'f2' ? import('./smoke-f2').then((m) => m.correrSmokeF2(opts)) : import('./smoke').then((m) => m.correrSmoke(opts)));
+          void (opts.smokeMode === 'f3'
+            ? import('./smoke-f3').then((m) => m.correrSmokeF3(opts))
+            : opts.smokeMode === 'f2'
+              ? import('./smoke-f2').then((m) => m.correrSmokeF2(opts))
+              : import('./smoke').then((m) => m.correrSmoke(opts)));
         }
       })
       .catch((e) => avisar(`No se pudo iniciar: ${e instanceof Error ? e.message : e}`, 'error'));
@@ -83,7 +92,7 @@ export default function App() {
         </Panel>
         <PanelResizeHandle className="asa horizontal" />
         <Panel defaultSize={24} minSize={6} collapsible>
-          <LogPanel />
+          <BottomPanel />
         </Panel>
       </PanelGroup>
       <Aviso />

@@ -3,8 +3,10 @@
 // metadatos de las pestañas; con documentos de 200 KB, tenerlos en el store re-renderizaría todo en cada tecla.
 import { EditorState, Text, type ChangeSpec, type StateEffect } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
-import type { Eol, FileRead } from '../backend';
+import type { Eol, FileRead, Problema } from '../backend';
+import { marcasDe } from '../store/problemas';
 import { extensionesBase } from './extensions';
+import { setProblemas } from './problemas';
 
 export interface DocEntry {
   rel: string;
@@ -63,6 +65,7 @@ export function crearDoc(rel: string, r: FileRead): DocEntry {
   entry.state = construirEstado(entry, r.text);
   entry.saved = entry.state.doc;
   docs.set(rel, entry);
+  aplicarProblemasA(entry);
   return entry;
 }
 
@@ -77,6 +80,7 @@ export function hacerEditable(rel: string): void {
   if (!e || !e.readOnly) return;
   e.readOnly = false;
   e.state = construirEstado(e, e.state.doc, e.state.selection);
+  aplicarProblemasA(e);
 }
 
 /** Registra que `texto` (la versión `doc` del documento) ya está en disco con `version`. */
@@ -111,4 +115,22 @@ export function editarDoc(rel: string, changes: ChangeSpec): void {
   const antes = estaModificado(e);
   e.state = e.state.update({ changes }).state;
   if (estaModificado(e) !== antes) alCambiarDirty(rel, estaModificado(e));
+}
+
+
+// --- problemas del último build -------------------------------------------------------------------------------------
+
+/** Los problemas que se marcan ahora (ya filtrados por lo que el panel muestra). */
+let problemasVigentes: Problema[] = [];
+
+function aplicarProblemasA(e: DocEntry): void {
+  const efecto = setProblemas.of(marcasDe(problemasVigentes, e.rel));
+  if (vistaActiva && vistaActiva.rel === e.rel) vistaActiva.view.dispatch({ effects: efecto });
+  else e.state = e.state.update({ effects: efecto }).state;
+}
+
+/** Marca los problemas en todos los documentos abiertos (y en los que se abran después). */
+export function aplicarProblemas(lista: Problema[]): void {
+  problemasVigentes = lista;
+  docs.forEach(aplicarProblemasA);
 }

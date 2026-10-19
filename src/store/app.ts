@@ -11,11 +11,13 @@ import {
   type FileInfo,
   type LaunchOptions,
   type OutsideSave,
+  type Problema,
   type ProfileInfo,
   type ProjectInfo,
   type StatePatch,
 } from '../backend';
 import {
+  aplicarProblemas,
   cerrarDoc,
   cerrarTodos,
   crearDoc,
@@ -27,6 +29,7 @@ import {
   setEditListener,
 } from '../editor/docs';
 import { logBuffer } from './logbuffer';
+import { FILTRO_INICIAL, siguiente, visibles, type FiltroProblemas } from './problemas';
 
 export interface TabMeta {
   rel: string;
@@ -56,6 +59,10 @@ export interface BuildState {
   repaired: boolean;
   /** Perfil que quedó en cola mientras corre otro build (corre una sola vez al terminar). */
   pendiente: string | null;
+  /** Lo que encontró el parser del log en el último build (null mientras no hay ninguno). */
+  errors: number | null;
+  warnings: number | null;
+  badboxes: number | null;
 }
 
 export interface DialogButton {
@@ -80,6 +87,7 @@ export interface Notice {
 
 export type ResultadoGuardado = 'guardado' | 'sin-cambios' | 'cancelado' | 'error';
 export type PanelIzquierdo = 'archivos' | 'partes';
+export type PanelInferior = 'problemas' | 'log';
 
 interface AppState {
   project: ProjectInfo | null;
@@ -95,6 +103,13 @@ interface AppState {
   panelIzq: PanelIzquierdo;
   /** La parte del archivo activo (para resaltarla en el panel de partes). */
   parteActiva: string | null;
+  /** Los problemas del último build, el filtro del panel y cuál se visitó último (índice dentro de los visibles). */
+  problems: Problema[];
+  filtro: FiltroProblemas;
+  problemaIdx: number;
+  panelInferior: PanelInferior;
+  /** Pedido de ir a una línea de un archivo: lo atiende el editor cuando la pestaña ya está activa. */
+  irA: { rel: string; line: number; n: number } | null;
   notice: Notice | null;
   dialog: DialogState | null;
 
@@ -125,6 +140,11 @@ interface AppState {
   publicar(): Promise<void>;
   guardarConfig(): Promise<void>;
   mostrarPanel(p: PanelIzquierdo): void;
+  mostrarPanelInferior(p: PanelInferior): void;
+  cargarProblemas(perfil: string, abrirPanel?: boolean): Promise<void>;
+  setFiltro(cambios: Partial<FiltroProblemas>): void;
+  irAProblema(i: number): Promise<void>;
+  saltarProblema(dir: 1 | -1): Promise<void>;
   alEditar(rel: string): void;
   despuesDeGuardar(rel: string): Promise<void>;
   actualizarParteActiva(): Promise<void>;
@@ -147,6 +167,9 @@ export const BUILD_INICIAL: BuildState = {
   passes: null,
   repaired: false,
   pendiente: null,
+  errors: null,
+  warnings: null,
+  badboxes: null,
 };
 
 let inicializado = false;
@@ -192,6 +215,11 @@ export const useApp = create<AppState>()((set, get) => {
     pdfStale: false,
     panelIzq: 'archivos',
     parteActiva: null,
+    problems: [],
+    filtro: FILTRO_INICIAL,
+    problemaIdx: -1,
+    panelInferior: 'log',
+    irA: null,
     notice: null,
     dialog: null,
 
@@ -241,8 +269,12 @@ export const useApp = create<AppState>()((set, get) => {
         pdfRel: null,
         pdfStale: false,
         parteActiva: null,
+        problems: [],
+        problemaIdx: -1,
+        irA: null,
         notice: null,
       });
+      aplicarProblemas([]);
       logBuffer.clear();
       if (info.configError) {
         get().avisar(`latexviewer.json no se pudo leer (${info.configError}). Se usa la configuración inferida y el archivo no se toca.`, 'error');
@@ -487,7 +519,7 @@ export const useApp = create<AppState>()((set, get) => {
           logBuffer.clear();
           logBuffer.append(`$ ${e.cmdline}\n`);
         }
-        set({ build: { status: 'running', id: e.id, perfil: e.perfil, ms: null, code: null, cmdline: e.cmdline, passes: null, repaired: e.retry, pendiente: null } });
+        set({ build: { status: 'running', id: e.id, perfil: e.perfil, ms: null, code: null, cmdline: e.cmdline, passes: null, repaired: e.retry, pendiente: null, errors: null, warnings: null, badboxes: null } });
       } else if (e.type === 'log') {
         logBuffer.append(e.text);
       } else {
@@ -496,12 +528,15 @@ export const useApp = create<AppState>()((set, get) => {
           // Sólo se recarga el visor con un build bueno y, si no hubo cambios, sólo cuando todavía no hay PDF.
           const recarga = e.ok && e.pdf && (e.updated || s.pdfRel !== e.pdf);
           return {
-            build: { ...s.build, status, id: e.id, perfil: e.perfil, ms: e.ms, code: e.code, passes: e.passes, repaired: e.repaired },
+            build: { ...s.build, status, id: e.id, perfil: e.perfil, ms: e.ms, code: e.code, passes: e.passes, repaired: e.repaired, errors: e.errors, warnings: e.warnings, badboxes: e.badboxes },
             ...(recarga ? { pdfRel: e.pdf, pdfEpoch: s.pdfEpoch + 1 } : {}),
             // Si falló o se cortó, el visor conserva el último PDF bueno y se lo marca como desactualizado.
             pdfStale: e.ok ? false : s.pdfRel !== null,
           };
         });
+        // Un build cortado deja un log a medias: se conservan los problemas del anterior. Si hubo errores, el panel de
+        // problemas se abre solo (5.7 del plan).
+        if (!e.cancelled) void get().cargarProblemas(e.perfil, e.errors > 0);
         const que = status === 'ok' ? 'terminó bien' : status === 'cancelled' ? 'cancelado' : `falló (código ${e.code ?? '?'})`;
         const pasadas = e.passes > 0 ? `, ${e.passes} pasada${e.passes === 1 ? '' : 's'}` : '';
         logBuffer.append(`\n== ${que} en ${(e.ms / 1000).toFixed(1)} s${pasadas}${e.repaired ? ' (después de reparar los auxiliares)' : ''}\n`);
@@ -595,6 +630,47 @@ export const useApp = create<AppState>()((set, get) => {
 
     mostrarPanel(p) {
       set({ panelIzq: p });
+    },
+
+    mostrarPanelInferior(p) {
+      set({ panelInferior: p });
+    },
+
+    // --- problemas ----------------------------------------------------------------------------------------------------
+
+    async cargarProblemas(perfil, abrirPanel) {
+      try {
+        const lista = await getBackend().problems(perfil);
+        set({ problems: lista, problemaIdx: -1, ...(abrirPanel && lista.length > 0 ? { panelInferior: 'problemas' as const } : {}) });
+        aplicarProblemas(visibles(lista, get().filtro));
+      } catch (e) {
+        get().avisar(`No se pudieron leer los problemas del build: ${mensajeDe(e)}`, 'error');
+      }
+    },
+
+    setFiltro(cambios) {
+      const filtro = { ...get().filtro, ...cambios };
+      set({ filtro, problemaIdx: -1 });
+      aplicarProblemas(visibles(get().problems, filtro));
+    },
+
+    async irAProblema(i) {
+      const p = visibles(get().problems, get().filtro)[i];
+      if (!p) return;
+      set({ problemaIdx: i });
+      if (!p.file || p.line === null) {
+        return get().avisar(`«${p.message}» no tiene una ubicación en un archivo del proyecto.`);
+      }
+      await get().abrirArchivo(p.file);
+      if (getDoc(p.file)) set({ irA: { rel: p.file, line: p.line, n: Date.now() } });
+    },
+
+    async saltarProblema(dir) {
+      const lista = visibles(get().problems, get().filtro);
+      const actual = get().problemaIdx;
+      const i = siguiente(lista, actual < 0 ? (dir === 1 ? -1 : 0) : actual, dir);
+      if (i < 0) return get().avisar(lista.length === 0 ? 'No hay problemas en el último build.' : 'Ningún problema tiene una ubicación en un archivo.');
+      await get().irAProblema(i);
     },
 
     async permitirCierre() {

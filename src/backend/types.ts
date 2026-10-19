@@ -89,6 +89,21 @@ export interface Published {
   synctex: string | null;
 }
 
+export type Severidad = 'error' | 'warning' | 'badbox';
+
+/** Un problema que el parser sacó del log del último build (`lv-core::logparse`). */
+export interface Problema {
+  severity: Severidad;
+  kind: string;
+  message: string;
+  /** Relativo a la raíz; `null` si el archivo es del sistema o no se pudo atribuir. */
+  file: string | null;
+  line: number | null;
+  line_end: number | null;
+  /** Lo que TeX muestra del lugar del error, en una línea. */
+  context: string;
+}
+
 export interface DirEntry {
   name: string;
   rel: string;
@@ -128,6 +143,9 @@ export type BuildEvent =
       passes: number;
       truncated_aux: boolean;
       repaired: boolean;
+      errors: number;
+      warnings: number;
+      badboxes: number;
     }
   | { type: 'error'; message: string };
 
@@ -135,8 +153,8 @@ export interface LaunchOptions {
   open: string | null;
   root: string | null;
   smoke: boolean;
-  /** Qué smoke de aceptación corre la interfaz con `LV_SMOKE`: el de F1 o el de F2. */
-  smokeMode: 'f1' | 'f2';
+  /** Qué smoke de aceptación corre la interfaz con `LV_SMOKE`: el de F1, el de F2 o el de F3. */
+  smokeMode: 'f1' | 'f2' | 'f3';
   smokeFile: string | null;
   /** Milisegundos que el smoke deja la interfaz abierta al terminar (para sacarle una captura). */
   smokePausaMs: number;
@@ -180,6 +198,8 @@ export interface Backend {
   /** Pide un build del perfil (el activo si no se dice). Si ya hay uno corriendo queda pendiente y corre una vez después. */
   build(profile?: string): Promise<BuildAck>;
   cancelBuild(): Promise<boolean>;
+  /** Los problemas del último build del perfil. */
+  problems(profile: string): Promise<Problema[]>;
   /** Copia el PDF del perfil a `publish.dir`. */
   publish(profile: string): Promise<Published>;
   /** Devuelve la función que deja de escuchar. */
