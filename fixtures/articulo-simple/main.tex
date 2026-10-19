@@ -1,0 +1,30 @@
+\documentclass[11pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish]{babel}
+\usepackage{amsmath}
+\usepackage{hyperref}
+
+\title{Artículo simple}
+\author{Fixture de LaTeX Viewer}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Introducción}\label{sec:intro}
+
+Este es un párrafo largo escrito en una sola línea, como en el libro de prueba: no hay cortes manuales y el párrafo entero vive en la misma línea del archivo fuente, de modo que saltar «a la línea» desde el PDF no alcanza y hace falta caer en la palabra exacta. Sirve para probar el refinamiento por palabra de SyncTeX, la búsqueda inversa y el soft wrap del editor con una línea de más de trescientos caracteres que se reparte en varias líneas del PDF.
+
+Un segundo párrafo, también de una sola línea, que cita la ecuación~\eqref{eq:cuadratica} y la sección~\ref{sec:resultado}. La primera referencia obliga a una segunda pasada de LaTeX, que es lo que se mide en las líneas de base.
+
+\section{Resultado}\label{sec:resultado}
+
+La ecuación cuadrática es
+\begin{equation}\label{eq:cuadratica}
+  x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}.
+\end{equation}
+
+Cierra con otro párrafo largo para que haya texto después de la ecuación: se vuelve a la sección~\ref{sec:intro} y se comprueba que el número de página y el de sección salen bien resueltos sin signos de interrogación.
+
+\end{document}

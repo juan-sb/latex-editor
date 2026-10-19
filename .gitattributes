@@ -1,0 +1,6 @@
+# Los fixtures se guardan byte a byte. libro-include va con CRLF a propósito, como el libro, y los tests de F1
+# verifican por bytes que guardar no cambia el EOL ni agrega BOM: git no puede convertirlos.
+fixtures/** -text
+
+# Los .ps1 del repo llevan BOM UTF-8 (Windows PowerShell 5.1 los lee como ANSI sin él): que git no lo toque.
+*.ps1 -text

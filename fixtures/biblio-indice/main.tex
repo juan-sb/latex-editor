@@ -1,0 +1,22 @@
+\documentclass[11pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish]{babel}
+\usepackage{makeidx}
+\usepackage[backend=biber,style=authoryear]{biblatex}
+\addbibresource{refs.bib}
+\makeindex
+
+\begin{document}
+
+\section{Fuentes}
+
+Los filtros de Butterworth\index{Butterworth} se describen en \parencite{butterworth1930}, y la aproximación de Chebyshev\index{Chebyshev} aparece tratada en \textcite{papoulis1958}. Un párrafo largo en una sola línea que repite términos indexados, como Butterworth\index{Butterworth} y Cauer\index{Cauer}, para que el índice alfabético tenga entradas con más de una página y haya trabajo para makeindex y para biber en la misma corrida.
+
+\nocite{cauer1958}
+
+\printbibliography
+
+\printindex
+
+\end{document}

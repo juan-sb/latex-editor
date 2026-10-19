@@ -1,0 +1,5 @@
+% Driver ASCII que compila main.tex con externalización de figuras (como los drivers lv-*.tex
+% que genera la app). Se compila con -shell-escape. El nombre de este archivo es el jobname
+% que pgf le pasa a cada subcompilación, y por eso tiene que ser ASCII y sin espacios.
+\def\LvExternalize{}
+\input{main}

@@ -1,0 +1,12 @@
+[package]
+name = "s2-synctex"
+version = "0.1.0"
+edition = "2021"
+description = "Spike S2: latencia de SyncTeX, CLI contra parser propio (plan.md 6.1)"
+
+[dependencies]
+flate2 = "1"
+memory-stats = "1"
+
+[profile.release]
+debug = false

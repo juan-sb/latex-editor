@@ -1,0 +1,59 @@
+\documentclass[11pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+% es-noshorthands como el libro: con los atajos de babel activos, "->" de TikZ rompe.
+\usepackage[spanish,es-noshorthands]{babel}
+\usepackage{tikz}
+\usetikzlibrary{positioning,calc}
+\usepackage{etoolbox}
+
+% Externalización: sólo si el driver (main-ext.tex) define \LvExternalize antes de \documentclass.
+% Se externaliza únicamente lo que está dentro de un entorno figure: el tikzpicture con
+% "remember picture, overlay" de más abajo, externalizado, desaparecería del PDF (plan.md,
+% tabla de la sección 2, fila 11).
+\ifdefined\LvExternalize
+  \usetikzlibrary{external}
+  \tikzexternalize[prefix=figuras-cache/]
+  \tikzexternaldisable
+  \AtBeginEnvironment{figure}{\tikzexternalenable}
+  \AtEndEnvironment{figure}{\tikzexternaldisable}
+\fi
+
+\begin{document}
+
+\section{Figuras}
+
+Primera figura, dentro de \texttt{figure}, que es la que se externaliza.
+
+\begin{figure}[ht]
+  \centering
+  \begin{tikzpicture}
+    \draw[->] (0,0) -- (3,0) node[right] {$\omega$};
+    \draw[->] (0,0) -- (0,2) node[above] {$|H|$};
+    \draw[thick,blue,domain=0:3,samples=40] plot (\x,{2/sqrt(1+\x*\x*\x*\x)});
+  \end{tikzpicture}
+  \caption{Respuesta de un filtro de segundo orden.}
+\end{figure}
+
+Segunda figura, con otro dibujo, para que haya más de una en el archivo y el orden importe en el nombre del cache.
+
+\begin{figure}[ht]
+  \centering
+  \begin{tikzpicture}
+    \foreach \k in {0,...,5} {
+      \draw[fill=gray!30] ({cos(60*\k)},{sin(60*\k)}) circle (0.1);
+    }
+    \draw (0,0) circle (1);
+  \end{tikzpicture}
+  \caption{Seis polos sobre una circunferencia.}
+\end{figure}
+
+\section{Fuera de figure}
+
+Un \texttt{tikzpicture} con \texttt{remember picture, overlay} \emph{fuera} de \texttt{figure}, como los íconos y portadillas del template del libro. Si algo lo externaliza, desaparece del PDF.
+
+\begin{tikzpicture}[remember picture,overlay]
+  \node[anchor=north east,red] at (current page.north east) {marca de agua};
+\end{tikzpicture}
+
+\end{document}

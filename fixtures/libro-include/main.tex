@@ -1,0 +1,28 @@
+\documentclass[11pt]{book}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish]{babel}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{hyperref}
+
+% Variables que el driver de un perfil puede definir antes de cargar este archivo.
+\ifdefined\CompilacionReducida\else
+\newcommand{\PortadaCompleta}{}
+\fi
+
+\begin{document}
+
+\ifdefined\PortadaCompleta
+\title{Libro con \texttt{\textbackslash include}}
+\author{Fixture de LaTeX Viewer}
+\maketitle
+\tableofcontents
+\fi
+
+% Rutas con tildes y espacios, en subcarpetas: es lo que rompe a las herramientas ingenuas.
+\include{Capítulos/Introducción general}
+\include{Capítulos/Desarrollo/Análisis de datos}
+\include{Capítulos/Conclusión final}
+
+\end{document}

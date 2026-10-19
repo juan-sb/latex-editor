@@ -1,0 +1,60 @@
+# Referencia del libro: no se versiona ni se toca (plan.md, sección 1)
+/inspo/
+
+# Copia del libro para tests y benchmarks (pesa) y los PDF que su latexmkrc deja afuera
+/fixtures/libro-tc/
+/fixtures/PDF/
+
+# Copias de trabajo de los spikes (libro entero, cache de figuras, PDF)
+/spikes/work/
+
+# Estado de la app dentro de un proyecto
+.lv/
+
+# Node / Rust / Tauri
+node_modules/
+dist/
+target/
+**/src-tauri/gen/
+*.auxlock
+
+# Auxiliares y salidas de LaTeX en fixtures y spikes
+fixtures/**/*.aux
+fixtures/**/*.log
+fixtures/**/*.fls
+fixtures/**/*.fdb_latexmk
+fixtures/**/*.synctex.gz
+fixtures/**/*.pdf
+fixtures/**/*.bbl
+fixtures/**/*.bcf
+fixtures/**/*.blg
+fixtures/**/*.run.xml
+fixtures/**/*.idx
+fixtures/**/*.ilg
+fixtures/**/*.ind
+fixtures/**/*.toc
+fixtures/**/*.out
+fixtures/**/*.xdv
+fixtures/**/*.md5
+fixtures/**/*.dpth
+fixtures/**/*.figlist
+fixtures/**/*.makefile
+fixtures/**/figuras-cache/
+spikes/**/*.aux
+spikes/**/*.log
+spikes/**/*.fls
+spikes/**/*.fdb_latexmk
+spikes/**/*.synctex.gz
+spikes/**/*.pdf
+spikes/**/*.toc
+spikes/**/*.out
+spikes/**/figuras-cache/
+
+# Mediciones crudas de los benchmarks (los números van a docs/benchmarks.md)
+scripts/out/
+scripts/*-consola.txt
+
+# Sistema / editor
+.DS_Store
+Thumbs.db
+*.swp

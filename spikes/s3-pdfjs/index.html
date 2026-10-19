@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>S3 PDF.js</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #444; font: 13px sans-serif; color: #eee; }
+      #barra { position: absolute; top: 0; left: 0; right: 0; height: 24px; padding: 4px 8px; background: #222; z-index: 100; }
+      #app { position: absolute; top: 32px; left: 0; right: 0; bottom: 0; }
+      .cont { position: absolute; inset: 0; overflow: auto; background: #444; }
+    </style>
+  </head>
+  <body>
+    <div id="barra">S3: esperando…</div>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

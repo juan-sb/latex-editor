@@ -1,0 +1,12 @@
+\documentclass[11pt]{article}
+\usepackage{fontenc}
+\usepackage{fontspec}
+\setmainfont{Latin Modern Roman}
+
+\begin{document}
+
+Texto Unicode compilado con XeLaTeX: áéíóú ñ ü ¿qué? ¡hola! «comillas latinas» “comillas inglesas” — raya — y símbolos como € § ¶ ° ½.
+
+Un párrafo largo en una sola línea para que el sync y el soft wrap tengan algo que hacer también con este motor: XeTeX genera un \texttt{.xdv} intermedio y el \texttt{.synctex.gz} lo deja xdvipdfmx, de modo que las coordenadas pueden diferir de las de pdfTeX y conviene medirlas aparte en las pruebas de SyncTeX.
+
+\end{document}

@@ -1,0 +1,20 @@
+{
+  "name": "s3-pdfjs",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Spike S3: recarga de PDF.js en WebView2 sin parpadeo y conservando la posición (plan.md 5.7)",
+  "scripts": {
+    "build": "vite build",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2",
+    "pdfjs-dist": "6.4.299"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.21"
+  }
+}
