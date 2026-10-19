@@ -12,6 +12,7 @@ use crate::config::ProfileCfg;
 use crate::figcache::{self, FigureCfg, Figlist, Limpieza, Modo};
 use crate::figures::FiguraRota;
 use crate::procs::Job as JobSistema;
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// Qué se lista y se cocina.
@@ -79,6 +80,8 @@ pub(super) struct PlanBake {
     completa: bool,
     /// `figcache::huella_de_figuras` al armar el plan (sólo con un listado completo).
     huella: Option<String>,
+    /// Lo que las figuras leen desde adentro de su `tikzpicture` (antes de listar se invalidan las figuras si cambió).
+    datos: Vec<figcache::DatoDeFigura>,
 }
 
 // --- lo que ve la interfaz ---------------------------------------------------------------------------------------------------------
@@ -238,13 +241,60 @@ impl Session {
         })?;
         let opciones = Opciones { root: self.root.clone(), engine: cfg.engine.clone(), dir: fcfg.dir.clone(), jobs: fcfg.jobs };
         let huella = if completa { self.huella_actual(&ix, &fcfg) } else { None };
-        Ok(PlanBake { driver, dirs: ix.include_dirs(&cfg.parts.commands), opciones, root_rel: rf, completa, huella })
+        let datos = self.datos_de_figuras(&cfg, &ix);
+        Ok(PlanBake { driver, dirs: ix.include_dirs(&cfg.parts.commands), opciones, root_rel: rf, completa, huella, datos })
     }
 
     /// `figcache::huella_de_figuras` del proyecto tal como está en el disco (`None` si falta un archivo del sello).
     fn huella_actual(&self, ix: &ProjectIndex, f: &FigureCfg) -> Option<String> {
         let sello = figcache::sello(&self.root, &f.stamp_files)?;
-        Some(figcache::huella_de_figuras(&self.root, &ix.reachable, &|rel| ix.part_of(rel).is_some(), &sello))
+        Some(figcache::huella_de_figuras(&self.root, &ix.reachable, &ix.archivos_de_datos(f.only_in_figure_env), &|rel| ix.part_of(rel).is_some(), &sello))
+    }
+
+    /// Los archivos que las figuras leen desde adentro de su `tikzpicture` (`\input{datos}`, imágenes, `plot file`), cada uno con los
+    /// slugs de las figuras del archivo que lo incluye (el de su parte si ése no declara `\FigurasDe`), para
+    /// `figcache::invalidar_por_datos`. Vacío con el cache apagado.
+    pub(super) fn datos_de_figuras(&self, cfg: &ProjectConfig, ix: &ProjectIndex) -> Vec<figcache::DatoDeFigura> {
+        let fcfg = FigureCfg::de(cfg);
+        let por_archivo: BTreeMap<String, Vec<String>> = match fcfg.modo {
+            Modo::Project => {
+                let mut m: BTreeMap<String, Vec<String>> = BTreeMap::new();
+                for (slug, archivo) in figcache::slugs_por_archivo(&self.root, &ix.reachable) {
+                    m.entry(archivo).or_default().push(slug);
+                }
+                m
+            }
+            Modo::App => figcache::slugs_app(&ix.reachable).into_iter().map(|(a, s)| (a, vec![s])).collect(),
+            Modo::Off => return vec![],
+        };
+        let slugs_de = |archivo: &str| -> Option<Vec<String>> {
+            por_archivo
+                .get(archivo)
+                .cloned()
+                .or_else(|| ix.part_of(archivo).and_then(|i| ix.parts[i].file.as_deref()).and_then(|parte| por_archivo.get(parte).cloned()))
+        };
+        // Un mismo dato puede entrar desde dos archivos: se invalidan los dos (y si de alguno no se sabe, todas).
+        let mut m: BTreeMap<String, Option<Vec<String>>> = BTreeMap::new();
+        for d in ix.datos_de_figuras(fcfg.only_in_figure_env) {
+            let nuevos = slugs_de(&d.incluye);
+            match m.get_mut(&d.dato) {
+                None => {
+                    m.insert(d.dato.clone(), nuevos);
+                }
+                Some(previos) => {
+                    *previos = match (previos.take(), nuevos) {
+                        (Some(mut a), Some(b)) => {
+                            a.extend(b);
+                            a.sort();
+                            a.dedup();
+                            Some(a)
+                        }
+                        _ => None,
+                    };
+                }
+            }
+        }
+        m.into_iter().map(|(dato, slugs)| figcache::DatoDeFigura { dato, slugs }).collect()
     }
 
     /// ¿Se puede saltear el listado previo de un perfil que sólo consume el cache? Sí si el último listado fue del documento entero,
@@ -271,7 +321,7 @@ impl Session {
             return false;
         }
         let ix = ProjectIndex::build(&self.root, rf, &cfg.parts.commands);
-        let hoy = figcache::huella_de_figuras(&self.root, &ix.reachable, &|rel| ix.part_of(rel).is_some(), &sello);
+        let hoy = figcache::huella_de_figuras(&self.root, &ix.reachable, &ix.archivos_de_datos(f.only_in_figure_env), &|rel| ix.part_of(rel).is_some(), &sello);
         hoy == guardada && lista.nombres.iter().all(|n| self.root.join(format!("{n}.pdf")).is_file())
     }
 
@@ -431,6 +481,11 @@ impl Session {
         aux::ensure_include_dirs(root, PERFIL_COCINA, &plan.dirs)?;
         aux::ensure_cache_dirs(root, PERFIL_COCINA, dir)?;
         let _ = &plan.root_rel;
+        // Un archivo que una figura lee desde adentro de su `tikzpicture` cambió: sin su `.md5` el listado da esas figuras por pendientes.
+        let invalidadas = figcache::invalidar_por_datos(root, dir, &plan.datos);
+        if !invalidadas.is_empty() {
+            (self.sink)(BuildEvent::Log { id, text: format!("== {} figura(s) leen un archivo que cambió: se recocinan\n", invalidadas.len()) });
+        }
 
         let t_listado = std::time::Instant::now();
         let nombres = self.cocinero.listar(&plan.opciones, job, cancelado)?;

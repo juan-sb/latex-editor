@@ -356,6 +356,8 @@ Sobre `spikes/work/f6-libro` con el `latexviewer.json` nuevo (`completo` con `ca
 | Una figura editada: listado + 1 figura + build | 9,1 s | 22,1 s (7,4 + 12,4 de cocción + 9,1) | |
 | Comprobación para saltear el listado (grafo + huella + PDF de la figlist) | | **28 ms** | |
 
+**Archivos que una figura lee desde adentro de su `tikzpicture`** (`\input`, imágenes, `plot file`), sobre el libro: el grafo encuentra 3 (los 2 engranajes del anexo de Cauer, dentro de un `figure`, y una imagen del template, fuera de uno, que no invalida nada). Correr `gen_engranajes.py` con otro ángulo de presión: cocina 2 de 159 figuras (14,4 s de cocción + 7,8 s de listado) y cambia 1 página de 198 (852 píxeles). Sin cambios: 1,2 s. Con TeX real el test de `fixtures/figuras-datos` da 0 subcompilaciones sin la invalidación y 1 con ella. La comprobación para saltear el listado pasó de 28 a 33 ms (el grafo cuenta `\begin`/`\end`). Detalle en `docs/spikes/S5.md`.
+
 **Limpieza del cache** (el comando Limpiar del panel, desde `--example build -- <carpeta> --limpiar`): sobre la copia, 5 769 archivos de 1 455 figuras de sellos viejos (los de los benchmarks), 261,1 MB; quedan las 159 del sello de hoy (27,9 MB).
 
 **El smoke de F2 con la máquina quieta** (CPU 3 a 12 % antes de empezar, dos corridas seguidas, cache limpio): parcial 5,4 y 5,2 s de guardar a PDF visible (latexmk 5,0 y 4,9 s), rápido 10,2 y 9,9 s (latexmk 9,7 y 9,5 s). Antes de F6 había dado 4,93 y 9,25 s. Para descartar una regresión del motor se corrió el mismo escenario (cambio de una palabra en un capítulo) con el ejemplo `build` de F5 (`9c6ed40`, en un worktree aparte) y con el de F6, **intercalados**, seis veces cada uno sobre la misma copia, midiendo el tiempo que informa el motor:

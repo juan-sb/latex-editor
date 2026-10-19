@@ -1,0 +1,9 @@
+{
+  "root": "main.tex",
+  "parts": { "commands": ["include"] },
+  "figureCache": { "mode": "app", "dir": "figuras-cache", "stampFiles": ["estilo.tex"], "onlyInFigureEnv": true, "parallelJobs": 2 },
+  "profiles": {
+    "rapido":   { "partial": true, "externalize": true, "parts": "all", "label": "Todas las partes" },
+    "completo": { "externalize": true, "cacheOnly": true, "parts": "all", "autoCompile": false, "label": "Revision con cache" }
+  }
+}

@@ -58,13 +58,22 @@ fn main() {
     // (lee los `.tex` alcanzados) y el chequeo de los PDF de la figlist (`Session::cache_al_dia`).
     let sello = figcache::sello(root, &f.stamp_files).unwrap_or_default();
     let lista = figcache::leer_figlist(root);
+    // Los archivos que las figuras leen desde adentro de su `tikzpicture` (`\input{datos}`, imágenes, `plot file`): cuando cambia alguno,
+    // las figuras de quien lo incluye se recocinan.
+    {
+        let ix = lv_core::graph::ProjectIndex::build(root, &cfg.root, &cfg.parts.commands);
+        println!("archivos que se leen desde adentro de un tikzpicture: {} ({} dentro de un figure)", ix.datos_de_tikz.len(), ix.datos_de_figuras(true).count());
+        for d in &ix.datos_de_tikz {
+            println!("  {}:{} lee {}{}", d.incluye, d.line, d.dato, if d.en_figure { "" } else { "  (fuera de un figure: no se externaliza)" });
+        }
+    }
     let m = 50;
     let t = Instant::now();
     let mut huella = String::new();
     let mut archivos = 0;
     for _ in 0..m {
         let ix = lv_core::graph::ProjectIndex::build(root, &cfg.root, &cfg.parts.commands);
-        huella = figcache::huella_de_figuras(root, &ix.reachable, &|rel| ix.part_of(rel).is_some(), &sello);
+        huella = figcache::huella_de_figuras(root, &ix.reachable, &ix.archivos_de_datos(f.only_in_figure_env), &|rel| ix.part_of(rel).is_some(), &sello);
         archivos = ix.reachable.len();
         if let Some(l) = &lista {
             std::hint::black_box(l.nombres.iter().all(|n| root.join(format!("{n}.pdf")).is_file()));

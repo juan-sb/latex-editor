@@ -95,6 +95,8 @@ inspo/         referencia, intocable, no se versiona
 - Con la subcompilación corriendo con `\tikzexternalrealjob` biblatex deja un `<job>.run.xml` en la raíz del proyecto: se borra al terminar la cocción y el build.
 - **La limpieza del cache sólo se autoriza con una figlist COMPLETA del sello de hoy** (la del listado de todas las partes), nunca con la de un parcial, y sólo borra extensiones de figura.
 - En el modo `app` la clave de cada archivo para su slug es `\CurrentFilePath/\CurrentFile` (con `\include{Secciones/cap-b}`, `\CurrentFile` es sólo `cap-b.tex`).
+- **pgf no ve lo que una figura lee desde adentro de su `tikzpicture`** (`\input{datos}`, una imagen, `plot file`): hashea la línea escrita y no el archivo, y latexmk tampoco lo ve con la figura en el cache. El grafo los marca (`ProjectIndex.datos_de_tikz`) y `figcache::invalidar_por_datos` guarda su md5 en `.lv/tikz-datos.json` y, si cambió, borra los `.md5` de las figuras del archivo que lo incluye y los `.fdb_latexmk`. Con `onlyInFigureEnv` sólo cuentan los de un `figure` (los del template no se externalizan).
+- Para correr los smokes con otro ejecutable (hay una instancia de la app abierta y `target\release\lv-app.exe` no se puede reemplazar), `LV_APP_EXE`: `target\release\deps\lv_app.exe` es el que compiló cargo aunque falle el último paso.
 - Un perfil con `cacheOnly` (spike S5, `docs/spikes/S5.md`; el `completo` del libro) compila sin `-shell-escape` y pgf no mira el md5: la app cocina el documento entero antes de cada build, salvo que la huella de las figuras (`figcache::huella_de_figuras`, en `.lv/figlist.json`) no haya cambiado. No publica: lo que se entrega sale del perfil `entrega`, sin cache.
 
 ## Trampas de las herramientas de esta máquina

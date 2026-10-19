@@ -327,18 +327,27 @@ fn lo_que_toca_una_figura(t: &str) -> Vec<&str> {
 /// preámbulo, la raíz, `structure.tex`: ahí se definen las macros que usan las figuras). Un cambio de texto en un capítulo no la
 /// cambia; agregar, quitar o editar una figura, sí.
 ///
+/// `datos`: los archivos que una figura lee desde adentro de su `tikzpicture` (`graph::DatoDeTikz`): `\input{datos}`, imágenes,
+/// `plot file`. pgf no los ve (hashea la línea `\input{datos}`, no su contenido) y con la figura en el cache el documento ni los
+/// abre, así que entran **enteros** en la huella, sean `.tex`, de una parte o binarios (su md5 es el de sus bytes).
+///
 /// Es lo que permite a un perfil que sólo consume el cache saltear el listado previo (8 s en el libro) cuando nada cambió. No
-/// detecta lo que cambie por afuera de los archivos del grafo (un `.sty` propio, una imagen que una figura incluye): ahí vale
-/// el botón Cocinar, que lista siempre.
-pub fn huella_de_figuras(root: &Path, archivos: &BTreeSet<String>, es_de_parte: &dyn Fn(&str) -> bool, sello: &str) -> String {
+/// detecta lo que cambie por afuera de los archivos del grafo (un `.sty` propio): ahí vale el botón Cocinar, que lista siempre.
+pub fn huella_de_figuras(root: &Path, archivos: &BTreeSet<String>, datos: &BTreeSet<String>, es_de_parte: &dyn Fn(&str) -> bool, sello: &str) -> String {
     let mut h = Md5::new();
     h.update(sello.as_bytes());
+    for rel in datos.iter().filter(|r| !r.to_ascii_lowercase().ends_with(".tex")) {
+        match fs::read(root.join(rel)) {
+            Ok(bytes) => h.update(format!("\0dato\0{rel}\0{:X}\0", Md5::digest(&bytes)).as_bytes()),
+            Err(_) => h.update(format!("\0falta\0{rel}").as_bytes()),
+        }
+    }
     for rel in archivos.iter().filter(|r| r.to_ascii_lowercase().ends_with(".tex")) {
         let Ok(bytes) = fs::read(root.join(rel)) else {
             h.update(format!("\0falta\0{rel}").as_bytes());
             continue;
         };
-        if !es_de_parte(rel) {
+        if !es_de_parte(rel) || datos.contains(rel) {
             h.update(format!("\0entero\0{rel}\0").as_bytes());
             h.update(&bytes);
             continue;
@@ -355,6 +364,80 @@ pub fn huella_de_figuras(root: &Path, archivos: &BTreeSet<String>, es_de_parte: 
         }
     }
     format!("{:X}", h.finalize())
+}
+
+// --- archivos que una figura lee desde adentro de su tikzpicture ------------------------------------------------------------------------
+
+pub const DATOS_FILE: &str = ".lv/tikz-datos.json";
+
+/// Un archivo que lee una figura desde adentro de su `tikzpicture` y las figuras que dependen de él.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DatoDeFigura {
+    pub dato: String,
+    /// Los slugs de las figuras del archivo que lo incluye; `None` si no se sabe de cuál es el dibujo (se invalidan todas).
+    pub slugs: Option<Vec<String>>,
+}
+
+fn md5_de_archivo(p: &Path) -> String {
+    match fs::read(p) {
+        Ok(b) => format!("{:X}", Md5::digest(&b)),
+        Err(_) => "falta".into(),
+    }
+}
+
+/// pgf decide si una figura cambió con el md5 del texto de su dibujo **tal como está escrito**: con un `\input{datos}` adentro,
+/// hashea esa línea y no `datos.tex`; y latexmk tampoco lo ve, porque con la figura en el cache el documento no abre el archivo
+/// (reproducido: se cambia `datos.tex`, 0 subcompilaciones y la imagen idéntica). Por eso la app guarda en `.lv/tikz-datos.json` el md5
+/// de cada uno de esos archivos y, si alguno cambió (o es la primera vez que lo ve), borra los `.md5` de las figuras de quien lo
+/// incluye, de **todos** los sellos (deshacer un estilo no tiene que devolver una figura vieja) y en el cache y en el directorio de cada
+/// perfil. Sin `.md5` pgf recocina la figura (y la verificación de figuras la revisa), y la lista de la cocción la da por pendiente.
+/// También borra el `.fdb_latexmk` de cada perfil: sin él latexmk, que no ve el cambio, diría «nada que hacer».
+///
+/// Devuelve los nombres de las figuras invalidadas. Se llama antes de cada build de un perfil que externaliza y antes de cada cocción.
+pub fn invalidar_por_datos(root: &Path, dir: &str, datos: &[DatoDeFigura]) -> Vec<String> {
+    let guardado: BTreeMap<String, String> = fs::read(root.join(DATOS_FILE)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+    let mut nuevo = BTreeMap::new();
+    let mut cambiados: Vec<&DatoDeFigura> = Vec::new();
+    for d in datos {
+        let md5 = md5_de_archivo(&root.join(&d.dato));
+        if guardado.get(&d.dato) != Some(&md5) {
+            cambiados.push(d);
+        }
+        nuevo.insert(d.dato.clone(), md5);
+    }
+    let mut borradas: BTreeSet<String> = BTreeSet::new();
+    if !cambiados.is_empty() {
+        let figuras = escanear(root, dir);
+        for d in cambiados {
+            for f in &figuras {
+                let Some((_, slug, _)) = partir_nombre(&f.nombre) else { continue };
+                if d.slugs.as_ref().is_none_or(|v| v.contains(&slug)) {
+                    borradas.insert(f.nombre.clone());
+                }
+            }
+        }
+        let perfiles: Vec<std::path::PathBuf> = fs::read_dir(root.join(".lv/build")).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
+        for n in &borradas {
+            let _ = fs::remove_file(root.join(dir).join(format!("{n}.md5")));
+            for p in &perfiles {
+                let _ = fs::remove_file(p.join(dir).join(format!("{n}.md5")));
+            }
+        }
+        if !borradas.is_empty() {
+            for p in &perfiles {
+                if let Some(nombre) = p.file_name().and_then(|n| n.to_str()) {
+                    let _ = fs::remove_file(p.join(format!("lv-{nombre}.fdb_latexmk")));
+                }
+            }
+        }
+    }
+    if nuevo != guardado {
+        if let Ok(mut t) = serde_json::to_string_pretty(&nuevo) {
+            t.push('\n');
+            let _ = crate::build::write_if_changed(&root.join(DATOS_FILE), &t);
+        }
+    }
+    borradas.into_iter().collect()
 }
 
 // --- slug y archivo -------------------------------------------------------------------------------------------------------------------
@@ -533,7 +616,8 @@ mod tests {
         let r = d.path();
         let archivos: BTreeSet<String> = ["main.tex", "cap.tex", "texto.tex", "fig_x.tex", "imagen.png"].iter().map(|s| s.to_string()).collect();
         let de_parte = |rel: &str| rel != "main.tex";
-        let huella = |sello: &str| huella_de_figuras(r, &archivos, &de_parte, sello);
+        let datos: BTreeSet<String> = BTreeSet::new();
+        let huella = |sello: &str| huella_de_figuras(r, &archivos, &datos, &de_parte, sello);
         escribir(r, "main.tex", "\\def\\wp{1}\n\\input{cap}\n");
         escribir(r, "cap.tex", "\\FigurasDe{cap}\nTexto uno.\n\\begin{figure}[H]\n\\begin{tikzpicture}\\draw (0,0)--(1,1);\\end{tikzpicture}\n\\end{figure}\nTexto dos.\n");
         escribir(r, "texto.tex", "Sólo texto.\n");
@@ -574,7 +658,77 @@ mod tests {
         // El conjunto de archivos del grafo también es parte de la huella: un archivo menos, otra huella.
         let sin: BTreeSet<String> = archivos.iter().filter(|a| *a != "fig_x.tex").cloned().collect();
         escribir(r, "texto.tex", "Sólo texto.\n");
-        assert_ne!(base, huella_de_figuras(r, &sin, &de_parte, "AAAAAA"));
+        assert_ne!(base, huella_de_figuras(r, &sin, &datos, &de_parte, "AAAAAA"));
+    }
+
+    #[test]
+    fn un_archivo_que_una_figura_lee_entra_entero_en_la_huella_sea_texto_de_una_parte_o_binario() {
+        let d = tempfile::tempdir().unwrap();
+        let r = d.path();
+        let archivos: BTreeSet<String> = ["main.tex", "cap.tex", "datos.tex"].iter().map(|s| s.to_string()).collect();
+        let de_parte = |rel: &str| rel != "main.tex";
+        escribir(r, "main.tex", "\\input{cap}\n");
+        escribir(r, "cap.tex", "\\FigurasDe{cap}\n\\begin{figure}\\begin{tikzpicture}\\input{datos}\\end{tikzpicture}\\end{figure}\n");
+        escribir(r, "datos.tex", "\\draw (0,0)--(1,1);\n");
+        fs::write(r.join("imagen.png"), [1u8, 2, 3]).unwrap();
+        let sin_datos = BTreeSet::new();
+        let con: BTreeSet<String> = ["datos.tex", "imagen.png"].iter().map(|s| s.to_string()).collect();
+        let h = |datos: &BTreeSet<String>| huella_de_figuras(r, &archivos, datos, &de_parte, "AAAAAA");
+        let base = h(&con);
+        assert_ne!(base, h(&sin_datos), "el conjunto de datos cuenta");
+        // `datos.tex` es de la parte `cap` y no tiene ningún `tikzpicture`: sin ser dato no contaría; como dato, entra entero.
+        escribir(r, "datos.tex", "\\draw (0,0)--(2,2);\n");
+        assert_ne!(base, h(&con), "el contenido de un `.tex` leído desde un tikzpicture");
+        assert_eq!(h(&sin_datos), { escribir(r, "datos.tex", "otra cosa\n"); h(&sin_datos) }, "sin ser dato, un archivo sin figuras no cuenta");
+        escribir(r, "datos.tex", "\\draw (0,0)--(1,1);\n");
+        assert_eq!(base, h(&con));
+        // Un binario entra por su md5.
+        fs::write(r.join("imagen.png"), [1u8, 2, 4]).unwrap();
+        assert_ne!(base, h(&con), "los bytes de una imagen");
+        fs::remove_file(r.join("imagen.png")).unwrap();
+        assert_ne!(base, h(&con), "un archivo leído que ya no está");
+    }
+
+    fn dato(dato: &str, slugs: Option<&[&str]>) -> DatoDeFigura {
+        DatoDeFigura { dato: dato.into(), slugs: slugs.map(|s| s.iter().map(|x| x.to_string()).collect()) }
+    }
+
+    #[test]
+    fn si_un_archivo_leido_cambia_se_invalidan_las_figuras_de_su_slug_en_todos_los_sellos_y_perfiles() {
+        let d = tempfile::tempdir().unwrap();
+        let r = d.path();
+        for n in ["AAAAAA-cap-0", "AAAAAA-cap-1", "AAAAAA-otro-0", "BBBBBB-cap-0"] {
+            for e in ["pdf", "md5"] {
+                escribir(r, &format!("figuras-cache/{n}.{e}"), "x");
+            }
+            escribir(r, &format!(".lv/build/rapido/figuras-cache/{n}.md5"), "x");
+        }
+        escribir(r, ".lv/build/rapido/lv-rapido.fdb_latexmk", "fdb");
+        escribir(r, ".lv/build/parcial/lv-parcial.fdb_latexmk", "fdb");
+        escribir(r, "datos.tex", "uno");
+        let datos = [dato("datos.tex", Some(&["cap"]))];
+        // La primera vez no hay md5 guardado: se invalida (no se sabe si el cache es de este contenido).
+        let b = invalidar_por_datos(r, "figuras-cache", &datos);
+        assert_eq!(b, ["AAAAAA-cap-0", "AAAAAA-cap-1", "BBBBBB-cap-0"], "las del slug `cap` de todos los sellos; `otro` no");
+        for n in &b {
+            assert!(!r.join(format!("figuras-cache/{n}.md5")).exists() && !r.join(format!(".lv/build/rapido/figuras-cache/{n}.md5")).exists(), "{n}");
+            assert!(r.join(format!("figuras-cache/{n}.pdf")).is_file(), "el PDF queda: lo reemplaza la recocción");
+        }
+        assert!(r.join("figuras-cache/AAAAAA-otro-0.md5").is_file());
+        assert!(!r.join(".lv/build/rapido/lv-rapido.fdb_latexmk").exists() && !r.join(".lv/build/parcial/lv-parcial.fdb_latexmk").exists(), "latexmk no ve el cambio: sin su fdb corre");
+        // Sin cambios: nada. Con un cambio: otra vez.
+        escribir(r, "figuras-cache/AAAAAA-cap-0.md5", "nuevo");
+        escribir(r, ".lv/build/rapido/lv-rapido.fdb_latexmk", "fdb");
+        assert!(invalidar_por_datos(r, "figuras-cache", &datos).is_empty());
+        assert!(r.join("figuras-cache/AAAAAA-cap-0.md5").is_file() && r.join(".lv/build/rapido/lv-rapido.fdb_latexmk").is_file());
+        escribir(r, "datos.tex", "dos");
+        assert_eq!(invalidar_por_datos(r, "figuras-cache", &datos), ["AAAAAA-cap-0", "AAAAAA-cap-1", "BBBBBB-cap-0"]);
+        // Sin slug conocido se invalidan todas; un dato que deja de leerse se olvida y uno nuevo cuenta como cambiado.
+        escribir(r, "datos.tex", "tres");
+        let todas = invalidar_por_datos(r, "figuras-cache", &[dato("datos.tex", None)]);
+        assert_eq!(todas.len(), 4);
+        assert!(invalidar_por_datos(r, "figuras-cache", &[]).is_empty());
+        assert_eq!(invalidar_por_datos(r, "figuras-cache", &[dato("datos.tex", Some(&["otro"]))]), ["AAAAAA-otro-0"]);
     }
 
     #[test]

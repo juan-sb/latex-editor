@@ -10,9 +10,11 @@
 //! argumentos que son parámetros de macro (`\input{#1}` dentro de la definición de `\Capitulo`). Alcanza para decidir
 //! qué archivos pertenecen a qué parte; lo que se le escape es un archivo que no aparece, no un build roto.
 
+use regex::Regex;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::Path;
+use std::sync::OnceLock;
 use std::time::Instant;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -43,6 +45,25 @@ pub struct Edge {
     /// El archivo que resuelve, relativo a la raíz y con `/`, si existe.
     pub target: Option<String>,
     pub line: u32,
+    /// La inclusión ocurre dentro de un `tikzpicture` (o de un archivo que entra desde uno): pgf decide si la figura cambió con el
+    /// texto del dibujo tal como está escrito, y ese texto no incluye el contenido del archivo.
+    pub en_tikz: bool,
+    /// Además, ese `tikzpicture` está dentro de un entorno `figure` (lo único que se externaliza con `onlyInFigureEnv`).
+    pub en_figure: bool,
+}
+
+/// Un archivo que una figura lee desde adentro de su `tikzpicture` (`\input`, `\include`, `\includegraphics`, `plot file`, `table`).
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct DatoDeTikz {
+    /// El archivo con el `tikzpicture` (el de `\input{x}`); si el dato entra por un archivo que a su vez entró desde un `tikzpicture`,
+    /// sigue siendo el archivo del dibujo.
+    pub incluye: String,
+    /// El archivo leído, relativo a la raíz y con `/`.
+    pub dato: String,
+    pub line: u32,
+    /// El `tikzpicture` está dentro de un entorno `figure`. Los del template (el encabezado de capítulo con una imagen, por ejemplo)
+    /// no lo están, y con `onlyInFigureEnv` no se externalizan: sus datos no invalidan ninguna figura.
+    pub en_figure: bool,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -77,6 +98,8 @@ pub struct ProjectIndex {
     pub reachable: BTreeSet<String>,
     /// hijo → quién lo trae por una arista estructural.
     parents: BTreeMap<String, Vec<String>>,
+    /// Lo que las figuras leen desde adentro de un `tikzpicture` (ver `DatoDeTikz`), sin repetidos y en orden.
+    pub datos_de_tikz: Vec<DatoDeTikz>,
     pub scan_ms: u64,
 }
 
@@ -206,6 +229,28 @@ fn escanear(texto: &str, interesantes: &HashSet<&str>) -> Vec<Crudo> {
     out
 }
 
+/// Los archivos que leen `plot file {x}`, `plot[...] file {x}` y `table[...] {x}` (pgfplots) dentro de cada `tikzpicture` de un texto
+/// ya sin comentarios, con su línea.
+fn datos_de_plot(limpio: &str) -> Vec<(String, u32, bool)> {
+    static R: OnceLock<Regex> = OnceLock::new();
+    let re = R.get_or_init(|| Regex::new(r"(?:plot\s*(?:\[[^\]]*\])?\s*file|\btable)\s*(?:\[[^\]]*\])?\s*\{\s*([^}\s]+)\s*\}").expect("patrón válido"));
+    let mut out = Vec::new();
+    let mut pos = 0;
+    while let Some(i) = limpio[pos..].find("\\begin{tikzpicture}") {
+        let ini = pos + i;
+        let fin = limpio[ini..].find("\\end{tikzpicture}").map_or(limpio.len(), |j| ini + j);
+        for c in re.captures_iter(&limpio[ini..fin]) {
+            if let Some(m) = c.get(1) {
+                let antes = &limpio[..ini];
+                let en_figure = antes.matches("\\begin{figure").count() > antes.matches("\\end{figure").count();
+                out.push((m.as_str().to_string(), 1 + limpio[..ini + m.start()].matches('\n').count() as u32, en_figure));
+            }
+        }
+        pos = fin.max(ini + 1);
+    }
+    out
+}
+
 // --- resolución de rutas -----------------------------------------------------------------------------------------------
 
 fn normalizar(raw: &str) -> Option<String> {
@@ -260,24 +305,45 @@ impl ProjectIndex {
     pub fn build(root: &Path, root_file: &str, commands: &[String]) -> ProjectIndex {
         let t0 = Instant::now();
         let mut ix = ProjectIndex { root_file: root_file.to_string(), ..Default::default() };
+        // `begin` y `end` sólo se miran para llevar la cuenta de los `tikzpicture` abiertos.
         let mut interesantes: HashSet<&str> =
-            ["input", "include", "subfile", "import", "subimport", "includegraphics", "bibliography", "addbibresource"].into_iter().collect();
+            ["input", "include", "subfile", "import", "subimport", "includegraphics", "bibliography", "addbibresource", "begin", "end"].into_iter().collect();
         interesantes.extend(commands.iter().map(String::as_str));
         let cmds: HashSet<&str> = commands.iter().map(String::as_str).collect();
         let mut visitados = HashSet::new();
-        ix.visitar(root, root_file, false, &interesantes, &cmds, &mut visitados);
+        ix.visitar(root, root_file, false, None, &interesantes, &cmds, &mut visitados);
+        ix.datos_de_tikz.sort();
+        ix.datos_de_tikz.dedup();
         ix.scan_ms = t0.elapsed().as_millis() as u64;
         ix
     }
 
-    fn visitar(&mut self, root: &Path, rel: &str, en_parte: bool, interesantes: &HashSet<&str>, cmds: &HashSet<&str>, vistos: &mut HashSet<String>) {
+    /// `dentro`: el archivo con el `tikzpicture` desde el que se llegó a éste, y si ese dibujo está en un `figure` (todo lo que éste
+    /// incluya es un dato de ese dibujo).
+    #[allow(clippy::too_many_arguments)]
+    fn visitar(&mut self, root: &Path, rel: &str, en_parte: bool, dentro: Option<(&str, bool)>, interesantes: &HashSet<&str>, cmds: &HashSet<&str>, vistos: &mut HashSet<String>) {
         if !vistos.insert(rel.to_string()) {
             return;
         }
         self.reachable.insert(rel.to_string());
         let Some(texto) = leer_texto(&root.join(rel)) else { return };
         let mut aristas = Vec::new();
+        // Cuántos `\begin{tikzpicture}` hay abiertos en este punto del archivo (sin contar los comentarios: `escanear` los saca).
+        let mut tikz_abiertos: u32 = 0;
+        let mut figure_abiertos: u32 = 0;
         for c in escanear(&texto, interesantes) {
+            if matches!(c.comando.as_str(), "begin" | "end") {
+                let abre = c.comando == "begin";
+                let cuenta = |n: u32| if abre { n + 1 } else { n.saturating_sub(1) };
+                match c.args[0].trim() {
+                    "tikzpicture" => tikz_abiertos = cuenta(tikz_abiertos),
+                    "figure" | "figure*" => figure_abiertos = cuenta(figure_abiertos),
+                    _ => {}
+                }
+                continue;
+            }
+            let en_tikz = tikz_abiertos > 0 || dentro.is_some();
+            let en_figure = en_tikz && (figure_abiertos > 0 || dentro.is_some_and(|d| d.1));
             let (kind, args): (EdgeKind, Vec<String>) = match c.comando.as_str() {
                 "includegraphics" => (EdgeKind::Graphics, c.args),
                 "bibliography" => (EdgeKind::Bib, c.args[0].split(',').map(|s| s.trim().to_string()).collect()),
@@ -299,7 +365,17 @@ impl ProjectIndex {
                     EdgeKind::Bib => resolver_bib(root, &raw),
                     _ => resolver_tex(root, &raw),
                 };
-                aristas.push(Edge { kind, command: c.comando.clone(), raw, target, line: c.linea });
+                aristas.push(Edge { kind, command: c.comando.clone(), raw, target, line: c.linea, en_tikz, en_figure });
+            }
+        }
+        // `plot file {x}` y `table {x}` no son comandos con el archivo entre llaves: se buscan dentro de cada `tikzpicture`.
+        if texto.contains("tikzpicture") {
+            let limpio: String = texto.lines().map(sin_comentario).collect::<Vec<_>>().join("\n");
+            for (raw, linea, en_figure) in datos_de_plot(&limpio) {
+                if let Some(dato) = normalizar(&raw).filter(|d| existe(root, d)) {
+                    let (incluye, heredada) = dentro.map_or((rel, false), |d| (d.0, d.1));
+                    self.datos_de_tikz.push(DatoDeTikz { incluye: incluye.to_string(), dato, line: linea, en_figure: en_figure || heredada });
+                }
             }
         }
         self.files.insert(rel.to_string(), aristas.clone());
@@ -308,6 +384,9 @@ impl ProjectIndex {
                 self.reachable.insert(t.clone());
                 if e.kind.estructural() {
                     self.parents.entry(t.clone()).or_default().push(rel.to_string());
+                }
+                if e.en_tikz && e.kind != EdgeKind::Bib {
+                    self.datos_de_tikz.push(DatoDeTikz { incluye: dentro.map_or(rel, |d| d.0).to_string(), dato: t.clone(), line: e.line, en_figure: e.en_figure });
                 }
             }
             let es_parte = cmds.contains(e.command.as_str()) && !en_parte;
@@ -321,10 +400,22 @@ impl ProjectIndex {
             }
             if let (true, Some(t)) = (e.kind.estructural(), &e.target) {
                 if t.to_lowercase().ends_with(".tex") {
-                    self.visitar(root, t, en_parte || es_parte, interesantes, cmds, vistos);
+                    let desde = if e.en_tikz { Some((dentro.map_or(rel, |d| d.0), e.en_figure)) } else { None };
+                    self.visitar(root, t, en_parte || es_parte, desde, interesantes, cmds, vistos);
                 }
             }
         }
+    }
+
+    /// Lo que las figuras leen desde adentro de un `tikzpicture`: con `solo_en_figure` (la opción `onlyInFigureEnv` del cache) sólo los de
+    /// un `tikzpicture` dentro de un `figure`, que es lo único que se externaliza.
+    pub fn datos_de_figuras(&self, solo_en_figure: bool) -> impl Iterator<Item = &DatoDeTikz> {
+        self.datos_de_tikz.iter().filter(move |d| d.en_figure || !solo_en_figure)
+    }
+
+    /// Los archivos de `datos_de_figuras`, sin repetir (para la huella de las figuras).
+    pub fn archivos_de_datos(&self, solo_en_figure: bool) -> BTreeSet<String> {
+        self.datos_de_figuras(solo_en_figure).map(|d| d.dato.clone()).collect()
     }
 
     pub fn part_names(&self) -> Vec<String> {
@@ -508,6 +599,54 @@ mod tests {
         assert_eq!(ix.affects("Secciones/Dos.tex", None), Affects::Yes, "perfil con todas las partes");
         assert_eq!(ix.affects("Secciones/Suelto.tex", None), Affects::Unrelated);
         assert_eq!(ix.affects("no-existe.tex", None), Affects::Unrelated);
+    }
+
+    #[test]
+    fn las_inclusiones_dentro_de_un_tikzpicture_se_marcan_y_se_siguen_por_los_archivos_que_entran() {
+        let d = proyecto(&[
+            ("main.tex", "\\input{cap}\n"),
+            (
+                "cap.tex",
+                "\\input{antes}\n% \\begin{tikzpicture}\n\\begin{figure}\n\\begin{tikzpicture}[scale=2]\n  \\input{engranaje}\n  % \\input{comentado}\n  \\node{\\includegraphics{img/foto}};\n  \\draw plot file {datos/curva.dat};\n  \\addplot table[x=a] {datos/tabla.csv};\n\\end{tikzpicture}\n\\input{despues}\n\\end{figure}\n\\input{despues2}\n\\begin{tikzpicture}[remember picture,overlay]\\node{\\includegraphics{img/marca}};\\end{tikzpicture}\n",
+            ),
+            ("img/marca.png", "m"),
+            ("antes.tex", "a\n"),
+            ("engranaje.tex", "\\draw (0,0); \\input{anidado}\n"),
+            ("anidado.tex", "\\draw (1,1);\n"),
+            ("comentado.tex", "c\n"),
+            ("despues.tex", "d\n"),
+            ("despues2.tex", "d2\n"),
+            ("img/foto.png", "x"),
+            ("datos/curva.dat", "0 0\n1 1\n"),
+            ("datos/tabla.csv", "a,b\n1,2\n"),
+        ]);
+        let ix = ProjectIndex::build(d.path(), "main.tex", &cmds(&[]));
+        let en_tikz: Vec<(&str, bool)> = ix.files["cap.tex"].iter().map(|e| (e.raw.as_str(), e.en_tikz)).collect();
+        assert_eq!(
+            en_tikz,
+            [("antes", false), ("engranaje", true), ("img/foto", true), ("despues", false), ("despues2", false), ("img/marca", true)],
+            "el `\\begin{{tikzpicture}}` comentado no abre nada y el `\\input` comentado no existe"
+        );
+        assert!(ix.files["engranaje.tex"][0].en_tikz, "lo que incluye un archivo que entra desde un tikzpicture también es del dibujo");
+        let datos: Vec<(&str, &str)> = ix.datos_de_tikz.iter().map(|d| (d.incluye.as_str(), d.dato.as_str())).collect();
+        assert_eq!(
+            datos,
+            [
+                ("cap.tex", "anidado.tex"),
+                ("cap.tex", "datos/curva.dat"),
+                ("cap.tex", "datos/tabla.csv"),
+                ("cap.tex", "engranaje.tex"),
+                ("cap.tex", "img/foto.png"),
+                ("cap.tex", "img/marca.png")
+            ],
+            "el dibujo es el archivo del `tikzpicture`, aunque el dato entre por otro archivo"
+        );
+        assert!(!ix.reachable.contains("datos/curva.dat"), "los datos de `plot file` no son archivos del grafo");
+        assert_eq!(ix.archivos_de_datos(false).len(), 6);
+        // Con `onlyInFigureEnv` sólo cuentan los de un `tikzpicture` dentro de un `figure`: la marca de agua del template no.
+        let en_figure = ix.archivos_de_datos(true);
+        assert_eq!(en_figure.len(), 5);
+        assert!(!en_figure.contains("img/marca.png") && en_figure.contains("anidado.tex") && en_figure.contains("datos/tabla.csv"), "{en_figure:?}");
     }
 
     #[test]

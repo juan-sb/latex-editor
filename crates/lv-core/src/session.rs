@@ -17,6 +17,7 @@ use crate::cola::{Clase, Cola, Pedido, Trabajo};
 use crate::config::{self, comandos_por_defecto, infer_config, PartsSel, ProjectConfig, State, StatePatch};
 use crate::error::{Error, Result};
 use crate::cocinero::Cocinero;
+use crate::figcache;
 use crate::figures;
 use crate::fsio;
 use crate::graph::{Affects, ProjectIndex};
@@ -192,6 +193,8 @@ struct Plan {
     /// Partes excluidas y perfiles de donde sembrarlas (sólo si el perfil usa `\includeonly`).
     seed: Option<(Vec<String>, Vec<String>)>,
     dirs: BTreeSet<String>,
+    /// Lo que las figuras leen desde adentro de su `tikzpicture`, si el perfil externaliza (`None`: no hay nada que invalidar).
+    datos_de_figuras: Option<Vec<figcache::DatoDeFigura>>,
 }
 
 fn otro(m: impl Into<String>) -> Error {
@@ -529,8 +532,10 @@ impl Session {
             solo_cache: pc.externalize && pc.cache_only,
         })?;
         let dirs = ix.include_dirs(&cfg.parts.commands);
+        let datos_de_figuras = (pc.externalize && figcache::FigureCfg::de(&cfg).modo != figcache::Modo::Off).then(|| self.datos_de_figuras(&cfg, &ix));
         d.index = Some(ix);
         Ok(Plan {
+            datos_de_figuras,
             spec: RunSpec { perfil: perfil.to_string(), root_rel: rf, driver, engine: cfg.engine.clone(), shell_escape: pc.externalize && !pc.cache_only, retry },
             cache_dir: cfg.figure_dir(),
             clean: pc.clean_before,
@@ -571,6 +576,10 @@ impl Session {
                 }
                 aux::ensure_include_dirs(root, nombre, &plan.dirs)?;
                 aux::ensure_cache_dirs(root, nombre, &plan.cache_dir)?;
+                // Un archivo que una figura lee desde adentro de su `tikzpicture` cambió: sin su `.md5` pgf recocina la figura.
+                if let Some(datos) = &plan.datos_de_figuras {
+                    figcache::invalidar_por_datos(root, &plan.cache_dir, datos);
+                }
                 if let Some((excluidas, fuentes)) = &plan.seed {
                     aux::seed(root, nombre, excluidas, fuentes)?;
                 }
