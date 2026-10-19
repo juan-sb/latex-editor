@@ -285,3 +285,62 @@ F3, F4 y F1 (sobre el libro, 194 páginas, build completo ok) siguen pasando. El
 - **El historial guarda el lugar actual con el cursor real**: al salir de un lugar con Alt+← se actualiza su línea con la del cursor, así Alt+→ vuelve adonde estabas y no adonde llegaste.
 - **Ctrl+clic ya no agrega un cursor**: se usa para ir a la definición; el multicursor queda en Alt+clic.
 - **Mientras hay un selector abierto el despachador no atiende atajos**: sólo frena los nativos (Ctrl+P y compañía). Sin eso, Ctrl+B o F8 actuaban sobre el editor que está atrás.
+
+## F6: cache de figuras
+
+Todo sobre `spikes/work/f6-libro` (copia tibia de `fixtures/libro-tc`, nunca `inspo/`), con `fixtures/configs/libro-tc.latexviewer.json` (modo `project`, sello de `estilo_figuras.tex`, `parallelJobs: auto`, 16 en esta máquina) y el motor de la app (`--example build`). Windows Defender con protección en tiempo real encendida y sus exclusiones sin tocar (no se pudo leer la lista sin ser administrador): los números ya incluyen al antivirus tal como está, y no se midió sin él.
+
+### Criterios de aceptación del plan
+
+| Criterio | Medido | Criterio |
+|---|---|---|
+| Cambio de `estilo_figuras.tex`, las 158 figuras | cocción **103,0 s** y **110,4 s** (dos corridas con 16 trabajos); con 159 figuras 115,8 s; más 7,6 a 9,5 s del listado | ≤ 105 s en esta máquina (la línea de base de inspo: 105 s + 7 s de listado). **Una de las tres corridas no llega, por un 5 a 10 %**; la dispersión entre corridas es de ese orden |
+| Agregar una figura arriba del capítulo 1 (14 figuras en el archivo) | **15 cocidas** (las 14 del archivo, que corren de número, y la nueva), 10 s de cocción, 17,2 s con el listado | sólo las de ese archivo: ninguna de otro capítulo |
+| Deshacer el cambio de estilo | **0 cocidas**, 8,1 s (todo es el listado) | no recocina nada |
+| Parcial a la vista tras un cambio de estilo (sólo las 46 de `Desnormalización`) | **34,1 s** desde el cambio: 4,0 s de listado de las partes del perfil + 25,0 s cocinando sus 46 figuras + 5,0 s del build. El resto (112 figuras, 83,7 s de cocción + 8,2 s de listado) termina después: 118,2 s en total | en lo que tarda cocinar **sus** figuras (25 s) |
+| Chequeo previo a cada build (sello + listado de la carpeta + regla del 60 %) | **6,06 ms** (promedio de 200 corridas, `--example figuras`, 1 152 figuras con PDF en el cache) | < 20 ms |
+| Limpieza con el parcial activo | no borra figuras de partes que el parcial no incluye (`tests/figuras_sesion.rs`, con la lista del parcial y la completa) | no borra |
+| Cancelar a mitad de una cocción | 209 ms hasta que el panel vuelve a quieto, 0 procesos de TeX vivos, ningún `.md5` sin PDF (smoke de F6 y tests con `pdflatex` falso y con TeX real) | sin figuras cortadas |
+| Smoke de F2 (regresión) | ok; la app agrega 280 ms (parcial) y 404 ms (rápido) a latexmk, límite 700 ms | el cache no suma más de 20 ms por guardado: el chequeo mide 6 ms |
+
+### Cocción de las 158 figuras según los trabajos en paralelo
+
+Cada corrida cambia el sello (una línea de comentario en `estilo_figuras.tex` de la copia) y cocina de cero. `scripts/bench-figuras.ps1`.
+
+| Trabajos | Cocción | Nota |
+|---|---|---|
+| 16 (núcleos lógicos) | **103,0 s** y **110,4 s** | el valor por omisión (`auto`) |
+| 12 | ≈ 121 s | lo que usa el README del libro |
+| 8 (núcleos físicos) | ≈ 157 s | |
+
+Con 16 trabajos la máquina queda cargada: otros procesos hacen variar 5 a 10 % entre corridas.
+
+### Listado y camino sin `-output-directory`
+
+- El listado (una pasada de pdflatex con el perfil `cocina`, `mode=list and make`, sin dibujar) tarda 7 a 11 s en el libro entero y unos 4 s con las partes de un perfil parcial.
+- El camino A (subcompilación sin `-output-directory`, cwd en la raíz, como la línea que arma pgf) se validó sobre el libro: no pisa los `.aux` de `\include` en paralelo y la raíz queda limpia (queda sólo el `run.xml` de biblatex, que la app borra al terminar). No hizo falta el plan B de un directorio por ranura.
+
+### Smoke de aceptación de F6 (dentro de la app real)
+
+`scripts/aceptacion-f6.ps1`, sobre una copia de `fixtures/figuras-app` (modo `app`, TeX real): **7 pasos, 25 s**. Cocinar con un clic real (4 figuras de 3 archivos, en paralelo), un build con el cache al día que no cocina ni lista, un cambio de estilo cuya cocción va antes del build con la barra de progreso a la vista, Limpiar con vista previa (16 archivos de 4 figuras, 0,1 MB) que sólo borra al confirmar, una figura rota (error en el panel y en los problemas, sin imagen vieja, y arreglarla lo limpia) y Cancelar a mitad de una cocción.
+
+### Regresión
+
+F1 (`articulo-simple`), F3, F4 (49/50 y 49/50, mediana 8 ms), F5 y F2 siguen pasando con la cola y la cocción. En F2: parcial guardado a PDF visible 5,3 s (latexmk 5,0 s), rápido 10,1 s (latexmk 9,7 s), las dos fuera del umbral absoluto que sólo se informa (ver F2: depende de la carga de la máquina) y dentro del límite de lo que agrega la app.
+
+### Pruebas
+
+| | Cantidad | Qué cubren |
+|---|---|---|
+| `cargo test -p lv-core` | 101 de biblioteca y 79 de integración con procesos falsos | la cola (7), el sello, la clasificación del cache, los pendientes por contenido, la limpieza, el cocinero con un pdflatex falso (máximo de paralelismo, falla que no corta, cancelar mata hijos), la inyección del modo `app`, la verificación de figuras, `ensure_cache_dirs` y `move_md5` con rename y las sesiones con cocción (orden, ceder el paso, disparo, cancelación, limpieza) |
+| `cargo test -p lv-core --features tex` | todos pasan: 2 de la figura rota y 4 del modo `app`, más los de F1 a F4 con TeX real | la figura rota real (`\comandoQueNoExiste`: reproducida con MiKTeX antes de arreglarla), la cancelación con TeX real y el modo `app` sobre `fixtures/figuras-app` |
+| `npx vitest run` | 192 | lo de F5 (177) más el store de figuras y el filtro por archivo del panel |
+
+### Hallazgos de F6
+
+- **pgf escribe el `.md5` antes de lanzar la subcompilación de la figura.** Una figura con un comando inexistente sale con código 0, sin error en el log principal, con el PDF viejo y con el md5 nuevo, y el build siguiente no reintenta. Es el caso de la revisión; se reprodujo con MiKTeX como test (`tests/figuras_rotas.rs`) antes de arreglarlo.
+- **latexmk no cuenta como cambio un archivo de figura borrado**: para que el build siguiente reintente hay que borrar también el `.fdb_latexmk` del perfil.
+- **Los logs de las subcompilaciones de figuras salen cortados a 79 columnas**: el archivo y la línea del error se reconstruyen desarrollando el log (`figures::desenvolver`).
+- **El parcial se ve mucho antes que el resto**: 34 s contra 118 s para dejar todo el cache al día. Sin partir la cocción en "las del perfil" y "el resto" el primer build habría esperado ~125 s.
+- **Cada cocción del resto repite un listado de 8 s** aunque el perfil sea de todas las partes (el listado del perfil ya era el del documento): optimización posible con un indicador de lista completa (saltear la continuación `Todo` cuando el listado del perfil ya fue el del documento entero); no se hizo.
+- **Un perfil que sólo consume el cache** hace el completo del libro en 36 s contra 330 s, pero su diff rasterizado contra el completo sin cache no da cero (spike S5, `docs/spikes/S5.md`).

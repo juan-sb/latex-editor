@@ -87,6 +87,11 @@ pub struct ProfileCfg {
     /// Define las macros de `flags.externalize` y compila con `-shell-escape`.
     #[serde(default)]
     pub externalize: bool,
+    /// Con `externalize`: el perfil sólo CONSUME el cache de figuras (`external/mode=graphics if exists`) y compila sin
+    /// `-shell-escape`: pgf no lanza ninguna subcompilación, ni siquiera la de una figura nueva (la que no esté se dibuja en el
+    /// lugar). Esa modalidad no mira el md5, así que antes de cada build la app cocina lo que falte (spike S5).
+    #[serde(default)]
+    pub cache_only: bool,
     #[serde(default)]
     pub parts: PartsSel,
     /// Borra los auxiliares del perfil antes de compilar (el completo del libro: referencias e índice desde cero).
@@ -108,6 +113,7 @@ impl Default for ProfileCfg {
             label: None,
             partial: false,
             externalize: false,
+            cache_only: false,
             parts: PartsSel::All,
             clean_before: false,
             auto_compile: true,

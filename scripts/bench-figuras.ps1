@@ -36,8 +36,9 @@ try {
         $salida = & $exe $copia --figuras 2>&1 | ForEach-Object { "$_" }
         $ErrorActionPreference = 'Stop'
         $seg = ((Get-Date) - $t).TotalSeconds
-        $lista = ($salida | Where-Object { $_ -match 'listado en' }) -replace '.*\(listado en ([0-9.]+) s\).*', '$1'
-        $coc = ($salida | Where-Object { $_ -match 'cocción terminada' }) -replace '.*ok=(\w+) cocidas=(\d+) fallidas=(\d+).* ([0-9.]+) s.*', 'ok=$1 cocidas=$2 fallidas=$3 total=$4'
+        # El motor imprime el aviso de cocción terminada dos veces (evento y resumen): se toma una sola línea de cada.
+        $lista = [string](($salida | Where-Object { $_ -match 'listado en' } | Select-Object -First 1) -replace '.*\(listado en ([0-9.]+) s\).*', '$1')
+        $coc = [string](($salida | Where-Object { $_ -match 'cocción terminada' } | Select-Object -Last 1) -replace '.*ok=(\w+) cocidas=(\d+) fallidas=(\d+).* ([0-9.]+) s.*', 'ok=$1 cocidas=$2 fallidas=$3 total=$4')
         Write-Host ("{0,2} trabajos: listado {1} s | {2} | reloj {3:N1} s" -f $j, $lista, $coc, $seg)
     }
 } finally {

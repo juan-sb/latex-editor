@@ -45,11 +45,15 @@ Si un spike o la implementación contradicen el plan, se actualiza `plan.md` y s
 - `scripts/aceptacion-f3.ps1`: el smoke de F3 sobre `fixtures/errores` (`LV_SMOKE=f3`, medio minuto): problemas, gutter, F8, panel.
 - `scripts/aceptacion-f4.ps1`: el smoke de F4, SyncTeX sobre el libro (`LV_SMOKE=f4`, ~1 minuto: compila el rápido y mide 50 saltos). Necesita el cache de figuras tibio.
 - `scripts/aceptacion-f5.ps1`: el smoke de F5 sobre `fixtures/editor` (`LV_SMOKE=f5`, segundos, sin TeX): formato, autocompletado, F12, Ctrl+P, paleta, esquema, búsqueda y reemplazo con bytes exactos, lint y keybindings.
+- `scripts/aceptacion-f6.ps1`: el smoke de F6 sobre una copia de `fixtures/figuras-app` (`LV_SMOKE=f6`, ~25 s, con TeX real): panel Figuras, Cocinar con progreso, disparo automático al cambiar el estilo, Limpiar con vista previa, una figura rota y Cancelar a mitad de una cocción.
+- `cargo run --release -p lv-core --example figuras -- <carpeta>`: estado del cache de figuras (sello, figuras por sello, MB) y lo que cuesta el chequeo previo a cada build (criterio de F6: < 20 ms). `--example build -- <carpeta> [perfil] --figuras` lista y cocina con el mismo motor que la app.
+- `scripts/bench-figuras.ps1 [-Trabajos 16,12,8,16]`: cocción completa de las 158 figuras del libro con distinta cantidad de subcompilaciones (copia del libro en `spikes/work/f6-libro`, ver el encabezado del script).
+- **Los tests con TeX real (`--features tex`) se corren desde PowerShell**, no desde Git Bash: el `PATH` de Git Bash trae el perl de MSYS y latexmk se rompe.
 - `cargo run --release -p lv-core --example simbolos -- <carpeta> [--root x.tex] [--search texto [--regex]]`: lo que indexa el core y cuánto tarda (índice y búsqueda). Para el libro hay que copiar antes `fixtures/configs/libro-tc.latexviewer.json` a `fixtures/libro-tc/latexviewer.json` (y borrarlo después).
 - `cargo test -p lv-core --features tex --test synctex_oraculo`: el parser de SyncTeX contra el CLI `synctex`, sobre `fixtures/sync`.
 - `cargo run -p lv-core --example problemas -- <raíz> <log|blg|ilg>`: lo que el parser saca de un log, para mirar uno nuevo antes de escribir su prueba. Los logs de `fixtures/logs/` se generan con `--example build` sobre `fixtures/errores` (copiado a `spikes/work`).
 - `scripts/compilar-fixtures.ps1`: compila los fixtures con latexmk a secas.
-- Variables de entorno de la app: `LV_OPEN` (carpeta a abrir), `LV_ROOT` (raíz del documento), `LV_SMOKE` (`1` o `f2` a `f5`), `LV_SMOKE_FILE`, `LV_SMOKE_OUT`, `LV_LATEXMK` (otro ejecutable en lugar de latexmk), `LV_CONFIG_DIR` (otro directorio de configuración del usuario, para que los smokes no toquen el `keybindings.json` real).
+- Variables de entorno de la app: `LV_OPEN` (carpeta a abrir), `LV_ROOT` (raíz del documento), `LV_SMOKE` (`1` o `f2` a `f6`), `LV_SMOKE_FILE`, `LV_SMOKE_OUT`, `LV_LATEXMK` (otro ejecutable en lugar de latexmk), `LV_CONFIG_DIR` (otro directorio de configuración del usuario, para que los smokes no toquen el `keybindings.json` real).
 
 ## Estructura
 
@@ -57,12 +61,15 @@ Si un spike o la implementación contradicen el plan, se actualiza `plan.md` y s
 plan.md        diseño y fases
 docs/          benchmarks.md, spikes/Sx.md, decisiones
 fixtures/      proyectos chicos de prueba; libro-tc/ es la copia del libro (ignorada); configs/ trae el latexviewer.json del libro
-scripts/       copiar-libro, bench-base, compilar-fixtures, aceptacion-f1 a f5, bom-ps1
+scripts/       copiar-libro, bench-base, bench-figuras, compilar-fixtures, aceptacion-f1 a f6, bom-ps1
 spikes/        código de los spikes de F0, de referencia (work/ ignorada)
 crates/lv-core core en Rust (sin Tauri): fsio, project, config (latexviewer.json y estado), graph (inclusión y partes),
                auxiliares (aislamiento de los .aux), build (driver, latexmk, streaming), procs (Job Objects), session (cola y motor),
                logparse (log de TeX, biber y makeindex a problemas), synctex (parser del .synctex.gz y las dos consultas),
-               symbols (etiquetas, citas, secciones, definiciones y lint sin compilar), search (buscar y reemplazar en el proyecto)
+               symbols (etiquetas, citas, secciones, definiciones y lint sin compilar), search (buscar y reemplazar en el proyecto),
+               cola (trabajos tipados Build/Bake con un solo ejecutor), figcache (sello, estado del cache, pendientes por contenido,
+               limpieza), figures (verificación de las figuras que fallan o se cortan), cocinero (cocción en paralelo y listado con el
+               perfil oculto `cocina`), session/bake (el trabajo Bake: orden, disparo automático, estado y limpieza para el panel Figuras)
                En el frontend, `src/sync/` tiene la lógica pura de SyncTeX (texto plano, búsqueda de palabras, los dos saltos),
                `src/comandos/` el registro de comandos, el despachador de teclado (`keybindings.json`) y el filtro difuso, y
                `src/nav/` el reconocimiento de lo que hay bajo el cursor (etiqueta, cita, archivo, comando) para F12.
@@ -82,6 +89,14 @@ inspo/         referencia, intocable, no se versiona
 - **`\include` abre los `.tex` de las partes excluidas** para comprobar que existen: el `.fls` no sirve para saber qué compiló un parcial (se mira la cantidad de páginas del log).
 - Las pasadas y el `.aux` truncado se detectan sobre el stream (`Contador`), con las agujas partidas entre fragmentos; no se guarda el log entero (el del libro pesa megas).
 
+- **pgf escribe el `.md5` de una figura ANTES de lanzar su subcompilación** (medido con MiKTeX): si la figura falla o se corta, queda el md5 nuevo con el PDF viejo y pgf lo da por bueno. Por eso `figures::verificar` corre después de cada build y cada cocción y borra PDF y md5 de lo que no pasa, antes de `move_md5`. Un `\comandoQueNoExiste` dentro de una figura sale con código 0 y sin error en el log principal.
+- **latexmk ignora un archivo de figura borrado** (no lo cuenta como cambio): para que el build siguiente reintente hay que borrar el `.fdb_latexmk` del perfil (`figures::desacreditar`).
+- **Las figuras se pendientan por CONTENIDO del `.md5`, nunca por mtime**: el `.md5` recién listado (en `.lv/build/cocina/<cache>/`) contra el compartido. `move_md5` es un `rename`.
+- Con la subcompilación corriendo con `\tikzexternalrealjob` biblatex deja un `<job>.run.xml` en la raíz del proyecto: se borra al terminar la cocción y el build.
+- **La limpieza del cache sólo se autoriza con una figlist COMPLETA del sello de hoy** (la del listado de todas las partes), nunca con la de un parcial, y sólo borra extensiones de figura.
+- En el modo `app` la clave de cada archivo para su slug es `\CurrentFilePath/\CurrentFile` (con `\include{Secciones/cap-b}`, `\CurrentFile` es sólo `cap-b.tex`).
+- Un perfil con `cacheOnly` (spike S5, `docs/spikes/S5.md`) compila sin `-shell-escape` y pgf no mira el md5: la app cocina el documento entero antes de cada build.
+
 ## Trampas de las herramientas de esta máquina
 
 - **No escribir código con backslashes a través de un heredoc de bash** (ni siquiera Rust o TS: `\\` llega como `\`). Siempre Write/Edit. Es lo mismo que pasa con el LaTeX.
@@ -92,4 +107,4 @@ inspo/         referencia, intocable, no se versiona
 
 ## Entorno de esta máquina
 
-Ryzen 7 3700X (8 núcleos / 16 hilos), 16 GB, Windows 11. MiKTeX 26.5 (LaTeX 2026-06-01, pdfTeX 4.27), latexmk 4.88, Perl ActiveState 5.36, Node 20, Rust stable-msvc. Los scripts de este repo son PowerShell o Node; Git Bash está disponible pero no se usa para escribir LaTeX.
+Ryzen 7 3700X (8 núcleos / 16 hilos), 16 GB, Windows 11. MiKTeX 26.5 (LaTeX 2026-06-01, pdfTeX 4.27), latexmk 4.88, Perl ActiveState 5.36, Node 24.22 (`pdfjs-dist` pide >= 22.13; `.npmrc` ya no baja el aviso de `engines`), Rust stable-msvc. Los scripts de este repo son PowerShell o Node; Git Bash está disponible pero no se usa para escribir LaTeX.

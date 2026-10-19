@@ -581,12 +581,12 @@ Aceptación: el índice del libro en menos de 1 s; cada atajo de 10.3 con evento
 
 > **Revisión previa a F6** (`docs/revision-pre-F6.md`): se agregan la cola de trabajos, la verificación de figuras que fallan o se cortan, el listado con todas las partes, las carpetas del cache, la prioridad de la cocción y el spike S5. Lo de la sección 7 marcado como de la revisión es parte de esta fase.
 
-- [ ] **Cola de trabajos, primero.** `Session` pasa de "un build y un pendiente" (`Builder::is_running` + `pendiente: Option<String>`) a una cola de trabajos tipados (`Build`, `Bake`; en F7 se suman `Export` y `Fragment`) con un solo ejecutor y un solo "ocupado". Un guardado durante una cocción queda pendiente igual que durante un build. Los tests de cola de F2 siguen pasando.
-- [ ] Carpetas del cache creadas antes de cada build; `move_md5` con `rename`; `max_print_line` en el entorno (5.1).
-- [ ] Verificación de figuras después de cada build, cocción y cancelación (7, "Figuras que fallan o se cortan"), con los errores de las figuras en el panel de problemas.
-- [ ] Modo `project` (para el libro) y modo `app` (probado en `fixtures/tikz-figuras`, con una copia sin su externalización propia).
-- [ ] Sello, listado con `cocina`, pendientes por contenido, cocción en paralelo con prioridad, disparo automático, limpieza, panel Figuras, progreso en la barra.
-- [ ] **S5:** el completo consumiendo el cache (7). Resultado en `docs/spikes/S5.md`.
+- [x] **Cola de trabajos, primero.** `Session` pasa de "un build y un pendiente" (`Builder::is_running` + `pendiente: Option<String>`) a una cola de trabajos tipados (`Build`, `Bake`; en F7 se suman `Export` y `Fragment`) con un solo ejecutor y un solo "ocupado". Un guardado durante una cocción queda pendiente igual que durante un build. Los tests de cola de F2 siguen pasando.
+- [x] Carpetas del cache creadas antes de cada build; `move_md5` con `rename`; `max_print_line` en el entorno (5.1).
+- [x] Verificación de figuras después de cada build, cocción y cancelación (7, "Figuras que fallan o se cortan"), con los errores de las figuras en el panel de problemas.
+- [x] Modo `project` (para el libro) y modo `app` (probado en `fixtures/figuras-app`, con una copia sin su externalización propia).
+- [x] Sello, listado con `cocina`, pendientes por contenido, cocción en paralelo con prioridad, disparo automático, limpieza, panel Figuras, progreso en la barra.
+- [ ] **S5:** el completo consumiendo el cache (7). Medido en `docs/spikes/S5.md`: 43 s contra 330 s, pero **el diff rasterizado no da cero** (89 de 198 páginas, 0,03 % de los píxeles). Frenado a la espera de la decisión de Juan; el completo sigue sin cache y `cleanBefore` no se tocó.
 
 Aceptación: cambio de `estilo_figuras.tex` con las ~108 figuras en ≤ 60 s en una máquina de 12 núcleos; agregar una figura arriba del capítulo 1 recocina sólo las de ese archivo; deshacer el cambio de estilo no recocina nada.
 
@@ -599,6 +599,10 @@ Aceptación agregada en la revisión (en esta máquina):
 - El smoke de F2 sigue pasando: el chequeo del sello y la verificación de figuras suman menos de 20 ms a un guardado sin figuras nuevas.
 
 > **Ajuste por la línea de base (F0).** El libro tiene hoy **158 figuras** (la figlist), no 108. El `cocinar_figuras.ps1` de inspo, de a 16 en el Ryzen 7 3700X (8 núcleos, 16 hilos), tarda **105 s** de cocción (114 s con el listado) contra los ~45 s del README. En esta máquina el criterio es **cocinar las 158 figuras en ≤ 105 s** (no ser más lenta que inspo), y los 60 s quedan para una máquina de 12 núcleos. Falta medir si el antivirus influye (riesgo de la sección 14). Deshacer el cambio de estilo ya no recocina nada en inspo (medido: 0 figuras, 4,7 s).
+
+> **Resultado de F6 (números en `docs/benchmarks.md`, smoke `scripts/aceptacion-f6.ps1`).** Cambio de estilo: cocción de las 158 figuras en **103,0 s y 110,4 s** con 16 trabajos (+ 7 a 9 s de listado); figura nueva arriba del capítulo 1: **15 cocidas** (las del archivo), 17 s; deshacer el estilo: **0**; parcial a la vista a los **34 s** del cambio (sus 46 figuras: 25 s); chequeo previo a cada build **6 ms**; cancelar a mitad de una cocción: 209 ms y nada cortado. El smoke de F6 (7 pasos, 25 s) y los de F1 a F5 pasan.
+>
+> **Lo que cambió respecto del plan, y se dice:** (1) **El criterio de 105 s se cumple en una de las dos corridas de 16 trabajos y se pasa en la otra por un 5 %**; con 12 trabajos son ~121 s y con 8, ~157 s. (2) El modo `app` se probó sobre `fixtures/figuras-app` (nuevo, 3 archivos con `\include` y `\input`), no sobre `tikz-figuras`. (3) Se eligió el camino A de la puerta de decisión (subcompilación sin `-output-directory`, cwd en la raíz): en el libro no pisa los `.aux` de `\include` en paralelo y no hizo falta un directorio por ranura. (4) El nombre de cada figura en el modo `app` sale de `\CurrentFilePath/\CurrentFile` (con `\include{Secciones/x}` `\CurrentFile` es sólo `x.tex`); un archivo con nombre no ASCII queda con el nombre por omisión de pgf. (5) pgf escribe el `.md5` **antes** de lanzar la subcompilación y latexmk no cuenta un archivo borrado como cambio: la verificación borra PDF y `.md5` y además el `.fdb_latexmk` del perfil. (6) Con `\tikzexternalrealjob`, biblatex deja un `<job>.run.xml` en la raíz: se borra al terminar. (7) Se agrega `ProfileCfg.cacheOnly` por S5 (no estaba en el plan; apagado por omisión). (8) Node: la máquina tiene **24.22, no 22** (cumple el `>= 22.13` de `pdfjs-dist`); se sacó `.npmrc` (`engine-strict=false`) y `npm ci`, los tests, `typecheck` y `tauri build` pasan sin avisos de `engines`. (9) No se midió el efecto del antivirus apagándolo (Defender en tiempo real, sin tocar sus exclusiones). (10) Cada cocción del resto repite un listado de 8 s aunque el perfil sea de todas las partes: optimización pendiente.
 
 ### F7. Exportación, fragmentos y variables
 

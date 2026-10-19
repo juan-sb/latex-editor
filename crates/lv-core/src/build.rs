@@ -115,6 +115,8 @@ pub struct DriverSpec {
     /// La externalización de figuras que la app agrega en el modo `app` (7 del plan). `None` en el modo `project`: el libro la
     /// trae en su `structure.tex`.
     pub figuras: Option<FigureInject>,
+    /// El perfil sólo consume el cache de figuras: `external/mode=graphics if exists`, sin subcompilaciones (spike S5).
+    pub solo_cache: bool,
 }
 
 /// Lo que el modo `app` agrega al driver para externalizar las figuras de un proyecto que no tiene externalización propia.
@@ -225,6 +227,11 @@ pub fn render_driver_spec(s: &DriverSpec) -> Result<String> {
     }
     if let Some(f) = &s.figuras {
         l.extend(render_figuras(f)?);
+    }
+    if s.solo_cache {
+        // Va por hook y no en el preámbulo: la raíz (o el bloque `app`) llama a `\tikzexternalize` con su propio modo, y el hook
+        // corre después, justo antes de `\begin{document}`.
+        l.push("\\AddToHook{begindocument/before}{\\tikzset{external/mode=graphics if exists}}".into());
     }
     if let Some(partes) = &s.includeonly {
         for p in partes {
@@ -763,12 +770,24 @@ mod tests {
             includeonly: Some(vec!["Secciones/Desnormalización".into(), "Secciones/Uno".into()]),
             draft_images: true,
             figuras: None,
+            solo_cache: false,
         })
         .unwrap();
         assert_eq!(
             d,
             "% .lv/drivers/lv-parcial.tex (generado por LaTeX Viewer, no editar)\n\\def\\lvPerfil{parcial}\n\\def\\lvParcial{1}\n\\PassOptionsToPackage{draft}{graphicx}\n\\def\\CompilacionReducida{}\n\\def\\TikzExternalizar{}\n\\def\\OpcionPie{autor}\n\\AddToHook{begindocument/before}{\\includeonly{Secciones/Desnormalización,Secciones/Uno}}\n\\input{\"Funciones de Aproximación\"}\n"
         );
+    }
+
+    #[test]
+    fn un_perfil_que_solo_consume_el_cache_pone_el_modo_de_pgf_antes_de_begin_document() {
+        let mut s = DriverSpec { perfil: "completo".into(), root_rel: "main.tex".into(), flags: vec!["TikzExternalizar".into()], ..Default::default() };
+        assert!(!render_driver_spec(&s).unwrap().contains("graphics if exists"));
+        s.solo_cache = true;
+        let d = render_driver_spec(&s).unwrap();
+        let hook = "\\AddToHook{begindocument/before}{\\tikzset{external/mode=graphics if exists}}";
+        assert!(d.contains(hook));
+        assert!(d.find(hook).unwrap() < d.find("\\input{").unwrap(), "el hook va antes de cargar la raíz: {d}");
     }
 
     #[test]

@@ -526,11 +526,12 @@ impl Session {
             includeonly,
             draft_images: pc.draft_images,
             figuras,
+            solo_cache: pc.externalize && pc.cache_only,
         })?;
         let dirs = ix.include_dirs(&cfg.parts.commands);
         d.index = Some(ix);
         Ok(Plan {
-            spec: RunSpec { perfil: perfil.to_string(), root_rel: rf, driver, engine: cfg.engine.clone(), shell_escape: pc.externalize, retry },
+            spec: RunSpec { perfil: perfil.to_string(), root_rel: rf, driver, engine: cfg.engine.clone(), shell_escape: pc.externalize && !pc.cache_only, retry },
             cache_dir: cfg.figure_dir(),
             clean: pc.clean_before,
             seed,

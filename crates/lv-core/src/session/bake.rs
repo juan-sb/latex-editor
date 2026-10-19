@@ -155,6 +155,14 @@ impl Session {
         figcache::necesita_cocer(&fcfg, &estado)
     }
 
+    /// ¿El perfil sólo consume el cache (`cacheOnly`) y hay cache encendido? Entonces pgf no mira el md5 ni cocina: antes de cada
+    /// build la app lista y cocina TODO lo que falte, y si no puede hacerlo el build no corre (saldría con figuras viejas).
+    pub(super) fn solo_cache(&self, perfil: &str) -> bool {
+        let Ok(d) = self.lock() else { return false };
+        let Some(cfg) = d.config.as_ref() else { return false };
+        cfg.profiles.get(perfil).is_some_and(|p| p.externalize && p.cache_only) && FigureCfg::de(cfg).modo != Modo::Off
+    }
+
     /// La externalización que el modo `app` agrega al driver (`None` en `project` y en `off`). `lista`: el driver de la cocción.
     pub(super) fn inyeccion_de_figuras(&self, cfg: &ProjectConfig, ix: &ProjectIndex, lista: bool) -> Result<Option<crate::build::FigureInject>> {
         let f = FigureCfg::de(cfg);
@@ -221,6 +229,7 @@ impl Session {
             includeonly,
             draft_images: false,
             figuras,
+            solo_cache: false,
         })?;
         let opciones = Opciones { root: self.root.clone(), engine: cfg.engine.clone(), dir: fcfg.dir.clone(), jobs: fcfg.jobs };
         Ok(PlanBake { driver, dirs: ix.include_dirs(&cfg.parts.commands), opciones, root_rel: rf })
@@ -249,11 +258,18 @@ impl Session {
     /// El build que pidió el usuario, precedido por la cocción de las figuras de su perfil si el sello cambió. Si la cocción
     /// no se puede armar (configuración incompleta) el build sigue su camino: pgf cocina de a una, como antes.
     pub(super) fn pedir_con_cocina(self: &Arc<Self>, perfil: String) -> Result<BuildAck> {
-        let fase = FaseBake::Perfil(perfil.clone());
+        // Un perfil que sólo consume el cache cocina SIEMPRE el documento entero antes (sin importar el 60 %), y un error al armar
+        // la cocción corta el pedido: compilar igual sería publicar figuras que pgf no revisó.
+        let solo_cache = self.solo_cache(&perfil);
+        let fase = if solo_cache { FaseBake::Todo } else { FaseBake::Perfil(perfil.clone()) };
+        if solo_cache {
+            self.plan_bake(&fase)?;
+        }
         // Con una cocción ya corriendo no se la envuelve en otra: el build queda pendiente tal cual y la cocción en curso le cede
         // el paso (si se envolviera, el pedido de cocina ocuparía el lugar del build y la cocción nunca cedería).
         let cocinando_ya = self.cola.activo() == Some(Clase::Bake);
-        if !cocinando_ya && self.debe_cocer_antes(&perfil) && self.plan_bake(&fase).is_ok() {
+        // (un perfil que sólo consume el cache sí se envuelve aunque haya una cocción corriendo: queda pendiente detrás de ella)
+        if solo_cache || (!cocinando_ya && self.debe_cocer_antes(&perfil) && self.plan_bake(&fase).is_ok()) {
             match self.cola.pedir(Job::Bake(BakeJob { fase, luego_build: Some(perfil.clone()) })) {
                 Pedido::Correr(t) => match self.ejecutar(&t, false) {
                     Ok(id) => return Ok(BuildAck::Started { id }),
