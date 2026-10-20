@@ -471,4 +471,8 @@ El doctor corre en segundo plano al abrir el proyecto y no frena nada; con las s
 3. **Con `:` como separador el PATH de Windows se cortaba en las letras de unidad**; en Windows se corta por `;`.
 4. **La primera vez que se ve un archivo de datos de figura, se invalida por las dudas**: es la causa de que el primer build de una copia nueva del libro recocine las 2 figuras de los engranajes. El historial lo dice ahora como «la app lo veía por primera vez» y no como un cambio.
 5. **El PATH reducido de latexmk es una propiedad de MiKTeX 26.5 en esta máquina**: sólo es un problema para proyectos con un `latexmkrc` que lance programas por nombre.
-6. **La corrida de regresión completa (F1 a F8 seguidos) se cortó por falta de memoria del sistema** (la máquina tenía 3,6 GB libres de 16 al revisar); no dejó nada vivo ni resultados parciales.
+6. **La primera corrida de regresión (F1 a F8 seguidos) se cortó por falta de memoria del sistema** (3,6 GB libres de 16); no dejó nada vivo. Repetida con 4,6 GB libres y el exe final, con F2 al final, pasaron los ocho smokes.
+
+### Regresión de F1 a F7 con F8
+
+Todos los smokes pasan con el exe final. F1: completo 330 s, 194 páginas. F3: 12 s. F4: 183 páginas, salto mediana 8 ms y p95 20 ms. F5: 5 s. F6: 23 s, cancelar en 206 ms. F7: 158 s, 1 build por el cambio de afuera a los 387 ms, 1 página distinta de 183. **F2** (sin ninguna instancia de la app abierta): parcial guardado a PDF visible **4,9 s** (latexmk 4,7 s) y rápido **9,6 s** (latexmk 9,2 s), contra 5,1/4,9 s y 10,9/10,4 s en F7; la app suma 0,2 a 0,4 s a latexmk, como antes (el candado, el historial y la cuenta de procesos de TeX no se notan). 40 recargas del PDF: 485 cuadros, 0 en blanco, deriva 0, memoria del WebView 550 a 652 MB (F7: 547 a 657 MB).
