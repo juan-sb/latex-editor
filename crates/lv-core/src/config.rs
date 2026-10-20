@@ -388,8 +388,9 @@ pub enum OutsideSave {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct State {
-    /// Raíz elegida en esta máquina; pisa a la de `latexviewer.json` (que puede no existir todavía).
-    pub root: Option<String>,
+    // La raíz ya no está acá (F8b): la elige la pantalla Proyecto y vive en `latexviewer.json`. Con una en `state.json`, que pisaba
+    // a la del proyecto, la cocina del libro de inspo se listó con `cap_actual.tex` (que recorta capítulos) como raíz. Un
+    // `state.json` viejo con `root` se ignora (queda en `extra`, sin usarse).
     pub active_profile: Option<String>,
     /// Nombres de las partes tildadas, tal como las lleva `\includeonly`.
     pub selection: Vec<String>,
@@ -404,7 +405,6 @@ pub struct State {
 impl Default for State {
     fn default() -> Self {
         State {
-            root: None,
             active_profile: None,
             selection: vec![],
             variables: BTreeMap::new(),

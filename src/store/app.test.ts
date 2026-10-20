@@ -51,7 +51,6 @@ const perfil = (id: string, o: Partial<ProfileInfo> = {}): ProfileInfo => ({
 
 /** El estado de esta máquina de los tests: manual, para que guardar no dispare builds salvo en los tests que lo piden. */
 const estadoBase = (): AppStateInfo => ({
-  root: null,
   activeProfile: 'parcial',
   selection: ['Secciones/Uno'],
   variables: {},

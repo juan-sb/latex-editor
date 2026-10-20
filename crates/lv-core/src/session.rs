@@ -267,12 +267,8 @@ impl Session {
         };
         let state = config::read_state(&p.root);
         let existe = |rel: &String| fsio::resolver(&p.root, rel, false).is_ok_and(|r| r.is_file());
-        let root_file = state
-            .root
-            .clone()
-            .filter(existe)
-            .or_else(|| config.as_ref().map(|c| c.root.clone()).filter(existe))
-            .or_else(|| p.info.suggested.clone());
+        // La raíz es la de `latexviewer.json`; sin él, la única candidata (`state.json` ya no la guarda, F8b).
+        let root_file = config.as_ref().map(|c| c.root.clone()).filter(existe).or_else(|| p.info.suggested.clone());
         // Dos instancias sobre el mismo proyecto escribirían el mismo `.lv/` y el mismo cache: la primera toma el candado.
         let (candado, bloqueado_por) = match candado::adquirir(&p.root) {
             candado::Adquirido::Tomado(c) => (Some(c), None),
@@ -419,8 +415,9 @@ impl Session {
             return Err(Error::NotFound(rel.to_string()));
         }
         let mut d = self.lock()?;
+        // Sólo cambia esta sesión (lo usan `LV_ROOT` de los smokes y el ejemplo `build`): la raíz del proyecto está en `latexviewer.json`
+        // y se cambia desde la pantalla Proyecto. Antes se guardaba en `state.json` y pisaba a la del proyecto.
         d.root_file = Some(rel.to_string());
-        d.state.root = Some(rel.to_string());
         if !d.config_saved {
             d.config = None; // se vuelve a inferir para la raíz nueva
         }
@@ -550,7 +547,8 @@ impl Session {
             Some(partes.clone())
         } else {
             match pc.parts {
-            PartsSel::All => None,
+            // Todas las partes con la lista completa (no `None`): un `\includeonly` propio de la raíz no lo recorta (S6).
+            PartsSel::All => (!nombres.is_empty()).then(|| nombres.clone()),
             PartsSel::Selection => {
                 if nombres.is_empty() {
                     return Err(otro(format!(

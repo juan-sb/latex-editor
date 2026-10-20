@@ -49,7 +49,7 @@ export function FigurasPanel() {
             Cancelar
           </button>
         )}
-        <button className="boton chico" onClick={() => void limpiar()} disabled={cocinando || !f.figlist?.completa || !f.figlist.delSelloDeHoy} title="Borra lo que el documento ya no usa (te muestra cuánto antes)">
+        <button className="boton chico" onClick={() => void limpiar()} disabled={cocinando || !f.figlist?.completa || !f.figlist.delSelloDeHoy || !f.figlist.vale} title="Borra lo que el documento ya no usa (te muestra cuánto antes)">
           Limpiar
         </button>
       </div>
@@ -71,6 +71,7 @@ export function FigurasPanel() {
           {f.viejas > 0 && ` · ${f.viejas} de sellos anteriores (${mbViejos} MB)`}
           {f.figlist && !f.figlist.completa && ' · la última lista es de un perfil parcial: no se puede limpiar'}
           {f.figlist && f.figlist.completa && !f.figlist.delSelloDeHoy && ' · la lista es de otro sello: no se puede limpiar'}
+          {f.figlist && f.figlist.completa && f.figlist.delSelloDeHoy && !f.figlist.vale && ' · la lista es de otra raíz o de otras partes: cociná todo antes de limpiar'}
         </div>
       </div>
       {f.errores.length > 0 && (

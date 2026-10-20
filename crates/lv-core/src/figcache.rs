@@ -245,6 +245,51 @@ pub struct Figlist {
     /// misma que la de ahora, no cambió nada que pueda cambiar una figura y el listado previo a un build se saltea.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub huella: Option<String>,
+    /// La raíz con que se armó la lista. Con otra raíz (que puede tener su propio `\includeonly`, como `cap_actual.tex` del libro) lo
+    /// que lista no es lo mismo: una figlist sin raíz (de antes de F8b) **no vale**.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raiz: Option<String>,
+    /// Las partes con que se armó (las del `\includeonly` del listado; todas si no había). Una lista sólo vale para las partes que cubre.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partes: Option<Vec<String>>,
+}
+
+impl Figlist {
+    /// ¿Esta lista sirve para estas partes, con este sello y esta raíz? Es la condición de **todo** uso de la lista (limpiar, saltear el
+    /// listado, decidir qué figuras le faltan a un perfil): mismo sello, misma raíz y que haya sido armada con, al menos, las partes
+    /// `necesarias` (las que tienen figuras, o las de un perfil). El caso de inspo: la cocina se listó con la raíz `cap_actual.tex`, que
+    /// recortaba a `Desnormalización`, y la lista de 46 figuras quedó como «completa» del libro.
+    pub fn vale_para(&self, sello_hoy: &str, raiz: &str, necesarias: &BTreeSet<String>) -> bool {
+        self.sello == sello_hoy && self.cubre(raiz, necesarias)
+    }
+
+    /// Lo mismo sin mirar el sello: la lista se armó con esta raíz y con, al menos, estas partes. Alcanza para saber **qué figuras** tiene
+    /// que haber (con otro sello se llaman igual salvo el prefijo, `con_sello`): deshacer un cambio de estilo vuelve al sello anterior,
+    /// cuyas figuras siguen en el cache, y no hace falta volver a listar para saberlo.
+    pub fn cubre(&self, raiz: &str, necesarias: &BTreeSet<String>) -> bool {
+        if self.raiz.as_deref() != Some(raiz) {
+            return false;
+        }
+        match &self.partes {
+            Some(p) => necesarias.iter().all(|n| p.contains(n)),
+            None => false,
+        }
+    }
+
+    /// Los nombres de la lista con el sello de hoy (`figuras-cache/A1B2C3-cauer-7` pasa a `figuras-cache/<hoy>-cauer-7`).
+    pub fn nombres_con_sello(&self, hoy: &str) -> Vec<String> {
+        self.nombres
+            .iter()
+            .map(|n| {
+                let (dir, base) = n.rsplit_once('/').unwrap_or(("", n.as_str()));
+                match partir_nombre(base) {
+                    Some((_, slug, num)) if !dir.is_empty() => format!("{dir}/{hoy}-{slug}-{num}"),
+                    Some((_, slug, num)) => format!("{hoy}-{slug}-{num}"),
+                    None => n.clone(),
+                }
+            })
+            .collect()
+    }
 }
 
 pub fn leer_figlist(root: &Path) -> Option<Figlist> {
@@ -895,6 +940,23 @@ mod tests {
 
     fn figlist(completa: bool, sello: &str) -> Figlist {
         Figlist { sello: sello.into(), completa, nombres: ["figuras-cache/6D06AB-a-0", "figuras-cache/6D06AB-a-1", "figuras-cache/6D06AB-b-0"].iter().map(|s| s.to_string()).collect(), ..Default::default() }
+    }
+
+    #[test]
+    fn una_lista_vale_para_su_sello_su_raiz_y_las_partes_con_que_se_armo() {
+        let partes = |p: &[&str]| p.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let set = |p: &[&str]| p.iter().map(|s| s.to_string()).collect::<BTreeSet<_>>();
+        let l = Figlist { raiz: Some("libro.tex".into()), partes: Some(partes(&["A", "B"])), ..figlist(true, "6D06AB") };
+        assert!(l.vale_para("6D06AB", "libro.tex", &set(&["A", "B"])));
+        assert!(l.vale_para("6D06AB", "libro.tex", &set(&["B"])), "cubre un subconjunto");
+        assert!(!l.vale_para("6D06AB", "libro.tex", &set(&["A", "C"])), "una parte con figuras que la lista no cubre");
+        assert!(!l.vale_para("6D06AB", "cap_actual.tex", &set(&["A"])), "otra raíz");
+        assert!(!l.vale_para("AAAAAA", "libro.tex", &set(&["A"])), "otro sello");
+        assert!(l.cubre("libro.tex", &set(&["A"])), "sin mirar el sello");
+        // Una lista de antes de F8b no dice con qué se armó: no vale.
+        assert!(!figlist(true, "6D06AB").vale_para("6D06AB", "libro.tex", &set(&[])));
+        // Con el sello de hoy los nombres cambian de prefijo y nada más.
+        assert_eq!(l.nombres_con_sello("AAAAAA"), ["figuras-cache/AAAAAA-a-0", "figuras-cache/AAAAAA-a-1", "figuras-cache/AAAAAA-b-0"]);
     }
 
     #[test]

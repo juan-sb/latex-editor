@@ -80,8 +80,12 @@ pub(super) struct PlanBake {
     dirs: BTreeSet<String>,
     opciones: Opciones,
     root_rel: String,
-    /// El listado es del documento entero (sin `\includeonly`): la lista sirve para limpiar y no hace falta un `Todo` después.
+    /// La lista cubre cada parte que tiene figuras: sirve para limpiar y no hace falta un `Todo` después.
     completa: bool,
+    /// Las partes con que se lista (el `\includeonly` del driver; todas las del proyecto si el perfil es de todas), y las que tienen
+    /// figuras según el índice: van a la figlist (`Figlist::vale_para`).
+    partes: Vec<String>,
+    partes_con_figuras: BTreeSet<String>,
     /// `figcache::huella_de_figuras` al armar el plan (sólo con un listado completo).
     huella: Option<String>,
     /// Lo que las figuras leen desde adentro de su `tikzpicture` (antes de listar se invalidan las figuras si cambió).
@@ -120,6 +124,8 @@ pub struct FiglistView {
     pub total: usize,
     pub completa: bool,
     pub del_sello_de_hoy: bool,
+    /// La lista es completa **y** de esta raíz y de todas las partes con figuras (`Figlist::vale_para`): sólo así autoriza a limpiar.
+    pub vale: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -149,21 +155,74 @@ fn ahora_ms() -> u64 {
 impl Session {
     // --- decidir ------------------------------------------------------------------------------------------------------------------
 
-    /// ¿Hay que cocinar antes de este build? Sólo para un perfil que externaliza, con el cache encendido y con sello en los
-    /// nombres. Un md5 y un listado de carpeta (se mide en `docs/benchmarks.md`).
-    pub(super) fn debe_cocer_antes(&self, perfil: &str) -> bool {
-        let Ok(d) = self.lock() else { return false };
-        let Some(cfg) = d.config.as_ref() else { return false };
-        if !cfg.profiles.get(perfil).is_some_and(|p| p.externalize) {
-            return false;
-        }
+    /// ¿Hay que cocinar antes de este build, y por qué? Sólo para un perfil que externaliza, con el cache encendido y con sello en
+    /// los nombres. `None`: no hace falta. Los motivos (el historial los muestra como «se listaron las figuras antes de compilar»):
+    ///
+    /// 1. el sello de hoy no tiene figuras o tiene menos del 60 % de las de otro (cambió el estilo);
+    /// 2. **no se sabe qué figuras necesitan las partes del perfil**: no hay lista, es de otra raíz o de otras partes (`Figlist::vale_para`);
+    /// 3. **la lista sí vale y a las partes del perfil les faltan PDFs**. Es el caso de inspo: con 82 de 158 figuras en el cache, un
+    ///    parcial con Butterworth dejaba que pgf cocinara 8 de a una dentro de la pasada (30 s) en lugar de cocinarlas en paralelo antes.
+    ///
+    /// Un md5, un listado de carpeta y un `stat` por figura de las partes del perfil (se mide en `docs/benchmarks.md`).
+    pub(super) fn debe_cocer_antes(&self, perfil: &str) -> Option<String> {
+        let d = self.lock().ok()?;
+        let cfg = d.config.as_ref()?;
+        let pc = cfg.profiles.get(perfil).filter(|p| p.externalize)?;
         let fcfg = FigureCfg::de(cfg);
         if fcfg.modo == Modo::Off || !fcfg.usa_sello() {
-            return false;
+            return None;
         }
         let hoy = figcache::sello(&self.root, &fcfg.stamp_files);
         let estado = figcache::estado_del_cache(&figcache::escanear(&self.root, &fcfg.dir), hoy.as_deref());
-        figcache::necesita_cocer(&fcfg, &estado)
+        if figcache::necesita_cocer(&fcfg, &estado) {
+            return Some("faltan las figuras del sello de hoy (cambió el estilo)".into());
+        }
+        let (hoy, rf) = (hoy?, d.root_file.as_ref()?);
+        // El índice que dejó el último guardado (`file_info`); si no hay, se arma.
+        let propio;
+        let ix = match d.index.as_ref() {
+            Some(ix) => ix,
+            None => {
+                propio = ProjectIndex::build(&self.root, rf, &cfg.parts.commands);
+                &propio
+            }
+        };
+        let todas = ix.part_names();
+        // Un error acá (un perfil de exportación, partes elegidas sin partes) lo dice el build.
+        let del_perfil: Vec<String> = Self::includeonly_de(&d, perfil, pc, &todas).ok()?.unwrap_or_default();
+        let slugs = self.slug_a_archivo(&fcfg, ix);
+        let parte_de = |n: &str| -> Option<Option<String>> {
+            let (_, slug, _) = figcache::partir_nombre(figures::nombre_corto(n))?;
+            let archivo = slugs.get(&slug)?;
+            Some(ix.part_of(archivo).map(|i| ix.parts[i].name.clone()))
+        };
+        // Las figuras de los archivos que no son de ninguna parte (el preámbulo, la raíz) entran en todo perfil.
+        let en_el_perfil = |p: &Option<String>| del_perfil.is_empty() || p.as_ref().is_none_or(|p| del_perfil.contains(p));
+        let necesarias: BTreeSet<String> = self.partes_con_figuras(&fcfg, ix).into_iter().filter(|p| en_el_perfil(&Some(p.clone()))).collect();
+        if necesarias.is_empty() {
+            return None;
+        }
+        // La lista no tiene que ser del sello de hoy, sólo de esta raíz y de estas partes: con otro sello las figuras se llaman igual salvo el
+        // prefijo (deshacer un cambio de estilo no debería obligar a volver a listar).
+        let Some(lista) = figcache::leer_figlist(&self.root).filter(|l| l.cubre(rf, &necesarias)) else {
+            return Some("todavía no se sabe qué figuras necesitan las partes de este perfil (no hay lista, o es de otra raíz o de otras partes)".into());
+        };
+        let faltan = lista.nombres_con_sello(&hoy).iter().filter(|n| parte_de(n).is_some_and(|p| en_el_perfil(&p)) && !self.root.join(format!("{n}.pdf")).is_file()).count();
+        (faltan > 0).then(|| format!("faltan {faltan} figuras de las partes del perfil"))
+    }
+
+    /// slug de figura -> archivo que lo declara (modo `project`: `\FigurasDe{slug}`; modo `app`: el slug que la app le puso al archivo).
+    fn slug_a_archivo(&self, f: &FigureCfg, ix: &ProjectIndex) -> BTreeMap<String, String> {
+        match f.modo {
+            Modo::App => figcache::slugs_app(&ix.reachable).into_iter().map(|(archivo, slug)| (slug, archivo)).collect(),
+            Modo::Project => figcache::slugs_por_archivo(&self.root, &ix.reachable).into_iter().collect(),
+            Modo::Off => BTreeMap::new(),
+        }
+    }
+
+    /// Las partes del índice que tienen figuras (un archivo con `\FigurasDe`, o con slug en el modo `app`, que es de esa parte).
+    fn partes_con_figuras(&self, f: &FigureCfg, ix: &ProjectIndex) -> BTreeSet<String> {
+        self.slug_a_archivo(f, ix).values().filter_map(|a| ix.part_of(a).map(|i| ix.parts[i].name.clone())).collect()
     }
 
     /// ¿El perfil sólo consume el cache (`cacheOnly`) y hay cache encendido? Entonces pgf no mira el md5 ni cocina: antes de cada
@@ -186,10 +245,12 @@ impl Session {
         Ok(Some(crate::build::FigureInject { dir: f.dir, sello, solo_en_figure: f.only_in_figure_env, lista, slugs }))
     }
 
-    /// El `includeonly` de un perfil (el mismo criterio que `plan`): `None` si compila todo.
-    fn includeonly_de(d: &Datos, perfil: &str, pc: &ProfileCfg, nombres: &[String]) -> Result<Option<Vec<String>>> {
+    /// El `includeonly` de un perfil (el mismo criterio que `plan`). Un perfil de **todas** las partes lleva la lista completa (no
+    /// `None`): una raíz con su propio `\includeonly` (`cap_actual.tex` del libro) lo recortaría, y el último gana (S6). `None` sólo si
+    /// el proyecto no tiene partes.
+    pub(super) fn includeonly_de(d: &Datos, perfil: &str, pc: &ProfileCfg, nombres: &[String]) -> Result<Option<Vec<String>>> {
         match pc.parts {
-            PartsSel::All => Ok(None),
+            PartsSel::All => Ok((!nombres.is_empty()).then(|| nombres.to_vec())),
             PartsSel::Selection => {
                 if nombres.is_empty() {
                     return Err(otro(format!("el perfil {perfil:?} compila partes elegidas, pero el proyecto no tiene partes")));
@@ -213,14 +274,18 @@ impl Session {
             return Err(otro("el cache de figuras está apagado (`figureCache.mode` en latexviewer.json)"));
         }
         let ix = ProjectIndex::build(&self.root, &rf, &cfg.parts.commands);
+        let todas = ix.part_names();
         let includeonly = match fase {
             FaseBake::Perfil(p) => {
                 let pc = cfg.profiles.get(p).ok_or_else(|| otro(format!("no existe el perfil {p:?}")))?;
-                Self::includeonly_de(&d, p, pc, &ix.part_names())?
+                Self::includeonly_de(&d, p, pc, &todas)?
             }
-            FaseBake::Todo => None,
+            FaseBake::Todo => (!todas.is_empty()).then(|| todas.clone()),
         };
-        let completa = includeonly.is_none();
+        // «Completa» ya no es «sin `\includeonly`»: es que la lista cubra cada parte que tiene figuras.
+        let partes_con_figuras = self.partes_con_figuras(&fcfg, &ix);
+        let completa = includeonly.as_ref().is_none_or(|io| partes_con_figuras.iter().all(|p| io.contains(p)));
+        let partes = includeonly.clone().unwrap_or_default();
         // Los flags de la cocción son los de `partial` (omite portada e índices), `externalize` y el de listado de pgf.
         let flags: Vec<String> = cfg.flags.partial.iter().chain(&cfg.flags.externalize).chain(&cfg.flags.figure_list).cloned().collect();
         if cfg.flags.figure_list.is_empty() && fcfg.modo == Modo::Project {
@@ -247,7 +312,7 @@ impl Session {
         let opciones = Opciones { root: self.root.clone(), engine: cfg.engine.clone(), dir: fcfg.dir.clone(), jobs: fcfg.jobs };
         let huella = if completa { self.huella_actual(&ix, &fcfg) } else { None };
         let datos = self.datos_de_figuras(&cfg, &ix);
-        Ok(PlanBake { driver, dirs: ix.include_dirs(&cfg.parts.commands), opciones, root_rel: rf, completa, huella, datos })
+        Ok(PlanBake { driver, dirs: ix.include_dirs(&cfg.parts.commands), opciones, root_rel: rf, completa, partes, partes_con_figuras, huella, datos })
     }
 
     /// `figcache::huella_de_figuras` del proyecto tal como está en el disco (`None` si falta un archivo del sello).
@@ -331,6 +396,10 @@ impl Session {
             return no("cambió el sello de las figuras (el estilo)");
         }
         let ix = ProjectIndex::build(&self.root, rf, &cfg.parts.commands);
+        // La lista tiene que ser de esta raíz y de todas las partes que tienen figuras (la de inspo, armada con `cap_actual.tex`, no lo era).
+        if !lista.vale_para(&sello, rf, &self.partes_con_figuras(&f, &ix)) {
+            return no("la última lista es de otra raíz o de otras partes del proyecto");
+        }
         let hoy = figcache::huella_de_figuras(&self.root, &ix.reachable, &ix.archivos_de_datos(f.only_in_figure_env), &|rel| ix.part_of(rel).is_some(), &sello);
         if hoy != guardada {
             return no("cambió algo que puede cambiar una figura (una figura, una definición, el preámbulo o un archivo que una figura lee)");
@@ -384,8 +453,12 @@ impl Session {
         // Con una cocción ya corriendo no se la envuelve en otra: el build queda pendiente tal cual y la cocción en curso le cede
         // el paso (si se envolviera, el pedido de cocina ocuparía el lugar del build y la cocción nunca cedería).
         let cocinando_ya = self.cola.activo() == Some(Clase::Bake);
+        let razon = if solo_cache || cocinando_ya { None } else { self.debe_cocer_antes(&perfil) };
         // (un perfil que sólo consume el cache sí se envuelve aunque haya una cocción corriendo: queda pendiente detrás de ella)
-        if solo_cache || (!cocinando_ya && self.debe_cocer_antes(&perfil) && self.plan_bake(&fase).is_ok()) {
+        if solo_cache || (razon.is_some() && self.plan_bake(&fase).is_ok()) {
+            if let (Some(r), Ok(mut l)) = (&razon, self.listado_decidido.lock()) {
+                *l = Some(historial::Listado { salteado: false, motivo: r.clone() });
+            }
             match self.cola.pedir(Job::Bake(BakeJob { fase, luego_build: Some(perfil.clone()), motivo: format!("antes del build de {perfil}") })) {
                 Pedido::Correr(t) => match self.ejecutar(&t, false) {
                     Ok(id) => return Ok(BuildAck::Started { id }),
@@ -536,7 +609,7 @@ impl Session {
             d.a_cocinar = pend.len() as u32;
         }
         let completa = plan.completa;
-        self.guardar_lista(&nombres, &pend, &[], completa, stamp.as_deref(), None);
+        self.guardar_lista(plan, &nombres, &pend, &[], stamp.as_deref(), None);
         let total = pend.len() as u32;
         if let Ok(mut g) = self.bake.cocinando.lock() {
             if let Some(c) = g.as_mut() {
@@ -566,17 +639,19 @@ impl Session {
         let fallidas: Vec<String> = res.rotas.iter().map(|f| f.nombre.clone()).collect();
         // La huella sólo se guarda con todo cocido y verificado: es lo que autoriza a saltear el listado la próxima vez.
         let huella = if completa && sin_cocer.is_empty() && !res.cancelado { plan.huella.clone() } else { None };
-        self.guardar_lista(&nombres, &sin_cocer, &fallidas, completa, stamp.as_deref(), huella);
+        self.guardar_lista(plan, &nombres, &sin_cocer, &fallidas, stamp.as_deref(), huella);
         Ok(res)
     }
 
-    /// Escribe `.lv/figlist.json`. La lista de un perfil parcial no pisa a una completa del mismo sello (la limpieza sólo se
-    /// autoriza con la completa): se limita a actualizar qué falta.
-    fn guardar_lista(&self, nombres: &[String], pendientes: &[String], fallidas: &[String], completa: bool, sello: Option<&str>, huella: Option<String>) {
+    /// Escribe `.lv/figlist.json`, con la raíz y las partes con que se armó. La lista de un perfil parcial no pisa a una completa que
+    /// **vale** hoy (mismo sello, misma raíz y todas las partes con figuras: la limpieza sólo se autoriza con ésa): se limita a
+    /// actualizar qué falta. Una completa de otra raíz o de otras partes no se conserva.
+    fn guardar_lista(&self, plan: &PlanBake, nombres: &[String], pendientes: &[String], fallidas: &[String], sello: Option<&str>, huella: Option<String>) {
+        let completa = plan.completa;
         let sello = sello.unwrap_or("").to_string();
         let previa = figcache::leer_figlist(&self.root);
         let nueva = match previa {
-            Some(mut p) if !completa && p.completa && p.sello == sello => {
+            Some(mut p) if !completa && p.completa && p.vale_para(&sello, &plan.root_rel, &plan.partes_con_figuras) => {
                 p.pendientes.retain(|n| !nombres.contains(n) || pendientes.contains(n));
                 for n in pendientes {
                     if !p.pendientes.contains(n) && p.nombres.contains(n) {
@@ -592,7 +667,17 @@ impl Session {
                 p.fecha_ms = ahora_ms();
                 p
             }
-            _ => Figlist { sello, completa, fecha_ms: ahora_ms(), nombres: nombres.to_vec(), pendientes: pendientes.to_vec(), fallidas: fallidas.to_vec(), huella },
+            _ => Figlist {
+                sello,
+                completa,
+                fecha_ms: ahora_ms(),
+                nombres: nombres.to_vec(),
+                pendientes: pendientes.to_vec(),
+                fallidas: fallidas.to_vec(),
+                huella,
+                raiz: Some(plan.root_rel.clone()),
+                partes: Some(plan.partes.clone()),
+            },
         };
         let _ = figcache::guardar_figlist(&self.root, &nueva);
     }
@@ -618,9 +703,11 @@ impl Session {
         let figs = figcache::escanear(&self.root, &fcfg.dir);
         let estado = figcache::estado_del_cache(&figs, hoy.as_deref());
         let lista = figcache::leer_figlist(&self.root);
+        let mut vale = false;
         let slugs = match &rf {
             Some(rf) => {
                 let ix = ProjectIndex::build(&self.root, rf, &cfg.parts.commands);
+                vale = lista.as_ref().zip(hoy.as_deref()).is_some_and(|(l, h)| l.completa && l.vale_para(h, rf, &self.partes_con_figuras(&fcfg, &ix)));
                 if fcfg.modo == Modo::App {
                     // Los slugs los puso la app (a partir del nombre de cada archivo): se invierte esa tabla.
                     figcache::slugs_app(&ix.reachable).into_iter().map(|(archivo, slug)| (slug, archivo)).collect()
@@ -685,7 +772,7 @@ impl Session {
             bytes_viejos: estado.bytes_viejos,
             pendientes: vistas.iter().filter(|v| v.estado == "pendiente" || v.estado == "falta").count(),
             fallidas: vistas.iter().filter(|v| v.estado == "fallo").count(),
-            figlist: lista.as_ref().map(|l| FiglistView { fecha_ms: l.fecha_ms, total: l.nombres.len(), completa: l.completa, del_sello_de_hoy: Some(l.sello.as_str()) == hoy.as_deref() }),
+            figlist: lista.as_ref().map(|l| FiglistView { fecha_ms: l.fecha_ms, total: l.nombres.len(), completa: l.completa, del_sello_de_hoy: Some(l.sello.as_str()) == hoy.as_deref(), vale }),
             figuras: vistas,
             cocinando: self.bake.cocinando.lock().ok().and_then(|g| g.clone()),
             errores,
@@ -693,10 +780,21 @@ impl Session {
     }
 
     fn contexto_de_limpieza(&self) -> Result<(FigureCfg, String, Option<Figlist>)> {
-        let cfg = self.lock()?.config.clone().ok_or_else(|| otro("no hay configuración"))?;
+        let (cfg, rf) = {
+            let d = self.lock()?;
+            (d.config.clone().ok_or_else(|| otro("no hay configuración"))?, d.root_file.clone())
+        };
         let fcfg = FigureCfg::de(&cfg);
         let hoy = figcache::sello(&self.root, &fcfg.stamp_files).ok_or_else(|| otro("no se pudo calcular el sello: falta un archivo de `stampFiles`"))?;
-        Ok((fcfg, hoy, figcache::leer_figlist(&self.root)))
+        let lista = figcache::leer_figlist(&self.root);
+        // Una lista de otra raíz o de otras partes nombraría de menos y la limpieza borraría figuras vivas.
+        if let (Some(l), Some(rf)) = (&lista, &rf) {
+            let ix = ProjectIndex::build(&self.root, rf, &cfg.parts.commands);
+            if l.completa && !l.vale_para(&hoy, rf, &self.partes_con_figuras(&fcfg, &ix)) && l.sello == hoy {
+                return Err(otro("la lista de figuras es de otra raíz o de otras partes del proyecto (por ejemplo, se armó con una raíz que recorta capítulos): cociná todo antes de limpiar"));
+            }
+        }
+        Ok((fcfg, hoy, lista))
     }
 
     /// Lo que borraría la limpieza (archivos y MB), sin borrar nada.

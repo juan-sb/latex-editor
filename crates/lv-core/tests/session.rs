@@ -135,17 +135,18 @@ fn el_driver_del_parcial_lleva_flags_variables_e_includeonly_de_la_seleccion() {
         driver(&d, "parcial"),
         "% .lv/drivers/lv-parcial.tex (generado por LaTeX Viewer, no editar)\n\\def\\lvPerfil{parcial}\n\\def\\lvParcial{1}\n\\def\\CompilacionReducida{}\n\\def\\TikzExternalizar{}\n\\def\\OpcionPie{completo}\n\\AddToHook{begindocument/before}{\\includeonly{Secciones/Dos}}\n\\input{\"main\"}\n"
     );
-    // Cambiar la variable y compilar el rápido: sin \includeonly y con el valor nuevo.
+    // Cambiar la variable y compilar el rápido: con el valor nuevo y, como es de todas las partes, con la lista COMPLETA en el \includeonly
+    // (F8b: una raíz con su propio \includeonly no lo recorta, S6).
     s.set_state(StatePatch { variables: Some([("OpcionPie".to_string(), "autor".to_string())].into()), ..Default::default() }).unwrap();
     s.request_build(Some("rapido")).unwrap();
     esperar_finales(&r, 2, 60);
     let rapido = driver(&d, "rapido");
-    assert!(rapido.contains("\\def\\OpcionPie{autor}") && !rapido.contains("includeonly"), "{rapido}");
-    // El completo no lleva flags ni parcial.
+    assert!(rapido.contains("\\def\\OpcionPie{autor}") && rapido.contains("\\includeonly{Secciones/Uno,Secciones/Dos}"), "{rapido}");
+    // El completo no lleva flags ni parcial, y también la lista completa de partes.
     s.request_build(Some("completo")).unwrap();
     esperar_finales(&r, 3, 60);
     let c = driver(&d, "completo");
-    assert!(c.contains("\\def\\lvParcial{0}") && !c.contains("CompilacionReducida") && !c.contains("includeonly"), "{c}");
+    assert!(c.contains("\\def\\lvParcial{0}") && !c.contains("CompilacionReducida") && c.contains("\\includeonly{Secciones/Uno,Secciones/Dos}"), "{c}");
 }
 
 #[test]
@@ -524,7 +525,9 @@ fn cambiar_la_raiz_no_se_puede_con_un_build_en_curso() {
     esperar_finales(&r, 1, 60);
     let v = s.set_root("otro.tex").unwrap();
     assert_eq!(v.root_file.as_deref(), Some("otro.tex"));
-    assert_eq!(lv_core::config::read_state(d.path()).root.as_deref(), Some("otro.tex"));
+    // La raíz de la sesión no se guarda en `state.json` (F8b): se persiste desde la pantalla Proyecto, en `latexviewer.json`.
+    let estado = fs::read_to_string(d.path().join(".lv/state.json")).unwrap_or_default();
+    assert!(!estado.contains("otro.tex") && !estado.contains("\"root\""), "{estado}");
     assert!(s.set_root("../afuera.tex").is_err());
     assert!(s.set_root("no-existe.tex").is_err());
 }

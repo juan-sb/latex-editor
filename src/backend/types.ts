@@ -41,7 +41,6 @@ export type OutsideSave = 'warn' | 'switch' | 'build';
 
 /** `.lv/state.json`: lo de esta máquina. */
 export interface AppStateInfo {
-  root: string | null;
   activeProfile: string | null;
   /** Nombres de las partes tildadas, tal como los lleva `\includeonly`. */
   selection: string[];
@@ -345,7 +344,8 @@ export interface EstadoFiguras {
   sinSello: number;
   bytes: number;
   bytesViejos: number;
-  figlist: { fechaMs: number; total: number; completa: boolean; delSelloDeHoy: boolean } | null;
+  /** `vale`: la lista es completa y de esta raíz y de todas las partes con figuras (sólo así autoriza a limpiar). */
+  figlist: { fechaMs: number; total: number; completa: boolean; delSelloDeHoy: boolean; vale: boolean } | null;
   figuras: FiguraInfo[];
   pendientes: number;
   fallidas: number;

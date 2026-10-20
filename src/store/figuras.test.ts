@@ -21,7 +21,7 @@ describe('panel Figuras: lógica pura', () => {
   });
 
   it('el resumen calla lo que es cero y usa el plural correcto', () => {
-    const base = { figuras: [fig('a', 'x', 'aldia'), fig('b', 'x', 'aldia'), fig('c', 'x', 'pendiente')], figlist: { fechaMs: 1, total: 3, completa: true, delSelloDeHoy: true } } as unknown as EstadoFiguras;
+    const base = { figuras: [fig('a', 'x', 'aldia'), fig('b', 'x', 'aldia'), fig('c', 'x', 'pendiente')], figlist: { fechaMs: 1, total: 3, completa: true, delSelloDeHoy: true, vale: true } } as unknown as EstadoFiguras;
     expect(resumenDeFiguras({ ...base, pendientes: 1, fallidas: 0 })).toBe('2 de 3 al día · 1 pendiente');
     expect(resumenDeFiguras({ ...base, pendientes: 2, fallidas: 1 })).toBe('2 de 3 al día · 2 pendientes · 1 falló');
     expect(resumenDeFiguras({ ...base, pendientes: 0, fallidas: 2 })).toBe('2 de 3 al día · 2 fallaron');

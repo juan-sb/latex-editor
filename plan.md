@@ -654,6 +654,38 @@ Aceptación: el smoke `scripts/aceptacion-f8.ps1` sobre una copia tibia del libr
 >
 > **Lo que cambió respecto del plan, y se dice:** (1) **El doctor corre cada vez que se abre un proyecto**, no sólo la primera: cuesta ~2 s en segundo plano (con las sondas en paralelo) y sólo molesta con un aviso (con botón «Ver») si hay errores o avisos; así el `\def` sin guardia del libro aparece siempre que se abre una copia sin parchear. (2) **«Partes por `\input`»** no se detecta por las aristas del grafo (las partes salen sólo de `\include` y de `parts.commands`): se mira la **definición** del comando de parte (`\Capitulo`) y se avisa sólo si **ninguna** definición del proyecto carga por `\include`. El libro define las dos (`\input` para la cocción, `\include` para lo demás) y no da el aviso (la primera versión sí lo daba: falso positivo corregido). (3) **El PATH reducido de latexmk es un aviso sólo si el proyecto tiene `latexmkrc`**; sin él es informativo (es una propiedad de la máquina que a ese proyecto no le afecta). Se lee con `latexmk -e "print qq(...)" -c x.tex` en una carpeta temporal: `-v` sale antes de ejecutar el `-e`. (4) **Las pistas distinguen «cambió» de «la app lo veía por primera vez»** (campo `datosNuevos`): sin registro previo en `.lv/tikz-datos.json` no se sabe si un archivo cambió y se invalida por las dudas, pero el historial ya no dice que «cambió». (5) La pista de la cocción cuenta `min(trabajos, a cocinar)` subcompilaciones a la vez (no «16» para 2 figuras). (6) El historial viaja a la interfaz en camelCase y sin los campos en cero. (7) `LV_NOMBRE_APP` (sólo pruebas) cambia el nombre de ejecutable que el candado reconoce como «la app»; `LV_SMOKE_FILE=segunda` hace que la instancia del smoke haga de segunda. (8) **No se probó un cierre brusco real de la app** (matarla con la sesión abierta): la prueba `tests/candado.rs` lo cubre con un dueño ajeno que muere sin soltar el candado, y el smoke comprueba que la app, al salir con `exit`, deja un candado con un PID muerto que no traba. (9) **Regresión:** la primera corrida de F1 a F8 seguidos se cortó por falta de memoria del sistema; repetida con la máquina quieta y el exe final, **pasan los smokes de F1 a F8**. F2: parcial 4,9 s y rápido 9,6 s de guardar a PDF visible (latexmk 4,7 y 9,2 s; la app suma 0,2 a 0,4 s), 40 recargas con 0 cuadros en blanco y memoria del WebView de 550 a 652 MB, como en F2 a F7. F7: 1 build, 387 ms, 1 página distinta de 183. Pasan además los tests de F8 (143 unitarios, todas las suites de integración con TeX real y 224 de Vitest).
 
+### F8b. Configuración del proyecto y visibilidad del build
+
+Sale del uso real de Juan sobre `inspo/Proyecto` (`.lv/figlist.json`, `history.jsonl`, `state.json` y `registro-compilacion.txt`). Lo que pasó:
+
+- La raíz estuvo un rato en `cap_actual.tex`: la barra ofrece las 5 candidatas con `\documentclass` y `state.json` pisa al `latexviewer.json`. La cocina se listó con esa raíz, que tiene su propio `\includeonly`, y `.lv/figlist.json` quedó con 46 figuras (sólo `desnorm`) marcadas como «completa». Con eso, Limpiar propone borrar las 36 de `aprox`, `butter` y `cheby`.
+- El cache real de inspo tiene 82 de 158 figuras. Un parcial con Butterworth cocinó 8 de a una dentro de la pasada (30 s), y uno con Chebyshev iba por 14 a los 50 s cuando Juan lo canceló: la cocción en paralelo sólo se dispara por el sello.
+- Mientras compila, el selector de perfil cambia la etiqueta por el id («parcial …»), el estado dice «parcial» y no se ven pasadas ni figuras en vivo.
+
+Orden de trabajo: 1, 3 y 2 (la 3 es chica y la 2 usa lo de las otras dos).
+
+1. **Robustez, primero y con tests.**
+   - [x] `figlist.json` guarda la raíz y la lista de partes con que se armó. Si no coinciden con las actuales, no vale ni para limpiar ni para saltear el listado.
+   - [x] Un perfil de todas las partes (cocina incluida) inyecta `\includeonly` con la lista completa, así un `\includeonly` propio de la raíz no lo recorta (verificado en `docs/spikes/S6.md`: gana el último). «Completa» se marca sólo si la lista cubre cada parte que tiene figuras según el índice.
+   - [x] Antes de un build, si al perfil le faltan PDFs de figuras de sus partes (la figlist completa dice cuáles, por slug), se cocinan esas en paralelo primero, como después de un cambio de estilo. Aceptación: en una copia del libro con el cache como el de inspo, compilar el parcial con Butterworth no cocina de a una.
+   - [ ] La raíz se elige en la pantalla Proyecto y se guarda en `latexviewer.json`. Sale de la barra superior y de `state.json`.
+2. **Pantalla «Proyecto».** Se abre sola si no hay `latexviewer.json`; después, desde el menú ⋯ y la paleta. Nadie tiene que tocar el JSON. Todo lo que se pueda se detecta y se explica en palabras de usuario:
+   - [ ] Documento principal: cada candidata con un motivo. Se recomienda la que ningún otro archivo incluye y no tiene `\includeonly` propio. Las que tienen `\includeonly` o definen flags antes de cargar el preámbulo se marcan como «raíz auxiliar» (en el libro: `cap_actual`, `libro_fast`, `libro_cocina` y `libro_export`).
+   - [ ] Partes: los capítulos encontrados. Detectar las macros propias que envuelven `\include` (`\Capitulo` en `structure.tex`) para llenar `parts.commands` solo.
+   - [ ] Compilación reducida: detectar los `\ifdefined\X` del proyecto y proponer cada uno según lo que envuelve, con una frase de qué hace. Si envuelve `tableofcontents`, `printbibliography`, `includepdf` o `makeindex`, va a `partial`; si envuelve `\tikzexternalize`, a `externalize`; si envuelve `mode=list and make`, a `figureList`.
+   - [ ] Figuras: si el proyecto externaliza, modo `project`, con la carpeta y el archivo de estilo detectados (el `prefix=` y el archivo del md5 del sello). Si no externaliza pero tiene tikz, ofrecer el modo `app` con una línea de qué se gana. Sin tikz, `off`.
+   - [ ] Perfiles: como tarjetas con su uso («mientras escribís», «leer de corrido», «revisar el libro entero», «entregar»), el tiempo típico sacado del historial y qué publica cada uno.
+   - [ ] Salidas: la carpeta de publicar y la de exportar, con vista previa del nombre («PDF/Capítulos/08 - Funciones de Aproximación.pdf»).
+   - [ ] Variables: alta simple (nombre, etiqueta, opciones). Si el doctor ve un `\def` incondicional, se explica ahí.
+   - [ ] Avanzado: el JSON con validación, para quien quiera.
+   - [ ] Probar: corre el doctor y un listado de una parte, y muestra el resultado.
+   - [ ] Guardar: muestra el diff de `latexviewer.json` antes de escribirlo.
+   Aceptación: abrir una copia de `inspo/Proyecto` sin `latexviewer.json` y llegar a la configuración de `fixtures/configs/libro-tc.latexviewer.json` (con `entrega`) sólo confirmando, sin escribir nada a mano. Lo mismo con `libro-include` y `articulo-simple`.
+3. **Barra mientras compila.**
+   - [ ] El selector de perfil muestra siempre la etiqueta, también durante el build.
+   - [ ] Una línea de estado en vivo con el perfil, las partes, la pasada y la herramienta (`pdflatex`, `biber`), la figura que pgf está cocinando adentro («cocinando figura 3: butter-2») y el tiempo, con el típico del historial al lado.
+   - [ ] Emitir eventos de pasada y de figura desde el `Contador` (`build:pass`, `build:figure`).
+
 ### F9. Migración del libro
 
 Se hace en el repo real del libro, en una rama, con el OK de Juan antes de borrar nada.

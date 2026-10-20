@@ -188,7 +188,8 @@ fn la_coccion_manual_lista_cocina_instala_los_md5_y_deja_el_estado_al_dia() {
     // El listado usó el driver de cocina con todas las partes y los tres flags.
     let driver = fs::read_to_string(c.d.path().join(".lv/drivers/lv-cocina.tex")).unwrap();
     assert!(driver.contains("\\def\\CompilacionReducida{}") && driver.contains("\\def\\TikzExternalizar{}") && driver.contains("\\def\\TikzListaYMake{}"), "{driver}");
-    assert!(!driver.contains("includeonly"), "el listado de todo el documento no lleva includeonly: {driver}");
+    // Con la lista COMPLETA de partes (no sin `\includeonly`): una raíz con el suyo propio (`cap_actual.tex`) no la recorta (S6).
+    assert!(driver.contains("\\includeonly{Secciones/Uno,Secciones/Dos}"), "el listado de todo el documento lleva todas las partes: {driver}");
     let st = c.s.figures_status().unwrap();
     assert_eq!((st.actuales, st.pendientes, st.fallidas), (4, 0, 0));
     assert_eq!(st.sello.as_deref(), Some(sello.as_str()));
@@ -245,7 +246,7 @@ fn un_cambio_de_estilo_cocina_primero_las_figuras_del_perfil_despues_el_build_y_
     assert_eq!(figuras.len(), 4);
     assert!(figuras[0].contains("uno") && figuras[1].contains("uno") && figuras[2].contains("dos") && figuras[3].contains("dos"), "{figuras:?}");
     let parcial = fs::read_to_string(c.d.path().join(".lv/drivers/lv-cocina.tex")).unwrap();
-    assert!(!parcial.contains("includeonly"), "el último listado fue el de todo el documento: {parcial}");
+    assert!(parcial.contains("\\includeonly{Secciones/Uno,Secciones/Dos}"), "el último listado fue el de todo el documento: {parcial}");
     let st = c.s.figures_status().unwrap();
     assert_eq!((st.actuales, st.viejas), (4, 4), "las 4 del sello nuevo y las 4 viejas, todavía sin limpiar");
 }
@@ -408,6 +409,152 @@ fn sin_cambio_de_estilo_el_build_no_lleva_cocina_antes() {
     c.s.request_build(Some("parcial")).unwrap();
     c.esperar("el build", 60, |c| c.ocioso() && c.secuencia().len() == 5);
     assert_eq!(c.secuencia()[3..], ["build(parcial)", "fin(parcial)"], "hay figuras de este sello: no hace falta cocinar antes");
+}
+
+/// Lo de F8b (robustez, inspo): la figlist guarda raíz y partes, un perfil de todas las partes lleva la lista completa y a un perfil
+/// al que le faltan PDFs de sus partes se los cocina en paralelo antes, no de a una dentro de la pasada.
+fn figlist_json(c: &Caso) -> serde_json::Value {
+    serde_json::from_slice(&fs::read(c.d.path().join(".lv/figlist.json")).unwrap()).unwrap()
+}
+
+fn escribir_figlist_json(c: &Caso, v: &serde_json::Value) {
+    fs::write(c.d.path().join(".lv/figlist.json"), serde_json::to_string_pretty(v).unwrap()).unwrap();
+}
+
+/// Cocina todo, y borra los PDF (y md5, log, dpth) de las figuras de `uno`: lo que le pasaba al cache de inspo con `butter`.
+fn caso_con_faltantes_de_uno() -> Caso {
+    let c = caso();
+    c.s.request_bake().unwrap();
+    c.esperar("la cocción de todo", 60, |c| c.ocioso() && c.secuencia().len() == 3);
+    for n in ["uno-0", "uno-1"] {
+        for ext in ["pdf", "md5", "log"] {
+            fs::remove_file(c.figura(n, ext)).unwrap();
+        }
+    }
+    c
+}
+
+#[test]
+fn la_figlist_guarda_la_raiz_y_las_partes_con_que_se_armo() {
+    let c = caso();
+    c.s.request_bake().unwrap();
+    c.esperar("la cocción", 60, |c| c.ocioso() && c.secuencia().len() == 3);
+    let v = figlist_json(&c);
+    assert_eq!(v["raiz"], "main.tex");
+    assert_eq!(v["partes"], serde_json::json!(["Secciones/Uno", "Secciones/Dos"]));
+    assert!(c.s.figures_status().unwrap().figlist.is_some_and(|f| f.completa && f.vale));
+}
+
+#[test]
+fn a_un_parcial_al_que_le_faltan_pdfs_de_sus_partes_se_los_cocina_antes_en_paralelo() {
+    let c = caso_con_faltantes_de_uno();
+    let figuras_antes = c.lanzadas().iter().filter(|l| l.starts_with("FIGURA")).count();
+    assert!(matches!(c.s.request_build_por(Some("parcial"), "manual").unwrap(), BuildAck::Started { .. }));
+    c.esperar("el ciclo", 90, |c| c.ocioso() && c.secuencia().len() >= 11);
+    assert_eq!(
+        c.secuencia()[3..8],
+        ["listando(perfil parcial)", "cocinar(2)", "cocido(ok=true,canc=false,cedio=false)", "build(parcial)", "fin(parcial)"],
+        "mismo sello, pero faltan PDFs de la parte del perfil: se cocinan antes del build"
+    );
+    let figuras: Vec<String> = c.lanzadas().into_iter().filter(|l| l.starts_with("FIGURA")).skip(figuras_antes).collect();
+    assert_eq!(figuras.len(), 2, "sólo las 2 de Uno: {figuras:?}");
+    assert!(figuras.iter().all(|f| f.contains("uno")));
+    assert!(c.figura("uno-0", "pdf").is_file() && c.figura("uno-1", "pdf").is_file());
+    // El historial dice por qué se cocinó antes de compilar.
+    let h = c.s.history(20);
+    let build = h.iter().find(|e| e.entrada.tipo == "build").unwrap();
+    assert!(build.entrada.listado.as_ref().is_some_and(|l| !l.salteado && l.motivo.contains("faltan 2 figuras de las partes del perfil")), "{:?}", build.entrada.listado);
+}
+
+#[test]
+fn a_un_perfil_al_que_no_le_falta_nada_de_sus_partes_no_se_le_cocina_antes_aunque_falten_figuras_de_otras() {
+    let c = caso_con_faltantes_de_uno();
+    // El parcial es de Dos (la selección por defecto es Uno): sus figuras están, las de Uno no importan.
+    c.s.set_state(lv_core::config::StatePatch { selection: Some(vec!["Secciones/Dos".into()]), ..Default::default() }).unwrap();
+    c.s.request_build(Some("parcial")).unwrap();
+    c.esperar("el build", 60, |c| c.ocioso() && c.secuencia().len() == 5);
+    assert_eq!(c.secuencia()[3..], ["build(parcial)", "fin(parcial)"], "{:?}", c.secuencia());
+}
+
+#[test]
+fn sin_una_lista_que_valga_el_primer_build_la_establece_y_los_siguientes_no() {
+    let c = caso();
+    c.s.request_bake().unwrap();
+    c.esperar("la cocción", 60, |c| c.ocioso() && c.secuencia().len() == 3);
+    fs::remove_file(c.d.path().join(".lv/figlist.json")).unwrap();
+    c.s.request_build(Some("parcial")).unwrap();
+    c.esperar("el ciclo", 90, |c| c.ocioso() && c.secuencia().len() >= 11);
+    assert_eq!(c.secuencia()[3..5], ["listando(perfil parcial)", "cocinar(0)"], "sin lista no se sabe qué necesita el perfil: se lista (no hay nada que cocinar)");
+    let build = c.s.history(20).into_iter().find(|e| e.entrada.tipo == "build").unwrap();
+    assert!(build.entrada.listado.as_ref().is_some_and(|l| l.motivo.contains("todavía no se sabe")), "{:?}", build.entrada.listado);
+    // El resto completó la lista: el build que sigue ya no cocina nada antes.
+    let n = c.secuencia().len();
+    c.s.request_build(Some("parcial")).unwrap();
+    c.esperar("el build que sigue", 60, |c| c.ocioso() && c.secuencia().len() == n + 2);
+    assert_eq!(c.secuencia()[n..], ["build(parcial)", "fin(parcial)"]);
+}
+
+#[test]
+fn una_lista_de_otra_raiz_o_sin_raiz_no_vale_ni_para_limpiar() {
+    let c = caso();
+    c.s.request_bake().unwrap();
+    c.esperar("la cocción", 60, |c| c.ocioso() && c.secuencia().len() == 3);
+    assert!(c.s.figures_clean_preview().is_ok());
+    // Como la de inspo: armada con `cap_actual.tex` como raíz.
+    let mut v = figlist_json(&c);
+    v["raiz"] = "cap_actual.tex".into();
+    escribir_figlist_json(&c, &v);
+    let e = c.s.figures_clean_preview().unwrap_err().to_string();
+    assert!(e.contains("otra raíz"), "{e}");
+    assert!(c.s.figures_status().unwrap().figlist.is_some_and(|f| f.completa && !f.vale));
+    // Una lista de antes de F8b (sin raíz ni partes) tampoco vale.
+    let mut v = figlist_json(&c);
+    v.as_object_mut().unwrap().remove("raiz");
+    v.as_object_mut().unwrap().remove("partes");
+    escribir_figlist_json(&c, &v);
+    assert!(c.s.figures_clean_preview().is_err());
+    // Y una armada con menos partes de las que tienen figuras (la de 46 figuras, sólo `desnorm`).
+    let mut v = figlist_json(&c);
+    v["raiz"] = "main.tex".into();
+    v["partes"] = serde_json::json!(["Secciones/Uno"]);
+    escribir_figlist_json(&c, &v);
+    assert!(c.s.figures_clean_preview().unwrap_err().to_string().contains("otras partes"));
+}
+
+#[test]
+fn una_raiz_con_su_propio_includeonly_no_recorta_el_listado_de_todo_ni_la_lista() {
+    let c = caso();
+    // Como `cap_actual.tex`: la raíz recorta a un capítulo.
+    c.escribir("main.tex", "\\documentclass{book}\n\\includeonly{Secciones/Uno}\n\\begin{document}\n\\include{Secciones/Uno}\n\\include{Secciones/Dos}\n\\end{document}\n");
+    c.s.refresh().unwrap();
+    c.s.request_bake().unwrap();
+    c.esperar("la cocción", 60, |c| c.ocioso() && c.secuencia().len() == 3);
+    assert_eq!(c.secuencia()[1], "cocinar(4)", "las figuras de las dos partes");
+    let driver = fs::read_to_string(c.d.path().join(".lv/drivers/lv-cocina.tex")).unwrap();
+    assert!(driver.contains("\\includeonly{Secciones/Uno,Secciones/Dos}"), "el driver pone la lista completa, que gana a la de la raíz (S6): {driver}");
+    assert_eq!(figlist_json(&c)["partes"], serde_json::json!(["Secciones/Uno", "Secciones/Dos"]));
+    assert!(c.s.figures_clean_preview().is_ok());
+    // Y el driver de un perfil de todas las partes también.
+    c.s.request_build(Some("rapido")).unwrap();
+    c.esperar("el build", 60, |c| c.ocioso() && c.secuencia().len() == 5);
+    let rapido = fs::read_to_string(c.d.path().join(".lv/drivers/lv-rapido.tex")).unwrap();
+    assert!(rapido.contains("\\includeonly{Secciones/Uno,Secciones/Dos}"), "{rapido}");
+}
+
+#[test]
+fn un_perfil_de_partes_elegidas_que_cubre_todas_las_que_tienen_figuras_deja_una_lista_completa_y_sin_resto() {
+    let c = caso();
+    c.s.set_state(lv_core::config::StatePatch { selection: Some(vec!["Secciones/Uno".into(), "Secciones/Dos".into()]), ..Default::default() }).unwrap();
+    c.cambiar_estilo(2);
+    c.s.request_build(Some("parcial")).unwrap();
+    c.esperar("el ciclo", 90, |c| c.ocioso() && c.secuencia().len() >= 5);
+    std::thread::sleep(Duration::from_millis(400));
+    assert_eq!(
+        c.secuencia(),
+        ["listando(perfil parcial)", "cocinar(4)", "cocido(ok=true,canc=false,cedio=false)", "build(parcial)", "fin(parcial)"],
+        "el listado del perfil ya cubrió todas las partes con figuras: no hay resto"
+    );
+    assert!(c.s.figures_status().unwrap().figlist.is_some_and(|f| f.completa && f.vale));
 }
 
 #[test]
