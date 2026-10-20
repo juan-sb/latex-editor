@@ -476,3 +476,57 @@ El doctor corre en segundo plano al abrir el proyecto y no frena nada; con las s
 ### Regresión de F1 a F7 con F8
 
 Todos los smokes pasan con el exe final. F1: completo 330 s, 194 páginas. F3: 12 s. F4: 183 páginas, salto mediana 8 ms y p95 20 ms. F5: 5 s. F6: 23 s, cancelar en 206 ms. F7: 158 s, 1 build por el cambio de afuera a los 387 ms, 1 página distinta de 183. **F2** (sin ninguna instancia de la app abierta): parcial guardado a PDF visible **4,9 s** (latexmk 4,7 s) y rápido **9,6 s** (latexmk 9,2 s), contra 5,1/4,9 s y 10,9/10,4 s en F7; la app suma 0,2 a 0,4 s a latexmk, como antes (el candado, el historial y la cuenta de procesos de TeX no se notan). 40 recargas del PDF: 485 cuadros, 0 en blanco, deriva 0, memoria del WebView 550 a 652 MB (F7: 547 a 657 MB).
+
+## F8b: configuración del proyecto y visibilidad del build
+
+Misma máquina (Ryzen 7 3700X). Smokes sobre copias tibias del libro: `scripts/aceptacion-f8b.ps1` (pantalla Proyecto y barra, 41 a 48 s), `scripts/aceptacion-f8b-figuras.ps1` (cache de figuras con TeX real, sin interfaz) y `cargo run --release -p lv-core --example detectar`.
+
+### Robustez del cache de figuras (el caso de inspo)
+
+Copia del libro con la figlist completa (158 figuras, 8 partes) y borradas las 8 figuras de Butterworth (40 archivos: PDF, md5, log y dpth), como el cache de inspo:
+
+| Qué | Medido |
+|---|---|
+| Parcial con Butterworth | cocina **8 antes del build, en paralelo**; **0** subcompilaciones adentro del build (en inspo: 8 de a una dentro de la pasada, 30 s) |
+| El historial del build | «faltan 8 figuras de las partes del perfil» |
+| Otra vez el parcial, todo al día | no lista ni cocina antes |
+| Tiempo total de ese parcial (listar las del perfil, cocinar 8, build con los `.aux` fríos) | 30 s y 47 s en dos corridas: **no es una mejora de tiempo demostrada**; el build en frío pesa 15 a 22 s y la variación entre corridas es mayor que lo que se gana. Lo que cambia es que ya no queda cocinando de a una dentro de la pasada |
+| Listado de todo el documento sobre el cache tibio (el que arma la figlist de 158) | 18 a 27 s con el motor en frío (7 a 9 s en el smoke de F8) |
+
+### Detección y pantalla Proyecto
+
+| Qué | Medido |
+|---|---|
+| Detectar el libro (7 candidatas, 8 partes, 5 flags), `--example detectar` en release | **71 a 138 ms** |
+| …`libro-include` / `articulo-simple` | 6 ms / 3 ms |
+| Al abrir la app sin `latexviewer.json` hasta tener la pantalla armada | 213 ms (incluye el arranque) |
+| «Probar»: doctor + listado de las 8 figuras de Butterworth con la configuración sin guardar | 5,3 a 11,2 s (el doctor 2 a 6,5 s con el motor en frío; el listado 4,7 s) |
+| Aceptación: el archivo que escribe la app (1416 bytes), contra `fixtures/configs/libro-tc.latexviewer.json` | **equivalente** (`scripts/comparar-config.py`), sin escribir nada a mano; sólo se iguala la etiqueta de la variable (`Pie` contra `Pie de página`, no se deduce de los textos) |
+
+### Barra mientras compila
+
+| Qué | Medido |
+|---|---|
+| Lo que la barra mostró en el parcial real del smoke | «pasada 1 · pdflatex», «biber», «pasada 2 · pdflatex» a «pasada 4 · pdflatex», con la etiqueta «Partes elegidas» en el selector |
+| «cocinando figura N» (las que pgf lanza adentro de la pasada) | **no se vio en el smoke**: ahí las 8 figuras ya estaban cocinadas antes del build; lo cubren los tests de `Contador` y de sesión |
+| Típico del perfil (mediana de los últimos 10 buenos) | se carga al abrir y al terminar cada build |
+
+### Regresión de F1 a F8 con F8b
+
+Pasan los nueve smokes con el exe final: F1 (completo 325 s, 194 páginas), F3, F4 (salto mediana 8 ms), F5, F6 (cancelar en 216 ms), F7 (1 build a los 404 ms, 1 página distinta de 183), F8 y F8b. **F2**: parcial guardado a PDF visible 5,1 s (latexmk 4,8 s) y rápido 9,4 s (latexmk 9,1 s); 40 recargas, 557 cuadros, 0 en blanco, deriva 0; memoria del WebView 561 a 687 MB (pico 687; en F8 pico 652 y en F2 a F6 hasta 685).
+
+### Pruebas
+
+| | Cantidad | Qué cubren |
+|---|---|---|
+| `cargo test -p lv-core --lib` | 158 | lo de F8 más la figlist con raíz y partes, el `Contador` con eventos, los típicos y la detección (raíces, flags por lado del `\else`, variables, figuras, salidas) |
+| `cargo test -p lv-core --features tex` | todas pasan (17 suites) | más `tests/detectar.rs` (las tres configuraciones esperadas), `tests/proyecto.rs` (detectar, validar, escribir y probar con la sesión) y 7 de `figuras_sesion.rs` (la figlist, el `\includeonly` de la raíz, los faltantes del perfil) |
+| `npx vitest run` | 256 | lo de F8 (224) más la barra, la pantalla Proyecto (el store entero), el diff y las ediciones del JSON |
+
+### Hallazgos de F8b
+
+1. **Con la raíz en `state.json` la cocina se listó con `cap_actual.tex`** y la figlist de 46 figuras quedó «completa»: el cache de inspo tenía 82 de 158 PDFs y Limpiar proponía borrar 36 vivos. Ahora la figlist guarda raíz y partes, y una lista que no cubre las partes con figuras no vale.
+2. **El último `\includeonly` gana** (S6): inyectar la lista completa de partes alcanza para que una raíz auxiliar no recorte un perfil de todas las partes.
+3. **Una macro que AGREGA el índice (`\ifdefined\PortadaCompleta\tableofcontents\fi`) es lo contrario de una compilación reducida**: la primera versión de la detección la proponía como `partial`. Ahora se mira de qué lado del `\else` está lo que envuelve.
+4. **Cuando la figlist vale pero el sello cambió** (se deshizo un cambio de estilo) los nombres sólo cambian de prefijo: no hace falta volver a listar para saber qué figuras necesita cada parte (sin eso, deshacer el estilo volvía a listar).
+5. **El diff de un archivo con CRLF contra uno con LF no tiene que dar cambios**: el diff normaliza los saltos de línea.

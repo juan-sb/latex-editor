@@ -72,6 +72,10 @@ try {
     $dentro = ([regex]::Matches($out, '-jobname "figuras-cache/')).Count
     $terminado = [regex]::Match($err, '== terminó parcial: ok=(\w+)')
     Write-Host ("   código {0}; listó las del perfil: {1}; cocinó antes: {2}; subcompilaciones adentro del build: {3}; total {4:N1} s" -f $codigo, $listando, $cocinando.Groups[1].Value, $dentro, $seg)
+    # Cuánto tardó cada trabajo (las líneas «== cocción terminada» y «== terminó»): la cocción de las del perfil, el build y el resto.
+    $tiempos = [regex]::Matches($err, '== (cocción terminada|terminó) (?:parcial: )?[^\r\n]*?(\d+\.\d) s') | ForEach-Object { "{0} {1} s" -f $_.Groups[1].Value, $_.Groups[2].Value }
+    Write-Host ("   trabajos, en orden: {0}" -f ($tiempos -join ' | '))
+    Copy-Item $errores (Join-Path $base 'parcial-1.err.txt') -Force
     $ok = $true
     if ($codigo -ne 0 -or $terminado.Groups[1].Value -ne 'true') { Write-Host '   el parcial no terminó bien.' -ForegroundColor Red; $ok = $false }
     if (-not $listando -or $cocinando.Groups[1].Value -ne "$pdfsButter") { Write-Host "   tenía que cocinar antes las $pdfsButter figuras de Butterworth." -ForegroundColor Red; $ok = $false }
