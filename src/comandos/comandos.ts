@@ -94,6 +94,7 @@ export const COMANDOS: Comando[] = [
   { id: 'panel.esquema', titulo: 'Mostrar el esquema', categoria: 'Paneles', atajos: [], ejecutar: () => app().mostrarPanel('esquema') },
   { id: 'panel.problemas', titulo: 'Mostrar los problemas', categoria: 'Paneles', atajos: [], ejecutar: () => app().mostrarPanelInferior('problemas') },
   { id: 'panel.log', titulo: 'Mostrar el log del build', categoria: 'Paneles', atajos: [], ejecutar: () => app().mostrarPanelInferior('log') },
+  { id: 'build.borrador', titulo: 'Alternar las imágenes en borrador (compilar más rápido, sin procesarlas)', categoria: 'Compilación', atajos: [], ejecutar: () => void app().setDraftImages(!app().project?.state.draftImages) },
   { id: 'panel.historial', titulo: 'Mostrar el historial de trabajos (por qué tardó cada build)', categoria: 'Paneles', atajos: [], ejecutar: () => app().mostrarPanelInferior('historial') },
   { id: 'panel.doctor', titulo: 'Mostrar el doctor', categoria: 'Paneles', atajos: [], ejecutar: () => app().mostrarPanelInferior('doctor') },
   { id: 'proyecto.configurar', titulo: 'Configurar el proyecto: documento principal, partes, perfiles, salidas, variables', categoria: 'Compilación', atajos: [], ejecutar: () => void abrirPantallaProyecto() },

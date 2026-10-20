@@ -530,3 +530,25 @@ Pasan los nueve smokes con el exe final: F1 (completo 325 s, 194 páginas), F3, 
 3. **Una macro que AGREGA el índice (`\ifdefined\PortadaCompleta\tableofcontents\fi`) es lo contrario de una compilación reducida**: la primera versión de la detección la proponía como `partial`. Ahora se mira de qué lado del `\else` está lo que envuelve.
 4. **Cuando la figlist vale pero el sello cambió** (se deshizo un cambio de estilo) los nombres sólo cambian de prefijo: no hace falta volver a listar para saber qué figuras necesita cada parte (sin eso, deshacer el estilo volvía a listar).
 5. **El diff de un archivo con CRLF contra uno con LF no tiene que dar cambios**: el diff normaliza los saltos de línea.
+
+## F8c: imágenes en borrador y saltos sobre la barra
+
+### S7: el borrador en el libro (`docs/spikes/S7.md`, `scripts/spike-s7.ps1`)
+
+Rápido del libro con `cleanBefore`, 3 corridas alternadas de cada uno, misma máquina.
+
+| | sin borrador | con borrador |
+|---|---|---|
+| mediana de latexmk | 35,7 s | 36,3 s |
+| páginas | 183 | 183 |
+| PDF | 5.463 KB | 3.666 KB (-33 %) |
+
+**Sin ahorro de tiempo en el libro** (6 `\includegraphics`, JPG que pdfTeX copia sin decodificar; las figuras de TikZ no pasan por `graphicx`). La paginación es idéntica; cambian 33 páginas, las que tienen imagen.
+
+### Smoke de F8c (`fixtures/imagenes`: un PNG de 1,5 MB sin compresión posible, dos veces)
+
+Una corrida de cada uno, no un benchmark: completo 2,2 s y 1.396 KB; borrador 1,2 s y 29 KB; misma página. Los botones miden 22 x 22 px sobre una barra de 4 px, con desvío 0 px en X y en Y respecto del centro de la barra.
+
+### Regresión con F8c
+
+Con el exe final pasan F3, F4, F5, F6 y F8c. **F7, F8, F8b, F1 y F2 no se corrieron con este exe**: la corrida seguida se cortó por falta de memoria del sistema (2,9 GB libres de 15,9 antes de empezar) a mitad de F7 y no se repitió. Pasan `cargo test -p lv-core` (con los 3 tests nuevos del borrador), Vitest (264) y el typecheck. No se corrió `--features tex`.

@@ -17,6 +17,10 @@ export interface ProfileInfo {
   /** Puede ser el perfil que compila el guardado. */
   autoCompile: boolean;
   hidden: boolean;
+  /** El perfil siempre va con las imágenes en borrador (`draftImages` de `latexviewer.json`). */
+  draftImages: boolean;
+  /** Figura en `publish.names`: es lo que se entrega y el interruptor de borrador de la máquina no lo toca. */
+  publica: boolean;
 }
 
 export interface VariableInfo {
@@ -48,6 +52,8 @@ export interface AppStateInfo {
   autoCompile: AutoCompileMode;
   idleMs: number;
   outsideSave: OutsideSave;
+  /** El «Fast [draft]» de Overleaf: las imágenes salen como cajas del tamaño que tendrían, sin incluir el archivo. No vale para lo que se entrega. */
+  draftImages: boolean;
 }
 
 export type StatePatch = Partial<Omit<AppStateInfo, 'root'>>;
@@ -545,7 +551,7 @@ export interface LaunchOptions {
   root: string | null;
   smoke: boolean;
   /** Qué smoke de aceptación corre la interfaz con `LV_SMOKE`: el de F1, F2, F3 o F4. */
-  smokeMode: 'f1' | 'f2' | 'f3' | 'f4' | 'f5' | 'f6' | 'f7' | 'f8' | 'f8b';
+  smokeMode: 'f1' | 'f2' | 'f3' | 'f4' | 'f5' | 'f6' | 'f7' | 'f8' | 'f8b' | 'f8c';
   smokeFile: string | null;
   /** Milisegundos que el smoke deja la interfaz abierta al terminar (para sacarle una captura). */
   smokePausaMs: number;

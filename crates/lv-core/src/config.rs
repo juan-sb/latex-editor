@@ -414,6 +414,9 @@ pub struct State {
     pub auto_compile: AutoCompile,
     pub idle_ms: u64,
     pub outside_save: OutsideSave,
+    /// El «Fast [draft]» de Overleaf (F8c): las imágenes salen como cajas del tamaño que tendrían, sin incluir el archivo. Es de esta
+    /// máquina y no se aplica a lo que se entrega (la exportación ni un perfil de `publish.names`): ver `Session::borrador_para`.
+    pub draft_images: bool,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -427,6 +430,7 @@ impl Default for State {
             auto_compile: AutoCompile::Save,
             idle_ms: 1500,
             outside_save: OutsideSave::Warn,
+            draft_images: false,
             extra: Map::new(),
         }
     }
@@ -442,6 +446,7 @@ pub struct StatePatch {
     pub auto_compile: Option<AutoCompile>,
     pub idle_ms: Option<u64>,
     pub outside_save: Option<OutsideSave>,
+    pub draft_images: Option<bool>,
 }
 
 /// Un estado ilegible no es un error: es de esta máquina y se rearma con los valores por defecto.

@@ -1,10 +1,11 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Panel, PanelGroup, PanelResizeHandle, type ImperativePanelHandle } from 'react-resizable-panels';
 import { cargarKeybindings, manejarTecla } from './comandos/comandos';
 import { PdfPane } from './pdf/PdfPane';
 import { EditorPane } from './panels/EditorPane';
 import { Sidebar } from './panels/Sidebar';
 import { BottomPanel } from './panels/BottomPanel';
+import { BotonesDeSalto } from './panels/BotonesDeSalto';
 import { Aviso, Dialogo } from './panels/Overlays';
 import { ProyectoPantalla } from './panels/ProyectoPantalla';
 import { QuickPick } from './panels/QuickPick';
@@ -34,6 +35,8 @@ export default function App() {
   const layout = useApp((s) => s.layout);
   const editorRef = useRef<ImperativePanelHandle>(null);
   const pdfRef = useRef<ImperativePanelHandle>(null);
+  // El puntero está sobre los botones de salto: la barra no se arrastra desde ahí (ver `BotonesDeSalto`).
+  const [sobreSalto, setSobreSalto] = useState(false);
 
   // Ctrl+\ alterna entre editor y PDF, sólo el editor y sólo el PDF (10.1 del plan): el que no se ve se colapsa, no se desmonta,
   // así conserva el estado (el texto, la página y el zoom).
@@ -50,6 +53,11 @@ export default function App() {
     }
   }, [layout]);
 
+  // Con un solo panel los botones se desmontan sin avisar que el puntero salió: la barra no puede quedar deshabilitada.
+  useEffect(() => {
+    if (layout !== 'ambos') setSobreSalto(false);
+  }, [layout]);
+
   useEffect(() => {
     init()
       .then(async (opts) => {
@@ -58,7 +66,9 @@ export default function App() {
         // El smoke de aceptación sólo se carga cuando se pide: no entra en el uso normal.
         if (opts.smoke && !smokeIniciado) {
           smokeIniciado = true;
-          void (opts.smokeMode === 'f8b'
+          void (opts.smokeMode === 'f8c'
+            ? import('./smoke-f8c').then((m) => m.correrSmokeF8c(opts))
+            : opts.smokeMode === 'f8b'
             ? import('./smoke-f8b').then((m) => m.correrSmokeF8b(opts))
             : opts.smokeMode === 'f8'
             ? import('./smoke-f8').then((m) => m.correrSmokeF8(opts))
@@ -93,7 +103,10 @@ export default function App() {
             <Panel ref={editorRef} defaultSize={42} minSize={18} collapsible collapsedSize={0}>
               <EditorPane />
             </Panel>
-            <PanelResizeHandle className="asa" />
+            {/* Los botones de salto van sobre esta barra y sólo con los dos paneles a la vista (colapsado uno, no hay a dónde saltar). */}
+            <PanelResizeHandle className="asa asa-medio" disabled={sobreSalto}>
+              {layout === 'ambos' && <BotonesDeSalto alEntrar={setSobreSalto} />}
+            </PanelResizeHandle>
             <Panel ref={pdfRef} defaultSize={41} minSize={14} collapsible collapsedSize={0}>
               <PdfPane />
             </Panel>

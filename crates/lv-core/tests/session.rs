@@ -150,6 +150,53 @@ fn el_driver_del_parcial_lleva_flags_variables_e_includeonly_de_la_seleccion() {
 }
 
 #[test]
+fn el_interruptor_de_borrador_pone_graphicx_y_graphics_pero_no_en_lo_que_se_entrega_y_un_pdf_en_borrador_no_se_publica() {
+    let d = proyecto();
+    let (s, r) = abrir(&d, OK);
+    let dos_lineas = |t: &str| t.contains("\\PassOptionsToPackage{draft}{graphicx}\n\\PassOptionsToPackage{draft}{graphics}\n");
+    // Sin el interruptor, ningún driver lleva el modo borrador.
+    s.request_build(Some("rapido")).unwrap();
+    esperar_finales(&r, 1, 60);
+    assert!(!dos_lineas(&driver(&d, "rapido")) && !s.esta_en_borrador("rapido"));
+    // Con él, los perfiles de trabajo sí (las dos líneas, como el «Fast [draft]» de Overleaf)...
+    let st = s.set_state(StatePatch { draft_images: Some(true), ..Default::default() }).unwrap();
+    assert!(st.draft_images);
+    s.request_build(Some("rapido")).unwrap();
+    esperar_finales(&r, 2, 60);
+    assert!(dos_lineas(&driver(&d, "rapido")), "{}", driver(&d, "rapido"));
+    assert!(s.esta_en_borrador("rapido"));
+    // ...pero no el que figura en `publish.names` (el de entrega).
+    s.request_build(Some("completo")).unwrap();
+    esperar_finales(&r, 3, 60);
+    assert!(!driver(&d, "completo").contains("draft") && !s.esta_en_borrador("completo"), "{}", driver(&d, "completo"));
+    // Un PDF en borrador no se publica; el de entrega sí.
+    let e = s.publish("rapido").unwrap_err().to_string();
+    assert!(e.contains("imágenes en borrador") && !d.path().join("pub").exists(), "{e}");
+    assert!(s.publish("completo").is_ok());
+    // El interruptor es de esta máquina: queda en `.lv/state.json`, no en `latexviewer.json`.
+    assert!(fs::read_to_string(d.path().join(".lv/state.json")).unwrap().contains("\"draftImages\": true"));
+    assert!(!fs::read_to_string(d.path().join("latexviewer.json")).unwrap().contains("draftImages"));
+    // Apagado, el rápido vuelve a compilar completo y se puede publicar.
+    s.set_state(StatePatch { draft_images: Some(false), ..Default::default() }).unwrap();
+    s.request_build(Some("rapido")).unwrap();
+    esperar_finales(&r, 4, 60);
+    assert!(!s.esta_en_borrador("rapido") && !driver(&d, "rapido").contains("draft"));
+    assert!(s.publish("rapido").is_ok());
+}
+
+#[test]
+fn un_perfil_con_draft_images_en_la_configuracion_va_siempre_en_borrador_y_no_se_publica() {
+    let d = proyecto();
+    fs::write(d.path().join("latexviewer.json"), CONFIG.replace(r#""rapido":   { "partial": true,"#, r#""rapido":   { "draftImages": true, "partial": true,"#)).unwrap();
+    let (s, r) = abrir(&d, OK);
+    s.request_build(Some("rapido")).unwrap();
+    esperar_finales(&r, 1, 60);
+    assert!(s.esta_en_borrador("rapido") && driver(&d, "rapido").contains("{draft}{graphics}"));
+    assert!(s.publish("rapido").is_err());
+    assert!(!s.esta_en_borrador("parcial"), "los demás perfiles no se enteran");
+}
+
+#[test]
 fn el_estado_se_guarda_en_lv_y_se_valida() {
     let d = proyecto();
     let (s, _) = abrir(&d, OK);

@@ -84,6 +84,7 @@ async fn launch_options() -> LaunchOptions {
             Some("f7") => "f7".into(),
             Some("f8") => "f8".into(),
             Some("f8b") => "f8b".into(),
+            Some("f8c") => "f8c".into(),
             _ => "f1".into(),
         },
         smoke_file: var("LV_SMOKE_FILE"),

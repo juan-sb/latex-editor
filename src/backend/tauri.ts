@@ -30,7 +30,7 @@ export const tauriBackend: Backend = {
       open: string | null;
       root: string | null;
       smoke: boolean;
-      smoke_mode: 'f1' | 'f2' | 'f3' | 'f4' | 'f5' | 'f6' | 'f7' | 'f8' | 'f8b';
+      smoke_mode: 'f1' | 'f2' | 'f3' | 'f4' | 'f5' | 'f6' | 'f7' | 'f8' | 'f8b' | 'f8c';
       smoke_file: string | null;
       smoke_pausa_ms: number;
     }>('launch_options');

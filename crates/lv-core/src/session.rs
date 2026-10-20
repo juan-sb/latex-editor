@@ -63,6 +63,10 @@ pub struct ProfileView {
     pub clean_before: bool,
     pub auto_compile: bool,
     pub hidden: bool,
+    /// El perfil siempre va con las imágenes en borrador (`draftImages` de `latexviewer.json`).
+    pub draft_images: bool,
+    /// El perfil figura en `publish.names`: es lo que se entrega y el interruptor de borrador de la máquina no lo toca.
+    pub publica: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -360,6 +364,8 @@ impl Session {
                     clean_before: p.clean_before,
                     auto_compile: p.auto_compile,
                     hidden: p.hidden,
+                    draft_images: p.draft_images,
+                    publica: c.publish.as_ref().is_some_and(|pb| pb.names.contains_key(id)),
                 })
                 .collect(),
             variables: c
@@ -475,6 +481,9 @@ impl Session {
         }
         if let Some(o) = patch.outside_save {
             s.outside_save = o;
+        }
+        if let Some(b) = patch.draft_images {
+            s.draft_images = b;
         }
         let nuevo = d.state.clone();
         self.guardar_estado(&d);
@@ -598,7 +607,8 @@ impl Session {
             flags,
             vars,
             includeonly,
-            draft_images: pc.draft_images,
+            // (la exportación nunca va en borrador, ni aunque su perfil lo diga: es lo que se entrega)
+            draft_images: perfil != config::PERFIL_EXPORT && (pc.draft_images || Self::borrador_para(&d.state, &cfg, perfil)),
             figuras,
             solo_cache: pc.externalize && pc.cache_only,
             fragmento: extra.fragmento.is_some(),
@@ -615,6 +625,20 @@ impl Session {
             seed,
             dirs,
         })
+    }
+
+    /// ¿El interruptor de borrador de esta máquina (`State.draft_images`) vale para este perfil? **No** para lo que se entrega: la
+    /// exportación (`PERFIL_EXPORT`) ni un perfil que figura en `publish.names` (el de entrega). Un PDF con las imágenes como cajas no
+    /// se publica ni se exporta; Overleaf lo permite al descargar, acá se evita entregar cajas vacías.
+    pub(crate) fn borrador_para(state: &State, cfg: &ProjectConfig, perfil: &str) -> bool {
+        state.draft_images && perfil != config::PERFIL_EXPORT && !cfg.publish.as_ref().is_some_and(|p| p.names.contains_key(perfil))
+    }
+
+    /// ¿El PDF del perfil se compiló con las imágenes en borrador? El driver lo dice: lleva `\PassOptionsToPackage{draft}{graphicx}`. Si un
+    /// build posterior falla o se cancela el perfil queda sospechoso (`aux::is_suspect`) y tampoco se publica, así que el driver del último
+    /// build y el PDF no pueden contradecirse sin que se note.
+    pub fn esta_en_borrador(&self, perfil: &str) -> bool {
+        std::fs::read_to_string(self.root.join(crate::build::driver_rel(perfil))).is_ok_and(|t| t.contains("\\PassOptionsToPackage{draft}{graphicx}"))
     }
 
     /// Con el proyecto abierto en otra instancia de la app (candado) no se compila, ni se cocina, ni se exporta, ni se limpia.
@@ -985,6 +1009,9 @@ impl Session {
         if aux::is_suspect(&self.root, perfil) {
             return Err(otro(format!("el último build de {perfil:?} no terminó bien: el PDF puede estar desactualizado. Compilá de nuevo antes de publicar")));
         }
+        if self.esta_en_borrador(perfil) {
+            return Err(otro(format!("el último build de {perfil:?} tiene las imágenes en borrador (cajas del tamaño de cada imagen): compilá con las imágenes completas antes de publicar")));
+        }
         let origen = self.root.join(crate::build::pdf_rel(perfil));
         if !origen.is_file() {
             return Err(Error::NotFound(format!("el PDF de {perfil:?}: compilá antes de publicar")));
@@ -1010,5 +1037,24 @@ impl Session {
             None
         };
         Ok(Published { pdf: destino.display().to_string(), synctex })
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn el_interruptor_de_borrador_no_vale_para_la_exportacion_ni_para_lo_que_se_publica() {
+        let cfg: ProjectConfig = serde_json::from_str(
+            r#"{ "root": "main.tex", "profiles": { "rapido": {}, "entrega": {} }, "publish": { "dir": "pub", "names": { "entrega": "L.pdf" } } }"#,
+        )
+        .unwrap();
+        let con = State { draft_images: true, ..Default::default() };
+        let sin = State::default();
+        assert!(Session::borrador_para(&con, &cfg, "rapido"));
+        assert!(!Session::borrador_para(&con, &cfg, "entrega"), "el que figura en publish.names se entrega");
+        assert!(!Session::borrador_para(&con, &cfg, config::PERFIL_EXPORT), "la exportación se entrega");
+        assert!(Session::borrador_para(&con, &cfg, config::PERFIL_FRAGMENTO), "la vista previa de un fragmento sí puede");
+        assert!(!Session::borrador_para(&sin, &cfg, "rapido"), "sin el interruptor nada va en borrador");
     }
 }

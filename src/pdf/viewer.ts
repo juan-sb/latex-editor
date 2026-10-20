@@ -415,15 +415,40 @@ export class PdfViewerHost implements PdfApi {
     if (izq < cont.scrollLeft || izq + rect.w * v.escala > cont.scrollLeft + cont.clientWidth) cont.scrollLeft = Math.max(0, izq - cont.clientWidth / 3);
   }
 
-  /** La página y el punto (bp) de un evento del mouse sobre el visor. `null` si no cayó sobre una página. */
-  puntoDeEvento(ev: MouseEvent): { page: number; x: number; y: number } | null {
-    const pagina = (ev.target as HTMLElement | null)?.closest?.('.page') as HTMLElement | null;
+  /** La página y el punto (bp) de unas coordenadas de pantalla que caen sobre el elemento `pagina` (un `.page`). */
+  private aPunto(pagina: HTMLElement | null, cx: number, cy: number): { page: number; x: number; y: number } | null {
     if (!pagina) return null;
     const n = Number(pagina.dataset.pageNumber);
     const v = this.vistaDePagina(n);
     if (!v) return null;
     const r = pagina.getBoundingClientRect();
-    return { page: n, x: (ev.clientX - (r.left + pagina.clientLeft)) / v.escala, y: (ev.clientY - (r.top + pagina.clientTop)) / v.escala };
+    return { page: n, x: (cx - (r.left + pagina.clientLeft)) / v.escala, y: (cy - (r.top + pagina.clientTop)) / v.escala };
+  }
+
+  /** La página y el punto (bp) de un evento del mouse sobre el visor. `null` si no cayó sobre una página. */
+  puntoDeEvento(ev: MouseEvent): { page: number; x: number; y: number } | null {
+    return this.aPunto((ev.target as HTMLElement | null)?.closest?.('.page') as HTMLElement | null, ev.clientX, ev.clientY);
+  }
+
+  /**
+   * El texto seleccionado en el PDF (la capa de texto de PDF.js): su comienzo y su final, cada uno en la página y el punto (bp) donde
+   * están. Se toman a media altura del primer y del último renglón de la selección, un poco hacia adentro, para caer sobre una letra.
+   * `null` si no hay selección, no es del visor del documento o no se pudo ubicar.
+   */
+  puntoDeSeleccion(): { inicio: { page: number; x: number; y: number }; fin: { page: number; x: number; y: number } } | null {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0) return null;
+    const rango = sel.getRangeAt(0);
+    if (!this.area.contains(rango.commonAncestorContainer)) return null;
+    const cajas = [...rango.getClientRects()].filter((r) => r.width > 0 && r.height > 0);
+    if (cajas.length === 0) return null;
+    const primera = cajas[0];
+    const ultima = cajas[cajas.length - 1];
+    // La página de cada punta sale del nodo donde la selección empieza y termina (no de `elementFromPoint`: no depende de que esté a la vista).
+    const paginaDe = (n: Node) => (n instanceof Element ? n : n.parentElement)?.closest('.page') as HTMLElement | null;
+    const inicio = this.aPunto(paginaDe(rango.startContainer), primera.left + Math.min(2, primera.width / 2), primera.top + primera.height / 2);
+    const fin = this.aPunto(paginaDe(rango.endContainer), ultima.right - Math.min(2, ultima.width / 2), ultima.top + ultima.height / 2);
+    return inicio && fin ? { inicio, fin } : null;
   }
 
   centroVisible(): { page: number; x: number; y: number } | null {

@@ -1,0 +1,32 @@
+\documentclass[11pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish]{babel}
+\usepackage{graphicx}
+
+\title{Imágenes}
+\author{Fixture de LaTeX Viewer}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Con imágenes}
+
+Un párrafo antes de la primera imagen: el modo borrador tiene que dejar este texto donde está y cambiar la imagen por una caja del mismo tamaño.
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.6\textwidth]{foto.png}
+  \caption{Una imagen del tamaño de la mitad de la línea.}
+\end{figure}
+
+Un párrafo entre las dos imágenes, para que el borrador y el documento completo tengan la misma paginación.
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.4\textwidth]{foto.png}
+  \caption{La misma imagen, más chica.}
+\end{figure}
+
+\end{document}

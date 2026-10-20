@@ -49,6 +49,8 @@ const perfil = (id: string, o: Partial<ProfileInfo> = {}): ProfileInfo => ({
   cleanBefore: false,
   autoCompile: true,
   hidden: false,
+  draftImages: false,
+  publica: false,
   ...o,
 });
 
@@ -60,6 +62,7 @@ const estadoBase = (): AppStateInfo => ({
   autoCompile: 'manual',
   idleMs: 500,
   outsideSave: 'warn',
+  draftImages: false,
 });
 
 function infoDe(o: Partial<ProjectInfo> = {}): ProjectInfo {
@@ -1286,6 +1289,43 @@ describe('SyncTeX', () => {
     expect(f.llamadas).toContain('inverse parcial 1 100,105');
   });
 
+  it('sin punto y con texto seleccionado en el PDF: va al código y selecciona el tramo si las dos puntas caen en la misma línea', async () => {
+    const linea = 'La desnormalización transforma una función';
+    const f = falso({ 'a.tex': { text: `${linea}\n` } });
+    f.control.inverse = { file: 'a.tex', line: 1, inside: true };
+    const palabras = renglon(linea, 100);
+    anfitrion(palabras);
+    const d = palabras.find((p) => p.texto === 'desnormalización')!;
+    const u = palabras.find((p) => p.texto === 'función')!;
+    (pdfApi.host as { puntoDeSeleccion?: unknown }).puntoDeSeleccion = () => ({
+      inicio: { page: 1, x: d.x + 2, y: 105 },
+      fin: { page: 1, x: u.x + u.w - 2, y: 105 },
+    });
+    expect(await st().irAlCodigo()).toBe(true);
+    // Parte de la punta de la selección, no del centro de lo que se ve.
+    expect(f.llamadas).toContain(`inverse parcial 1 ${Math.round(d.x + 2)},105`);
+    const ir = st().irA!;
+    expect(linea.slice(ir.inicio, ir.fin)).toBe('desnormalización transforma una función');
+  });
+
+  it('con la selección del PDF en otra línea del fuente se queda con la primera palabra', async () => {
+    const f = falso({ 'a.tex': { text: 'La desnormalización\notra línea\n' } });
+    anfitrion(renglon('La desnormalización', 100));
+    // El core contesta la línea 1 para la primera punta y la 2 para la segunda.
+    const b = (await import('../backend')).getBackend();
+    let n = 0;
+    b.synctexInverse = async () => ({ file: 'a.tex', line: ++n === 1 ? 1 : 2, inside: true });
+    (pdfApi.host as { puntoDeSeleccion?: unknown }).puntoDeSeleccion = () => ({
+      inicio: { page: 1, x: 100, y: 105 },
+      fin: { page: 1, x: 110, y: 300 },
+    });
+    expect(f.llamadas).toBeDefined();
+    expect(await st().irAlCodigo()).toBe(true);
+    const ir = st().irA!;
+    expect(ir.line).toBe(1);
+    expect('La desnormalización'.slice(ir.inicio, ir.fin)).not.toContain(' ');
+  });
+
   it('seguir al cursor: se mueve el cursor y 200 ms después el PDF acompaña, sin resaltar y sin avisar', async () => {
     vi.useFakeTimers();
     const f = falso({ 'a.tex': { text: 'La desnormalización transforma\n' } });
@@ -1754,6 +1794,40 @@ describe('exportar, fragmento, layout y archivos cambiados afuera (F7)', () => {
     st().menuCompilacion();
     await st().quick!.items.find((i) => i.id === 'exportar:activa')!.ejecutar();
     expect(f.llamadas).toContain('exportar Secciones/Uno');
+  });
+
+  describe('imágenes en borrador', () => {
+    const conEntrega = (draftImages: boolean) => {
+      const base = infoDe({ state: { ...estadoBase(), draftImages } });
+      base.config!.profiles.push(perfil('entrega', { publica: true }), perfil('mio', { draftImages: true }));
+      return base;
+    };
+
+    it('el interruptor aplica el patch, avisa, y el ítem del menú lo invierte', async () => {
+      const f = falso({});
+      await st().setDraftImages(true);
+      expect(f.llamadas).toContain('estado {"draftImages":true}');
+      expect(st().notice?.texto).toContain('Imágenes en borrador');
+      st().menuCompilacion();
+      const item = st().quick!.items.find((i) => i.id === 'borrador')!;
+      expect(item.titulo).toBe('Imágenes: completas');
+      await item.ejecutar();
+      expect(f.llamadas).toContain('estado {"draftImages":false}');
+      expect(st().notice?.texto).toContain('Imágenes completas');
+    });
+
+    it('perfilEnBorrador: el interruptor no vale para la exportación ni para lo que se publica, el perfil con draftImages sí siempre', async () => {
+      const { perfilEnBorrador } = await import('./app');
+      const apagado = conEntrega(false);
+      expect(perfilEnBorrador(apagado, 'rapido')).toBe(false);
+      expect(perfilEnBorrador(apagado, 'mio')).toBe(true);
+      const prendido = conEntrega(true);
+      expect(perfilEnBorrador(prendido, 'rapido')).toBe(true);
+      expect(perfilEnBorrador(prendido, 'entrega')).toBe(false);
+      expect(perfilEnBorrador(prendido, 'mio')).toBe(true);
+      expect(perfilEnBorrador(prendido, 'no-existe')).toBe(false);
+      expect(perfilEnBorrador(null, 'rapido')).toBe(false);
+    });
   });
 
   describe('archivos cambiados afuera', () => {

@@ -74,7 +74,7 @@ function TarjetaDePerfil({ id, perfil, config }: { id: string; perfil: PerfilJso
   const editar = useProyecto((s) => s.editar);
   const detectado = propuesta?.perfiles.find((p) => p.id === id);
   const cambiar = (parche: PerfilJson) => editar((c) => fijarPerfil(c, id, parche));
-  const sino = (clave: 'partial' | 'externalize' | 'cacheOnly' | 'cleanBefore', texto: string, ayuda: string) => (
+  const sino = (clave: 'partial' | 'externalize' | 'cacheOnly' | 'cleanBefore' | 'draftImages', texto: string, ayuda: string) => (
     <label className="proy-check" title={ayuda}>
       <input type="checkbox" checked={perfil[clave] === true} onChange={(e) => cambiar({ [clave]: e.target.checked })} />
       {texto}
@@ -103,6 +103,7 @@ function TarjetaDePerfil({ id, perfil, config }: { id: string; perfil: PerfilJso
         {sino('externalize', 'figuras con cache', 'Externaliza las figuras de TikZ y usa el cache')}
         {sino('cacheOnly', 'sólo lee el cache', 'No cocina figuras adentro: la app las cocina antes. No publica.')}
         {sino('cleanBefore', 'desde cero', 'Borra los auxiliares antes de compilar')}
+        {sino('draftImages', 'imágenes en borrador', 'Las imágenes salen como cajas del tamaño que tendrían, sin procesarlas (como el «Fast [draft]» de Overleaf). Un perfil así no se publica.')}
         <label className="proy-check" title="Si puede ser el perfil que compila al guardar">
           <input type="checkbox" checked={perfil.autoCompile !== false} onChange={(e) => cambiar({ autoCompile: e.target.checked })} />
           compila al guardar

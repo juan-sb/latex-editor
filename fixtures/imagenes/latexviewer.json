@@ -1,0 +1,21 @@
+{
+  "root": "main.tex",
+  "engine": "pdflatex",
+  "profiles": {
+    "completo": {
+      "label": "Documento",
+      "autoCompile": false
+    },
+    "entrega": {
+      "label": "Entrega",
+      "cleanBefore": true,
+      "autoCompile": false
+    }
+  },
+  "publish": {
+    "dir": "../PDF",
+    "names": {
+      "entrega": "Imagenes.pdf"
+    }
+  }
+}

@@ -88,6 +88,15 @@ export interface BuildState {
   figura: FiguraDeBuild | null;
   /** Cuándo arrancó el build en curso (para el tiempo y el típico de la barra). */
   inicioMs: number | null;
+  /** El build en curso (o el último) se hizo con las imágenes en borrador: el PDF tiene cajas en lugar de imágenes. */
+  borrador: boolean;
+}
+
+/** ¿Este perfil va con las imágenes en borrador? Lo dice su configuración o el interruptor de la máquina, que no vale para lo que se entrega. */
+export function perfilEnBorrador(p: ProjectInfo | null, id: string | null): boolean {
+  const pr = p?.config?.profiles.find((x) => x.id === id);
+  if (!p || !pr) return false;
+  return pr.draftImages || (p.state.draftImages && id !== PERFIL_EXPORT && !pr.publica);
 }
 
 export interface DialogButton {
@@ -259,6 +268,8 @@ interface AppState {
   compilarParteActiva(): Promise<void>;
   setAutoCompile(modo: AutoCompileMode): Promise<void>;
   setOutsideSave(o: OutsideSave): Promise<void>;
+  /** El interruptor de imágenes en borrador de esta máquina (el «Fast [draft]» de Overleaf). Vale desde el próximo build. */
+  setDraftImages(valor: boolean): Promise<void>;
   setVariable(nombre: string, valor: string): Promise<void>;
   publicar(): Promise<void>;
   guardarConfig(): Promise<void>;
@@ -345,6 +356,7 @@ export const BUILD_INICIAL: BuildState = {
   paso: null,
   figura: null,
   inicioMs: null,
+  borrador: false,
 };
 
 let inicializado = false;
@@ -795,6 +807,7 @@ export const useApp = create<AppState>()((set, get) => {
             status: 'running', id: e.id, perfil: e.perfil, ms: null, code: null, cmdline: e.cmdline, passes: null, repaired: e.retry, pendiente: null, errors: null, warnings: null, badboxes: null,
             // El tiempo cuenta desde el pedido (`compilar` ya lo puso: incluye la cocción previa de figuras) y no se reinicia en un reintento.
             paso: null, figura: null, inicioMs: s.build.status === 'running' && s.build.inicioMs !== null ? s.build.inicioMs : Date.now(),
+            borrador: perfilEnBorrador(s.project, e.perfil),
           },
         }));
       } else if (e.type === 'pass' || e.type === 'figure') {
@@ -1019,6 +1032,12 @@ export const useApp = create<AppState>()((set, get) => {
       items.push({ id: 'fragmento', titulo: 'Vista previa del fragmento (selección o entorno actual)', ejecutar: () => get().previsualizarFragmento() });
       items.push({ id: 'cocinar', titulo: 'Cocinar las figuras', ejecutar: () => get().cocinarFiguras() });
       items.push({ id: 'limpiar', titulo: 'Limpiar el cache de figuras', ejecutar: () => get().limpiarFiguras() });
+      items.push({
+        id: 'borrador',
+        titulo: `Imágenes: ${p.state.draftImages ? 'completas' : 'en borrador (más rápido)'}`,
+        detalle: p.state.draftImages ? 'ahora en borrador' : 'ahora completas',
+        ejecutar: () => get().setDraftImages(!p.state.draftImages),
+      });
       items.push({ id: 'historial', titulo: 'Ver el historial de trabajos', detalle: 'por qué tardó cada uno', ejecutar: () => get().mostrarPanelInferior('historial') });
       items.push({ id: 'doctor', titulo: 'Correr el doctor', detalle: 'TeX, latexmk y el proyecto', ejecutar: () => void get().correrDoctor() });
       if (cfg.publishDir) items.push({ id: 'publicar', titulo: 'Publicar el PDF del último build', detalle: cfg.publishDir, ejecutar: () => get().publicar() });
@@ -1141,6 +1160,16 @@ export const useApp = create<AppState>()((set, get) => {
 
     async setOutsideSave(o) {
       await aplicarEstado({ outsideSave: o });
+    },
+
+    async setDraftImages(valor) {
+      const st = await aplicarEstado({ draftImages: valor });
+      if (!st) return;
+      get().avisar(
+        valor
+          ? 'Imágenes en borrador: la próxima compilación las dibuja como cajas del tamaño que tendrían, sin procesarlas. Lo que se publica o se exporta no usa el borrador.'
+          : 'Imágenes completas: la próxima compilación las incluye.',
+      );
     },
 
     async setVariable(nombre, valor) {
@@ -1574,7 +1603,9 @@ export const useApp = create<AppState>()((set, get) => {
     /** Del PDF al código (6.3 del plan): `punto` es lo clickeado (o, sin él, el centro de lo que se ve). */
     async irAlCodigo(punto) {
       const host = pdfApi.host;
-      const p = punto ?? host?.centroVisible();
+      // Sin un punto pedido (el botón de la barra separadora, Ctrl+Alt+K): el texto seleccionado en el PDF si lo hay, y si no el centro.
+      const seleccion = punto ? null : (host?.puntoDeSeleccion?.() ?? null);
+      const p = punto ?? seleccion?.inicio ?? host?.centroVisible();
       const perfil = get().pdfRel?.split('/')[2];
       if (!host || !p || !perfil) {
         get().avisar('Todavía no hay un PDF para saltar al código.');
@@ -1594,9 +1625,23 @@ export const useApp = create<AppState>()((set, get) => {
       await get().abrirArchivo(res.file);
       const doc = getDoc(res.file);
       if (!doc) return false;
-      const ubic = await refinarInverse(host, p, res, { lineas: doc.state.doc.lines, texto: (n) => doc.state.doc.line(n).text });
+      const fuente = { lineas: doc.state.doc.lines, texto: (n: number) => doc.state.doc.line(n).text };
+      const ubic = await refinarInverse(host, p, res, fuente);
+      let fin = ubic.fin;
+      // Con una selección en el PDF se selecciona el TRAMO en el código: si la otra punta cae en la misma línea del fuente, hasta ahí.
+      if (seleccion && ubic.inicio !== undefined) {
+        try {
+          const r2 = await getBackend().synctexInverse(perfil, seleccion.fin.page, seleccion.fin.x, seleccion.fin.y);
+          if (r2 && r2.file === res.file) {
+            const u2 = await refinarInverse(host, seleccion.fin, r2, fuente);
+            if (u2.line === ubic.line && u2.fin !== undefined && u2.fin > ubic.inicio) fin = u2.fin;
+          }
+        } catch {
+          // sin la otra punta se queda con la primera palabra
+        }
+      }
       get().registrarOrigen();
-      set({ irA: { rel: res.file, line: ubic.line, n: Date.now(), inicio: ubic.inicio, fin: ubic.fin } });
+      set({ irA: { rel: res.file, line: ubic.line, n: Date.now(), inicio: ubic.inicio, fin } });
       return true;
     },
 

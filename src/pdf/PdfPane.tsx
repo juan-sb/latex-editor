@@ -3,7 +3,7 @@
 //
 // Hay dos visores, cada uno en su pestaña: el del documento y el de la vista previa de un fragmento (8.2 del plan). Cada uno
 // conserva su página y su zoom mientras se mira el otro (el que no se ve queda con `display: none`; PDF.js lo reacomoda al volver,
-// porque el visor sigue el tamaño de su contenedor). Las funciones de SyncTeX (→ PDF, ← Código, Seguir) son del documento.
+// porque el visor sigue el tamaño de su contenedor). Las funciones de SyncTeX (Seguir, el doble clic) son del documento; los botones de salto viven en la barra del medio (`BotonesDeSalto`).
 import { useEffect, useRef, useState } from 'react';
 import { getBackend } from '../backend';
 import { useApp } from '../store/app';
@@ -27,7 +27,6 @@ export function PdfPane() {
   const stale = useApp((s) => s.pdfStale);
   const avisar = useApp((s) => s.avisar);
   const seguir = useApp((s) => s.seguir);
-  const irAlPdf = useApp((s) => s.irAlPdf);
   const irAlCodigo = useApp((s) => s.irAlCodigo);
   const setSeguir = useApp((s) => s.setSeguir);
   const vista = useApp((s) => s.vistaPdf);
@@ -161,12 +160,6 @@ export function PdfPane() {
         <span className="zoom">{Math.round(estado.escala * 100)} %</span>
         <button className="icono-boton" disabled={!hayPdf} onClick={() => h?.zoomMas()} title="Acercar (Ctrl+=)">+</button>
         <span className="sep" />
-        <button className="boton chico" disabled={enFragmento} onClick={() => void irAlPdf()} title="Ir al PDF desde el cursor (Ctrl+Alt+J)">
-          → PDF
-        </button>
-        <button className="boton chico" disabled={!hayPdf || enFragmento} onClick={() => void irAlCodigo()} title="Ir al código desde el centro de lo que se ve (o doble clic en el PDF)">
-          ← Código
-        </button>
         <button className={`boton chico${seguir ? ' activo' : ''}`} disabled={enFragmento} onClick={() => setSeguir(!seguir)} title="Seguir al cursor: el PDF acompaña al cursor del editor">
           Seguir
         </button>

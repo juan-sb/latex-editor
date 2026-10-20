@@ -51,6 +51,7 @@ export function TopBar() {
   const cancelar = useApp((s) => s.cancelarBuild);
   const setAutoCompile = useApp((s) => s.setAutoCompile);
   const setOutsideSave = useApp((s) => s.setOutsideSave);
+  const setDraftImages = useApp((s) => s.setDraftImages);
   const setVariable = useApp((s) => s.setVariable);
   const publicar = useApp((s) => s.publicar);
   const mostrarPanel = useApp((s) => s.mostrarPanel);
@@ -113,6 +114,17 @@ export function TopBar() {
                   ▶ Compilar
                 </button>
               )}
+              <button
+                className={`boton chico${estado.draftImages ? ' activo' : ''}`}
+                onClick={() => void setDraftImages(!estado.draftImages)}
+                title={
+                  estado.draftImages
+                    ? 'Imágenes en borrador: se dibujan como cajas del tamaño que tendrían, sin procesarlas (más rápido). No vale para lo que se publica ni se exporta. Clic para volver a las completas.'
+                    : 'Imágenes completas. Clic para compilar con las imágenes en borrador (cajas del tamaño que tendrían, sin procesarlas).'
+                }
+              >
+                🖼 {estado.draftImages ? 'Borrador' : 'Imágenes'}
+              </button>
               <button className="boton chico" onClick={() => menuCompilacion()} title="Menú de compilación: perfiles, variables, exportar, cocinar, limpiar (Ctrl+Alt+T)">
                 ☰
               </button>
@@ -190,6 +202,7 @@ export function TopBar() {
               <>
                 ✔ {((build.ms ?? 0) / 1000).toFixed(1)} s{build.passes ? ` · ${build.passes} pasada${build.passes === 1 ? '' : 's'}` : ''}
                 {build.repaired && ' · reparado'}
+                {build.borrador && <span className="borrador" title="El PDF tiene cajas del tamaño de cada imagen en lugar de las imágenes"> · imágenes en borrador</span>}
               </>
             )}
             {build.status === 'fail' && <>✘ falló (código {build.code ?? '?'})</>}

@@ -112,6 +112,16 @@ button, input, select { font: inherit; color: inherit; }
 .asa { width: 4px; background: var(--borde); transition: background 0.1s; }
 .asa.horizontal { width: auto; height: 4px; }
 .asa:hover, .asa[data-resize-handle-active] { background: var(--acento); }
+/* Los botones de salto cuelgan de la barra del medio: ella queda de 4 px y ellos la desbordan, centrados, por encima de los paneles. */
+.asa-medio { position: relative; overflow: visible; z-index: 5; }
+.asa-sync { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); display: flex; flex-direction: column; gap: 6px; }
+.asa-salto {
+  width: 22px; height: 22px; padding: 0; border-radius: 50%; border: 1px solid var(--borde); background: var(--panel);
+  color: var(--texto); font-size: 10px; line-height: 1; cursor: pointer; display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+.asa-salto:hover:not(:disabled) { background: var(--acento); color: #fff; border-color: var(--acento); }
+.asa-salto:disabled { opacity: 0.4; cursor: default; }
 
 .vacio { color: var(--texto-suave); padding: 24px 16px; text-align: center; }
 
@@ -183,6 +193,7 @@ button, input, select { font: inherit; color: inherit; }
 .barra-superior .partes-resumen { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: var(--acento-suave); border-color: var(--acento); }
 .estado-build .pendiente { color: var(--texto-suave); }
 .estado-build .tipico { color: var(--texto-suave); font-size: 12px; }
+.estado-build .borrador { color: var(--aviso); }
 .estado-build.running { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 55vw; }
 .menu { position: relative; }
 .menu-panel { position: absolute; top: calc(100% + 4px); z-index: 30; min-width: 280px; padding: 6px; background: var(--panel); border: 1px solid var(--borde); border-radius: 6px; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.3); display: flex; flex-direction: column; gap: 4px; }

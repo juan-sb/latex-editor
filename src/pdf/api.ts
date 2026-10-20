@@ -15,6 +15,17 @@ export interface PdfApi {
   esVisible(pagina: number, rect: Rect): boolean;
   /** La página y el punto (en bp) que están en el centro de lo que se ve. */
   centroVisible(): { page: number; x: number; y: number } | null;
+  /**
+   * El texto que la persona seleccionó en el PDF: dónde empieza y dónde termina (página y punto en bp), o `null` si no hay selección.
+   * Es de lo que parte «ir al código» desde el botón de la barra separadora; sin selección se usa el centro de lo que se ve.
+   */
+  puntoDeSeleccion?(): { inicio: PuntoPdf; fin: PuntoPdf } | null;
+}
+
+export interface PuntoPdf {
+  page: number;
+  x: number;
+  y: number;
 }
 
 export const pdfApi: { host: PdfApi | null } = { host: null };

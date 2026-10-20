@@ -232,8 +232,12 @@ pub fn render_driver_spec(s: &DriverSpec) -> Result<String> {
         format!("\\def\\lvPerfil{{{perfil}}}"),
         format!("\\def\\lvParcial{{{}}}", if s.partial { 1 } else { 0 }),
     ];
+    // Las imágenes como cajas del tamaño que tendrían, sin incluir el archivo. Es lo que hace el «Fast [draft]» de Overleaf (su
+    // `DraftModeManager` antepone estas dos líneas al archivo principal): `graphics` además de `graphicx`, por si el documento carga
+    // uno u otro.
     if s.draft_images {
         l.push("\\PassOptionsToPackage{draft}{graphicx}".into());
+        l.push("\\PassOptionsToPackage{draft}{graphics}".into());
     }
     for f in &s.flags {
         if !crate::config::macro_valida(f) {
@@ -893,7 +897,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             d,
-            "% .lv/drivers/lv-parcial.tex (generado por LaTeX Viewer, no editar)\n\\def\\lvPerfil{parcial}\n\\def\\lvParcial{1}\n\\PassOptionsToPackage{draft}{graphicx}\n\\def\\CompilacionReducida{}\n\\def\\TikzExternalizar{}\n\\def\\OpcionPie{autor}\n\\AddToHook{begindocument/before}{\\includeonly{Secciones/Desnormalización,Secciones/Uno}}\n\\input{\"Funciones de Aproximación\"}\n"
+            "% .lv/drivers/lv-parcial.tex (generado por LaTeX Viewer, no editar)\n\\def\\lvPerfil{parcial}\n\\def\\lvParcial{1}\n\\PassOptionsToPackage{draft}{graphicx}\n\\PassOptionsToPackage{draft}{graphics}\n\\def\\CompilacionReducida{}\n\\def\\TikzExternalizar{}\n\\def\\OpcionPie{autor}\n\\AddToHook{begindocument/before}{\\includeonly{Secciones/Desnormalización,Secciones/Uno}}\n\\input{\"Funciones de Aproximación\"}\n"
         );
     }
 
