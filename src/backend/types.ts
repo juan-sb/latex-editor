@@ -314,6 +314,106 @@ export interface Tipico {
   n: number;
 }
 
+// --- la pantalla Proyecto (F8b): lo que se detecta del proyecto y la configuración propuesta ---------------------------------------------
+
+export type RolDeRaiz = 'principal' | 'auxiliar' | 'otra';
+
+export interface CandidataDeRaiz {
+  archivo: string;
+  rol: RolDeRaiz;
+  recomendada: boolean;
+  /** Por qué es lo que es, en palabras de usuario. */
+  motivo: string;
+  /** Cuántos archivos del proyecto alcanza desde ahí. */
+  alcanza: number;
+  includeonlyPropio: string | null;
+  flagsPrevios: string[];
+  incluidaPor: string[];
+}
+
+export type UsoDeFlag = 'partial' | 'externalize' | 'figureList' | 'ninguno';
+
+export interface FlagDetectado {
+  nombre: string;
+  uso: UsoDeFlag;
+  /** Lo que envuelve: `tableofcontents`, `makeindex`, `tikzexternalize`... */
+  envuelve: string[];
+  frase: string;
+  archivos: string[];
+}
+
+export interface FigurasDetectadas {
+  modo: 'project' | 'app' | 'off';
+  dir: string;
+  stampFiles: string[];
+  motivo: string;
+  avisos: string[];
+}
+
+export interface PerfilPropuesto {
+  id: string;
+  label: string;
+  /** Para qué sirve, en una frase. */
+  uso: string;
+  tipico: Tipico | null;
+  /** El PDF que publica (con su carpeta), o `null` si no publica. */
+  publica: string | null;
+}
+
+export interface SalidasDetectadas {
+  publicar: string | null;
+  exportar: string | null;
+  patron: string;
+  ejemploNombre: string | null;
+}
+
+export interface VariableDetectada {
+  nombre: string;
+  label: string;
+  choices: string[];
+  default: string;
+  /** Dónde se define sin guardia (`\def` incondicional): ahí el menú de compilación no la puede cambiar. */
+  defSinGuardia: { archivo: string; linea: number }[];
+  frase: string;
+}
+
+export interface Propuesta {
+  raiz: string;
+  candidatas: CandidataDeRaiz[];
+  partes: string[];
+  partsCommands: string[];
+  flags: FlagDetectado[];
+  figuras: FigurasDetectadas;
+  perfiles: PerfilPropuesto[];
+  salidas: SalidasDetectadas;
+  variables: VariableDetectada[];
+  avisos: string[];
+  /** La configuración propuesta como texto (JSON con sangría): lo que la pantalla edita y guarda. */
+  texto: string;
+}
+
+export interface ValidacionConfig {
+  ok: boolean;
+  errores: string[];
+  /** El mismo JSON tal como lo escribiría la app: es lo que se compara con el del disco y lo que se escribe. */
+  normalizado: string | null;
+  ejemploNombre: string | null;
+}
+
+export interface ListadoProbado {
+  parte: string | null;
+  figuras: number;
+  ms: number;
+  nombres: string[];
+  /** Por qué no se listó (el proyecto no usa cache de figuras, falta una macro). */
+  omitido: string | null;
+}
+
+export interface ResultadoProbar {
+  doctor: InformeDoctor;
+  listado: ListadoProbado;
+}
+
 /** Los perfiles de servicio de la app (ocultos): lo que compila cada parte exportada y la vista previa de un fragmento. */
 export const PERFIL_EXPORT = 'export';
 export const PERFIL_FRAGMENTO = 'fragmento';
@@ -445,7 +545,7 @@ export interface LaunchOptions {
   root: string | null;
   smoke: boolean;
   /** Qué smoke de aceptación corre la interfaz con `LV_SMOKE`: el de F1, F2, F3 o F4. */
-  smokeMode: 'f1' | 'f2' | 'f3' | 'f4' | 'f5' | 'f6' | 'f7' | 'f8';
+  smokeMode: 'f1' | 'f2' | 'f3' | 'f4' | 'f5' | 'f6' | 'f7' | 'f8' | 'f8b';
   smokeFile: string | null;
   /** Milisegundos que el smoke deja la interfaz abierta al terminar (para sacarle una captura). */
   smokePausaMs: number;
@@ -496,6 +596,16 @@ export interface Backend {
   history(limit?: number): Promise<EntradaHistorial[]>;
   /** Lo que tarda un build típico de cada perfil (id del perfil -> típico). */
   typicalTimes(): Promise<Record<string, Tipico>>;
+  /** La pantalla Proyecto: lo que se detecta y la configuración propuesta. `root`: el documento principal que se quiere. */
+  detectProject(root?: string): Promise<Propuesta>;
+  /** El `latexviewer.json` del disco (`null` si no existe). */
+  configOnDisk(): Promise<string | null>;
+  /** Valida un `latexviewer.json` sin guardarlo y lo devuelve normalizado. */
+  validateConfig(text: string): Promise<ValidacionConfig>;
+  /** Escribe `latexviewer.json` (ya validado) y deja la sesión con esa configuración. */
+  writeConfig(text: string): Promise<ProjectInfo>;
+  /** «Probar»: el doctor y el listado de las figuras de una parte con la configuración propuesta, sin guardarla. */
+  probeConfig(text: string, part?: string): Promise<ResultadoProbar>;
   /** El doctor: lanza las herramientas de TeX unos segundos y mira el proyecto; no cambia nada. */
   runDoctor(): Promise<InformeDoctor>;
   /** Procesos de TeX del proyecto que quedaron de antes. */

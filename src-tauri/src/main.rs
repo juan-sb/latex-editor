@@ -5,6 +5,7 @@
 
 use lv_core::build::{BuildEvent, Sink};
 use lv_core::config::{State, StatePatch};
+use lv_core::detectar::Propuesta;
 use lv_core::doctor::Informe;
 use lv_core::historial::{EntradaView, Tipico};
 use lv_core::procesos::ProcesoTex;
@@ -16,7 +17,7 @@ use lv_core::logparse::Problem;
 use lv_core::project::{self, DirEntry};
 use lv_core::search::{ReplaceReport, SearchOptions, SearchResult};
 use lv_core::symbols::Symbols;
-use lv_core::session::{BuildAck, FiguresStatus, FileInfo, ProjectView, Published, Session, SyncForward, SyncInverse};
+use lv_core::session::{BuildAck, FiguresStatus, FileInfo, Probada, ProjectView, Published, Session, SyncForward, SyncInverse, Validacion};
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -82,6 +83,7 @@ async fn launch_options() -> LaunchOptions {
             Some("f6") => "f6".into(),
             Some("f7") => "f7".into(),
             Some("f8") => "f8".into(),
+            Some("f8b") => "f8b".into(),
             _ => "f1".into(),
         },
         smoke_file: var("LV_SMOKE_FILE"),
@@ -268,6 +270,40 @@ async fn history(state: TauriState<'_, AppState>, limit: Option<usize>) -> Res<V
     tauri::async_runtime::spawn_blocking(move || s.history(limit.unwrap_or(200))).await.map_err(|e| otro(&e.to_string()))
 }
 
+/// La pantalla Proyecto (F8b): lo que se detecta del proyecto y la configuración propuesta (sin tocar nada).
+#[tauri::command]
+async fn detect_project(state: TauriState<'_, AppState>, root: Option<String>) -> Res<Propuesta> {
+    let s = sesion(&state)?;
+    tauri::async_runtime::spawn_blocking(move || s.detect_project(root.as_deref())).await.map_err(|e| otro(&e.to_string()))?.map_err(|e| e.info())
+}
+
+/// El `latexviewer.json` tal como está en el disco (`None` si no existe).
+#[tauri::command]
+async fn config_on_disk(state: TauriState<'_, AppState>) -> Res<Option<String>> {
+    sesion(&state)?.config_on_disk().map_err(|e| e.info())
+}
+
+/// Valida un `latexviewer.json` que todavía no se guardó y lo devuelve normalizado (el texto que se escribiría).
+#[tauri::command]
+async fn validate_config(state: TauriState<'_, AppState>, text: String) -> Res<Validacion> {
+    let s = sesion(&state)?;
+    tauri::async_runtime::spawn_blocking(move || s.validate_config(&text)).await.map_err(|e| otro(&e.to_string()))
+}
+
+/// Escribe `latexviewer.json` y deja la sesión con esa configuración.
+#[tauri::command]
+async fn write_config(state: TauriState<'_, AppState>, text: String) -> Res<ProjectView> {
+    let s = sesion(&state)?;
+    tauri::async_runtime::spawn_blocking(move || s.write_config(&text)).await.map_err(|e| otro(&e.to_string()))?.map_err(|e| e.info())
+}
+
+/// «Probar»: el doctor y el listado de las figuras de una parte con la configuración propuesta (sin guardarla).
+#[tauri::command]
+async fn probe_config(state: TauriState<'_, AppState>, text: String, part: Option<String>) -> Res<Probada> {
+    let s = sesion(&state)?;
+    tauri::async_runtime::spawn_blocking(move || s.probe_config(&text, part.as_deref())).await.map_err(|e| otro(&e.to_string()))?.map_err(|e| e.info())
+}
+
 /// Lo que tarda un build típico de cada perfil (mediana de los últimos, del historial), para la barra mientras compila.
 #[tauri::command]
 async fn typical_times(state: TauriState<'_, AppState>) -> Res<std::collections::BTreeMap<String, Tipico>> {
@@ -437,6 +473,11 @@ fn main() {
             build,
             history,
             typical_times,
+            detect_project,
+            config_on_disk,
+            validate_config,
+            write_config,
+            probe_config,
             run_doctor,
             orphans,
             kill_orphans,

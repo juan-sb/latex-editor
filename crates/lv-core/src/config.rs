@@ -24,6 +24,15 @@ fn verdadero() -> bool {
     true
 }
 
+// Lo que vale lo mismo que el valor por omisión no se escribe: el `latexviewer.json` que sale de la app queda como el que se escribe a mano.
+fn es_falso(b: &bool) -> bool {
+    !*b
+}
+
+fn es_verdadero(b: &bool) -> bool {
+    *b
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PartsCfg {
     /// Comandos que delimitan una parte (`include` por defecto; el libro agrega `Capitulo`).
@@ -82,29 +91,36 @@ pub struct ProfileCfg {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     /// Define las macros de `flags.partial` y `\lvParcial`.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "es_falso")]
     pub partial: bool,
     /// Define las macros de `flags.externalize` y compila con `-shell-escape`.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "es_falso")]
     pub externalize: bool,
     /// Con `externalize`: el perfil sólo CONSUME el cache de figuras (`external/mode=graphics if exists`) y compila sin
     /// `-shell-escape`: pgf no lanza ninguna subcompilación, ni siquiera la de una figura nueva (la que no esté se dibuja en el
     /// lugar). Esa modalidad no mira el md5, así que antes de cada build la app cocina lo que falte (spike S5).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "es_falso")]
     pub cache_only: bool,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "PartsSel::es_todas")]
     pub parts: PartsSel,
     /// Borra los auxiliares del perfil antes de compilar (el completo del libro: referencias e índice desde cero).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "es_falso")]
     pub clean_before: bool,
     /// Si puede ser el perfil que compila el guardado. Un completo de un minuto en cada Ctrl+S no sirve (4.1 del plan).
-    #[serde(default = "verdadero")]
+    #[serde(default = "verdadero", skip_serializing_if = "es_verdadero")]
     pub auto_compile: bool,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "es_falso")]
     pub hidden: bool,
     /// `\PassOptionsToPackage{draft}{graphicx}`: imágenes como cuadros, para proyectos con muchas.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "es_falso")]
     pub draft_images: bool,
+}
+
+impl PartsSel {
+    /// «Todas» es el valor por omisión: no se escribe en `latexviewer.json`.
+    pub fn es_todas(&self) -> bool {
+        *self == PartsSel::All
+    }
 }
 
 impl Default for ProfileCfg {

@@ -252,6 +252,51 @@ button, input, select { font: inherit; color: inherit; }
 .problemas-resumen.error { color: var(--peligro); }
 .problemas-resumen.warning { color: var(--aviso); }
 
+/* pantalla Proyecto (F8b) */
+.proyecto-pantalla { position: fixed; inset: 0; z-index: 50; background: var(--fondo); display: flex; flex-direction: column; }
+.proy-cabecera { display: flex; align-items: baseline; gap: 14px; padding: 8px 18px; border-bottom: 1px solid var(--borde); background: var(--panel); }
+.proy-cabecera h2 { margin: 0; font-size: 16px; }
+.proy-cabecera .proy-suave { flex: 1; color: var(--texto-suave); font-size: 12px; }
+.proy-cuerpo { flex: 1; overflow: auto; padding: 14px 18px; max-width: 980px; width: 100%; margin: 0 auto; box-sizing: border-box; }
+.proy-pie { display: flex; align-items: center; justify-content: flex-end; gap: 12px; padding: 8px 18px; border-top: 1px solid var(--borde); background: var(--panel); }
+.proy-estado { margin-right: auto; font-size: 12px; }
+.proy-estado.ok { color: #2e8b57; }
+.proy-estado.mal { color: var(--peligro); }
+.proy-seccion { background: var(--panel); border: 1px solid var(--borde); border-radius: 6px; padding: 10px 14px; margin-bottom: 12px; }
+.proy-seccion header { display: flex; align-items: center; gap: 10px; }
+.proy-seccion h3 { margin: 0; font-size: 14px; flex: 1; }
+.proy-ayuda { margin: 4px 0 6px; color: var(--texto-suave); font-size: 12px; }
+.proy-error { color: var(--peligro); font-size: 12px; }
+.proy-fila { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 6px 0; }
+.proy-fila-ancha label { display: flex; flex-direction: column; gap: 2px; font-size: 12px; color: var(--texto-suave); min-width: 200px; flex: 1; }
+.proy-seccion input:not([type=checkbox]):not([type=radio]), .proy-seccion select { background: var(--panel); color: var(--texto); border: 1px solid var(--borde); border-radius: 4px; padding: 3px 6px; font: inherit; }
+.proy-candidatas { display: grid; gap: 6px; }
+.proy-candidata { display: flex; gap: 8px; align-items: flex-start; border: 1px solid var(--borde); border-radius: 5px; padding: 6px 10px; cursor: pointer; }
+.proy-candidata.elegida { border-color: var(--acento); background: var(--acento-suave); }
+.proy-candidata-cuerpo { display: flex; flex-direction: column; }
+.proy-rol { font-size: 11px; border-radius: 8px; padding: 0 7px; margin-left: 6px; border: 1px solid var(--borde); color: var(--texto-suave); }
+.proy-rol.principal { border-color: var(--acento); color: var(--acento); }
+.proy-rol.auxiliar { border-color: var(--aviso); color: var(--aviso); }
+.proy-rol.recomendada { background: var(--acento); border-color: var(--acento); color: var(--acento-texto); }
+.proy-flag { border-top: 1px solid var(--borde); padding: 4px 0; }
+.proy-flag-cab { display: flex; align-items: center; gap: 10px; justify-content: space-between; }
+.proy-perfiles { display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); }
+.proy-perfil { border: 1px solid var(--borde); border-radius: 6px; padding: 8px 10px; }
+.proy-perfil-cab { display: flex; align-items: center; gap: 8px; }
+.proy-perfil-cab input { flex: 1; font-weight: 600; }
+.proy-perfil-datos { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; }
+.proy-check { display: flex; align-items: center; gap: 4px; }
+.proy-variable { display: flex; align-items: center; gap: 8px; margin: 4px 0; flex-wrap: wrap; }
+.proy-variable input { flex: 1; min-width: 140px; }
+.proy-sugerida { border-top: 1px dashed var(--borde); margin-top: 6px; padding-top: 4px; }
+.proy-json { width: 100%; min-height: 220px; font-family: var(--fuente-mono); font-size: 12px; background: var(--panel); color: var(--texto); border: 1px solid var(--borde); border-radius: 4px; box-sizing: border-box; }
+.proy-resultado { font-size: 12px; margin-top: 6px; }
+.proy-diff { background: var(--panel); border: 1px solid var(--borde); border-radius: 5px; padding: 8px; font-family: var(--fuente-mono); font-size: 12px; overflow: auto; }
+.proy-diff .diff-agrega { background: rgba(46, 139, 87, 0.15); }
+.proy-diff .diff-quita { background: var(--fondo-error); }
+.proy-diff .diff-salto { color: var(--texto-suave); }
+.raiz-actual { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* historial y doctor (F8) */
 .historial, .doctor-lista { height: 100%; overflow: auto; }
 .doctor { height: 100%; display: flex; flex-direction: column; }

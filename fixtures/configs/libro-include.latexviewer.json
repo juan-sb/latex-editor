@@ -1,0 +1,33 @@
+{
+  "root": "main.tex",
+  "engine": "pdflatex",
+  "parts": {
+    "commands": [
+      "include"
+    ]
+  },
+  "flags": {
+    "partial": [],
+    "externalize": [],
+    "figureList": []
+  },
+  "profiles": {
+    "parcial": {
+      "label": "Partes elegidas",
+      "partial": true,
+      "parts": "selection"
+    },
+    "rapido": {
+      "label": "Todas las partes",
+      "partial": true
+    },
+    "completo": {
+      "label": "Documento completo",
+      "autoCompile": false
+    }
+  },
+  "export": {
+    "dir": "export",
+    "pattern": "{num:02} - {name}.pdf"
+  }
+}

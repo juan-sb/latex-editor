@@ -21,11 +21,13 @@ import {
   type SyncInverse,
   type ProfileInfo,
   type ProjectInfo,
+  type Propuesta,
   type StatePatch,
   type Tipico,
 } from '../backend';
 import { cerrarTodos, editarDoc, getDoc, moverCursor, textoDe } from '../editor/docs';
 import { BUILD_INICIAL, BUSQUEDA_INICIAL, FRAGMENTO_INICIAL, useApp } from './app';
+import { PROYECTO_INICIAL, useProyecto } from './proyecto';
 import { logBuffer } from './logbuffer';
 import { pdfApi } from '../pdf/api';
 import { FILTRO_INICIAL } from './problemas';
@@ -87,6 +89,27 @@ function infoDe(o: Partial<ProjectInfo> = {}): ProjectInfo {
   };
 }
 
+/** Lo que detectaría el core de un proyecto como el libro, en chico (lo que la pantalla Proyecto muestra). */
+function propuestaBase(raiz?: string): Propuesta {
+  const config = { root: raiz ?? 'main.tex', engine: 'pdflatex', parts: { commands: ['include'] }, profiles: { completo: { label: 'Documento', autoCompile: false } } };
+  return {
+    raiz: raiz ?? 'main.tex',
+    candidatas: [
+      { archivo: 'main.tex', rol: 'principal', recomendada: true, motivo: 'El documento', alcanza: 9, includeonlyPropio: null, flagsPrevios: [], incluidaPor: [] },
+      { archivo: 'cap_actual.tex', rol: 'auxiliar', recomendada: false, motivo: 'Raíz auxiliar', alcanza: 3, includeonlyPropio: 'Secciones/Uno', flagsPrevios: [], incluidaPor: [] },
+    ],
+    partes: ['Secciones/Uno', 'Secciones/Dos'],
+    partsCommands: ['include'],
+    flags: [],
+    figuras: { modo: 'off', dir: 'figuras-cache', stampFiles: [], motivo: 'No usa TikZ', avisos: [] },
+    perfiles: [{ id: 'completo', label: 'Documento', uso: 'El documento completo', tipico: null, publica: null }],
+    salidas: { publicar: null, exportar: null, patron: '{num:02} - {name}.pdf', ejemploNombre: null },
+    variables: [],
+    avisos: [],
+    texto: `${JSON.stringify(config, null, 2)}\n`,
+  };
+}
+
 /** Un backend en memoria que registra qué se le pidió y en qué orden. */
 function falso(archivos: Record<string, Partial<Archivo> & { text: string }>, proyecto?: Partial<ProjectInfo>) {
   const llamadas: string[] = [];
@@ -117,6 +140,11 @@ function falso(archivos: Record<string, Partial<Archivo> & { text: string }>, pr
     motivos: [] as (string | undefined)[],
     historial: [] as EntradaHistorial[],
     tipicos: {} as Record<string, Tipico>,
+    /** La pantalla Proyecto: lo que detecta el core, el `latexviewer.json` del disco, si la config valida y lo que se escribió. */
+    propuesta: ((raiz?: string): Propuesta => propuestaBase(raiz)) as (raiz?: string) => Propuesta,
+    configEnDisco: null as string | null,
+    validacionOk: true,
+    escrito: [] as string[],
     informe: { hallazgos: [], ms: 5, distribucion: 'MiKTeX 26.5' } as InformeDoctor,
     huerfanos: [] as ProcesoTex[],
     /** Los PID que la interfaz mandó matar. */
@@ -177,6 +205,14 @@ function falso(archivos: Record<string, Partial<Archivo> & { text: string }>, pr
     },
     history: async () => control.historial,
     typicalTimes: async () => control.tipicos,
+    detectProject: async (raiz) => control.propuesta(raiz),
+    configOnDisk: async () => control.configEnDisco,
+    validateConfig: async (texto) => ({ ok: control.validacionOk, errores: control.validacionOk ? [] : ['mal'], normalizado: control.validacionOk ? texto : null, ejemploNombre: null }),
+    writeConfig: async (texto) => {
+      control.escrito.push(texto);
+      return vista({ configSaved: true });
+    },
+    probeConfig: async () => ({ doctor: control.informe, listado: { parte: null, figuras: 0, ms: 1, nombres: [], omitido: 'sin cache' } }),
     runDoctor: async () => control.informe,
     orphans: async () => control.huerfanos,
     killOrphans: async (pids) => {
@@ -272,6 +308,7 @@ async function responder(id: string) {
 beforeEach(() => {
   cerrarTodos();
   logBuffer.clear();
+  useProyecto.setState({ ...PROYECTO_INICIAL });
   useApp.setState({
     project: infoDe(),
     rootFile: 'main.tex',
@@ -889,36 +926,150 @@ describe('cierre de la ventana y cambio de proyecto', () => {
     expect(getDoc('a.tex')).toBeUndefined();
   });
 
-  it('con una sola candidata la toma; con varias y ninguna sugerida pregunta cuál', async () => {
-    const f = falso({}, { candidates: ['cap_actual.tex', 'libro_fast.tex'], rootFile: null });
-    const p = st().abrirProyecto('/libro');
-    await responder('libro_fast.tex');
-    await p;
-    expect(st().rootFile).toBe('libro_fast.tex');
-    expect(f.llamadas).toContain('raiz libro_fast.tex');
-    // "Ninguno por ahora" deja la raíz sin elegir.
-    const q = st().abrirProyecto('/libro');
-    await responder('');
-    await q;
+  it('sin raíz y con varias candidatas no pregunta cuál: se abre la pantalla Proyecto con lo que se detectó', async () => {
+    falso({}, { candidates: ['cap_actual.tex', 'libro_fast.tex'], rootFile: null, configSaved: false });
+    await st().abrirProyecto('/libro');
+    expect(st().dialog).toBeNull();
     expect(st().rootFile).toBeNull();
+    await vi.waitFor(() => expect(useProyecto.getState().config).not.toBeNull());
+    expect(useProyecto.getState()).toMatchObject({ abierta: true, alAbrir: true, cargando: false });
   });
 
-  it('la raíz que viene de afuera (LV_ROOT) no pregunta nada', async () => {
+  it('la raíz que viene de afuera (LV_ROOT) no pregunta nada ni abre la pantalla', async () => {
     const f = falso({}, { candidates: ['a.tex', 'b.tex'], rootFile: null });
     await st().abrirProyecto('/libro', 'b.tex');
     expect(st().dialog).toBeNull();
     expect(st().rootFile).toBe('b.tex');
     expect(f.llamadas).toContain('raiz b.tex');
+    expect(useProyecto.getState().abierta).toBe(false);
   });
 
-  it('un latexviewer.json ilegible se avisa y un proyecto sin él ofrece guardarlo', async () => {
+  it('un proyecto sin latexviewer.json abre la pantalla en lugar de avisar de una configuración inferida', async () => {
     falso({}, { configError: 'latexviewer.json: expected value at line 1', configSaved: false });
     await st().abrirProyecto('/libro');
     expect(st().notice?.nivel).toBe('error');
     expect(st().notice?.texto).toContain('latexviewer.json no se pudo leer');
+    await vi.waitFor(() => expect(useProyecto.getState().abierta).toBe(true));
+    useProyecto.getState().cerrar();
     falso({}, { configSaved: false });
     await st().abrirProyecto('/libro');
-    expect(st().notice?.texto).toContain('no tiene latexviewer.json');
+    expect(st().notice).toBeNull();
+    await vi.waitFor(() => expect(useProyecto.getState().abierta).toBe(true));
+  });
+
+  it('con latexviewer.json y raíz no se abre nada', async () => {
+    falso({});
+    await st().abrirProyecto('/libro');
+    expect(useProyecto.getState().abierta).toBe(false);
+  });
+});
+
+describe('pantalla Proyecto (F8b)', () => {
+  const p = () => useProyecto.getState();
+
+  it('sólo confirmando: abrir, guardar y confirmar escribe exactamente lo que se detectó y la app queda con esa configuración', async () => {
+    const f = falso({}, { configSaved: false });
+    await st().abrirProyecto('/libro');
+    await vi.waitFor(() => expect(p().validacion?.ok).toBe(true));
+    const propuesta = p().propuesta!;
+    await p().pedirGuardar();
+    expect(p().paso).toBe('confirmar');
+    expect(p().diff.every((l) => l.tipo === 'agrega'), 'sin archivo en el disco todo se agrega').toBe(true);
+    expect(await p().confirmarGuardado()).toBe(true);
+    expect(f.control.escrito).toEqual([propuesta.texto]);
+    expect(p().abierta).toBe(false);
+    expect(st().project?.configSaved).toBe(true);
+    expect(st().notice?.texto).toBe('latexviewer.json guardado en la carpeta del proyecto.');
+  });
+
+  it('con un latexviewer.json en el disco se parte de él (la detección sólo sugiere) y el diff muestra lo que cambia', async () => {
+    const f = falso({});
+    f.control.configEnDisco = '{\n  "root": "cap_actual.tex",\n  "profiles": {\n    "completo": {}\n  }\n}\n';
+    await p().abrir();
+    expect(p().config?.root).toBe('cap_actual.tex');
+    expect(p().alAbrir).toBe(false);
+    p().usarDetectado('raiz');
+    expect(p().config?.root).toBe('main.tex');
+    await p().pedirGuardar();
+    const tipos = p().diff.filter((l) => l.tipo !== 'igual').map((l) => `${l.tipo}:${l.texto.trim()}`);
+    expect(tipos).toContain('quita:"root": "cap_actual.tex",');
+    expect(tipos).toContain('agrega:"root": "main.tex",');
+  });
+
+  it('un latexviewer.json ilegible avisa y se parte de lo detectado', async () => {
+    const f = falso({});
+    f.control.configEnDisco = '{ esto no es json';
+    await p().abrir();
+    expect(p().error).toContain('no se pudo leer');
+    expect(p().config?.root).toBe('main.tex');
+  });
+
+  it('elegir otra raíz: sin archivo en el disco todo se vuelve a detectar; con uno, sólo cambia la raíz', async () => {
+    const f = falso({});
+    await p().abrir();
+    await p().elegirRaiz('cap_actual.tex');
+    expect(p().propuesta?.raiz).toBe('cap_actual.tex');
+    expect(p().config?.root).toBe('cap_actual.tex');
+    p().editar((c) => ({ ...c, engine: 'xelatex' }));
+    f.control.configEnDisco = '{ "root": "main.tex", "profiles": { "completo": {} } }';
+    await p().abrir();
+    p().editar((c) => ({ ...c, engine: 'lualatex' }));
+    await p().elegirRaiz('cap_actual.tex');
+    expect(p().config).toMatchObject({ root: 'cap_actual.tex', engine: 'lualatex' });
+  });
+
+  it('una configuración que no valida no se puede guardar ni confirmar', async () => {
+    const f = falso({}, { configSaved: false });
+    await st().abrirProyecto('/libro');
+    await vi.waitFor(() => expect(p().validacion).not.toBeNull());
+    f.control.validacionOk = false;
+    p().editar((c) => ({ ...c, profiles: {} }));
+    await vi.waitFor(() => expect(p().validacion?.ok).toBe(false));
+    await p().pedirGuardar();
+    expect(p().paso).toBe('editar');
+    expect(await p().confirmarGuardado()).toBe(false);
+    expect(f.control.escrito).toEqual([]);
+  });
+
+  it('«Avanzado»: un JSON a medio escribir avisa y conserva lo anterior; uno bueno lo reemplaza', async () => {
+    falso({});
+    await p().abrir();
+    const antes = p().config;
+    p().editarJson('{ "root": ');
+    expect(p().errorDeJson).toContain('no se puede leer');
+    expect(p().config).toBe(antes);
+    p().editarJson('{ "root": "otro.tex", "profiles": { "a": {} } }');
+    expect(p().errorDeJson).toBeNull();
+    expect(p().config).toEqual({ root: 'otro.tex', profiles: { a: {} } });
+  });
+
+  it('«usar lo detectado» vuelve una sección a lo que detectó el core', async () => {
+    falso({});
+    await p().abrir();
+    p().editar((c) => ({ ...c, profiles: { solo: { label: 'Uno' } } }));
+    expect(Object.keys(p().config?.profiles ?? {})).toEqual(['solo']);
+    p().usarDetectado('perfiles');
+    expect(Object.keys(p().config?.profiles ?? {})).toEqual(['completo']);
+  });
+
+  it('probar guarda el resultado y el error si falla', async () => {
+    const f = falso({});
+    await p().abrir();
+    await p().probar('Secciones/Uno');
+    expect(p().probada?.listado.omitido).toBe('sin cache');
+    f.control.informe = { distribucion: null, ms: 1, hallazgos: [] };
+    useProyecto.setState({ config: null });
+    await p().probar();
+    expect(p().probando).toBe(false);
+  });
+
+  it('cerrar descarta lo editado y no escribe nada', async () => {
+    const f = falso({});
+    await p().abrir();
+    p().editar((c) => ({ ...c, engine: 'xelatex' }));
+    p().cerrar();
+    expect(p()).toMatchObject({ abierta: false, config: null, propuesta: null });
+    expect(f.control.escrito).toEqual([]);
   });
 });
 

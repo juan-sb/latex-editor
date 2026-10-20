@@ -47,6 +47,7 @@ import { fragmentoDelCursor } from '../nav/fragmento';
 import { refinarForward, refinarInverse } from '../sync/saltos';
 import type { FiguraDeBuild, PasoDeBuild } from './barra';
 import { logBuffer } from './logbuffer';
+import { abrirPantallaProyecto, setAlGuardar } from './proyecto';
 import { FILTRO_INICIAL, listaDeProblemas, siguiente, visibles, type FiltroProblemas } from './problemas';
 
 export interface TabMeta {
@@ -346,6 +347,8 @@ export const BUILD_INICIAL: BuildState = {
 };
 
 let inicializado = false;
+/** La pantalla Proyecto se abre sola al abrir un proyecto sin `latexviewer.json` (apagada en los smokes que no la prueban). */
+let pantallaAutomatica = true;
 /** Las preguntas se encolan: dos diálogos a la vez se pisarían. */
 let colaDePreguntas: Promise<unknown> = Promise.resolve();
 /** Autoguardado "al dejar de tipear": un solo temporizador para todo el proyecto. */
@@ -378,6 +381,15 @@ export const useApp = create<AppState>()((set, get) => {
   };
 
   const aplicarProyecto = (info: ProjectInfo) => set({ project: info, rootFile: info.rootFile });
+
+  // La pantalla Proyecto escribió `latexviewer.json`: la sesión ya tiene la configuración nueva y la interfaz se pone al día con ella.
+  setAlGuardar((info) => {
+    aplicarProyecto(info);
+    get().avisar('latexviewer.json guardado en la carpeta del proyecto.');
+    void get().cargarSimbolos();
+    void get().cargarFiguras();
+    void get().cargarTipicos();
+  });
 
   // El registro de documentos avisa cuando una pestaña pasa de limpia a modificada o al revés, y en cada edición.
   setDirtyListener((rel, dirty) => actualizarTab(rel, { dirty }));
@@ -427,6 +439,8 @@ export const useApp = create<AppState>()((set, get) => {
     async init() {
       const b = getBackend();
       const opts = await b.launchOptions();
+      // En los smokes la pantalla Proyecto no se abre sola (taparía lo que miden), salvo en el que la prueba.
+      pantallaAutomatica = !opts.smoke || opts.smokeMode === 'f8b';
       if (!inicializado) {
         inicializado = true;
         await b.onBuildEvent((e) => get().manejarEventoBuild(e));
@@ -499,19 +513,12 @@ export const useApp = create<AppState>()((set, get) => {
       }
       if (raizInicial) {
         await get().elegirRaiz(raizInicial);
-      } else if (info.rootFile) {
-        // ya hay raíz: la del proyecto, la de esta máquina o la única candidata
-      } else if (info.candidates.length > 0) {
-        // Como el libro: varias raíces y el \begin{document} en otro archivo. No se puede decidir sola.
-        const r = await get().preguntar('¿Cuál es el archivo raíz del documento?', [
-          ...info.candidates.map((c) => ({ id: c, label: c })),
-          { id: '', label: 'Ninguno por ahora' },
-        ]);
-        if (r) await get().elegirRaiz(r);
-      } else {
-        get().avisar('No encontré ningún .tex con \\documentclass. Abrí uno y usá "Usar como raíz".');
+      } else if (!info.rootFile && info.candidates.length === 0) {
+        get().avisar('No encontré ningún .tex con \\documentclass en esta carpeta.');
       }
-      // Si el archivo existe pero está roto ya se avisó (y es un aviso más importante que éste).
+      // Sin latexviewer.json (o con uno que no se puede leer, o sin raíz): la pantalla Proyecto se abre sola con lo que se detectó, que
+      // incluye elegir el documento principal. Antes había un aviso de «configuración inferida» y una pregunta por la raíz.
+      if (pantallaAutomatica && (!info.configSaved || !get().rootFile)) void abrirPantallaProyecto({ auto: true });
       void get().cargarSimbolos();
       void get().cargarFiguras();
       void get().cargarTipicos();
@@ -525,9 +532,6 @@ export const useApp = create<AppState>()((set, get) => {
         await get().revisarHuerfanos();
         await get().correrDoctor({ alAbrir: true });
       })();
-      if (get().project?.configSaved === false && !info.configError && get().rootFile) {
-        get().avisar('Este proyecto no tiene latexviewer.json: se usa una configuración inferida. Podés guardarla desde el menú ⋯.');
-      }
     },
 
     async refrescarProyecto() {

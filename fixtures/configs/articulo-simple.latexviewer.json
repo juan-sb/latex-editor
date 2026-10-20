@@ -1,0 +1,19 @@
+{
+  "root": "main.tex",
+  "engine": "pdflatex",
+  "parts": {
+    "commands": [
+      "include"
+    ]
+  },
+  "flags": {
+    "partial": [],
+    "externalize": [],
+    "figureList": []
+  },
+  "profiles": {
+    "completo": {
+      "label": "Documento"
+    }
+  }
+}

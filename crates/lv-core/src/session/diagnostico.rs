@@ -15,41 +15,51 @@ impl Session {
     }
 
     pub fn doctor_con(&self, sonda: &doctor::Sonda) -> Result<Informe> {
-        let t0 = Instant::now();
-        let mut hallazgos = Vec::new();
-        let (engine, externaliza, usa_biber, usa_bibtex, usa_makeindex);
-        let latexmkrc = self.root.join("latexmkrc").is_file() || self.root.join(".latexmkrc").is_file();
-        {
+        let (cfg, rf) = {
             let d = self.lock()?;
-            let (Some(cfg), Some(ix), Some(rf)) = (d.config.as_ref(), d.index.as_ref(), d.root_file.as_ref()) else {
-                // Sin raíz no hay proyecto que mirar: sólo la máquina.
-                drop(d);
-                let (h, distro) = doctor::chequeos_de_herramientas(
-                    &Necesidades { engine: "pdflatex", externaliza: false, usa_biber: false, usa_bibtex: false, usa_makeindex: false, latexmkrc: false },
-                    sonda,
-                );
-                return Ok(self.informe(h, distro, t0));
-            };
-            engine = cfg.engine.clone();
-            externaliza = cfg.profiles.values().any(|p| p.externalize);
-            let comandos: Vec<&str> = ix.files.values().flatten().filter(|e| e.kind == EdgeKind::Bib).map(|e| e.command.as_str()).collect();
-            usa_biber = comandos.contains(&"addbibresource");
-            usa_bibtex = comandos.contains(&"bibliography");
-            usa_makeindex = ix.reachable.iter().filter(|r| r.to_ascii_lowercase().ends_with(".tex")).any(|rel| {
-                std::fs::read_to_string(self.root.join(rel)).is_ok_and(|t| t.lines().any(|l| {
+            (d.config.clone(), d.root_file.clone())
+        };
+        let (Some(cfg), Some(rf)) = (cfg, rf) else {
+            // Sin raíz no hay proyecto que mirar: sólo la máquina.
+            let t0 = Instant::now();
+            let (h, distro) = doctor::chequeos_de_herramientas(
+                &Necesidades { engine: "pdflatex", externaliza: false, usa_biber: false, usa_bibtex: false, usa_makeindex: false, latexmkrc: false },
+                sonda,
+            );
+            return Ok(self.informe(h, distro, t0));
+        };
+        Ok(self.chequear(&cfg, &rf, sonda))
+    }
+
+    /// El doctor para una configuración que todavía no se guardó (la pantalla Proyecto, «Probar»): mira el proyecto como quedaría.
+    pub fn doctor_para(&self, cfg: &ProjectConfig, sonda: &doctor::Sonda) -> Informe {
+        self.chequear(cfg, &cfg.root, sonda)
+    }
+
+    fn chequear(&self, cfg: &ProjectConfig, rf: &str, sonda: &doctor::Sonda) -> Informe {
+        let t0 = Instant::now();
+        let ix = ProjectIndex::build(&self.root, rf, &cfg.parts.commands);
+        let latexmkrc = self.root.join("latexmkrc").is_file() || self.root.join(".latexmkrc").is_file();
+        let comandos: Vec<&str> = ix.files.values().flatten().filter(|e| e.kind == EdgeKind::Bib).map(|e| e.command.as_str()).collect();
+        let usa_biber = comandos.contains(&"addbibresource");
+        let usa_bibtex = comandos.contains(&"bibliography");
+        let usa_makeindex = ix.reachable.iter().filter(|r| r.to_ascii_lowercase().ends_with(".tex")).any(|rel| {
+            std::fs::read_to_string(self.root.join(rel)).is_ok_and(|t| {
+                t.lines().any(|l| {
                     let l = crate::graph::sin_comentario(l);
                     l.contains("\\makeindex") || l.contains("\\printindex")
-                }))
-            });
-            hallazgos.extend(doctor::chequeos_de_proyecto(&EntradaDeProyecto { root: &self.root, root_file: rf, config: cfg, ix }));
-        }
-        let (h, distro) = doctor::chequeos_de_herramientas(&Necesidades { engine: &engine, externaliza, usa_biber, usa_bibtex, usa_makeindex, latexmkrc }, sonda);
+                })
+            })
+        });
+        let externaliza = cfg.profiles.values().any(|p| p.externalize);
+        let mut hallazgos = doctor::chequeos_de_proyecto(&EntradaDeProyecto { root: &self.root, root_file: rf, config: cfg, ix: &ix });
+        let (h, distro) = doctor::chequeos_de_herramientas(&Necesidades { engine: &cfg.engine, externaliza, usa_biber, usa_bibtex, usa_makeindex, latexmkrc }, sonda);
         hallazgos.extend(h);
         // Procesos: sólo si la cola está quieta (si no, los de TeX del proyecto son los nuestros).
         hallazgos.extend(doctor::chequeo_de_procesos(&self.huerfanos(), self.bloqueado_por));
         let hist: Vec<historial::Entrada> = historial::leer(&self.root, 20);
         hallazgos.extend(doctor::chequeo_de_coccion(&hist));
-        Ok(self.informe(hallazgos, distro, t0))
+        self.informe(hallazgos, distro, t0)
     }
 
     fn informe(&self, mut hallazgos: Vec<Hallazgo>, distribucion: Option<String>, t0: Instant) -> Informe {

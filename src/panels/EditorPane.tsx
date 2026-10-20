@@ -5,6 +5,7 @@ import { EditorView } from '@codemirror/view';
 import { useEffect, useRef } from 'react';
 import { getDoc, registrarVista } from '../editor/docs';
 import { useApp } from '../store/app';
+import { abrirPantallaProyecto } from '../store/proyecto';
 
 const EOL_NOMBRE = { lf: 'LF', crlf: 'CRLF', cr: 'CR' } as const;
 
@@ -14,8 +15,6 @@ function Pestanas() {
   const rootFile = useApp((s) => s.rootFile);
   const activar = useApp((s) => s.activar);
   const cerrar = useApp((s) => s.cerrarTab);
-  const elegirRaiz = useApp((s) => s.elegirRaiz);
-  const avisar = useApp((s) => s.avisar);
   const activa = tabs.find((t) => t.rel === activeRel);
 
   return (
@@ -42,8 +41,8 @@ function Pestanas() {
       {activa && activa.rel.toLowerCase().endsWith('.tex') && activa.rel !== rootFile && (
         <button
           className="boton chico"
-          onClick={() => elegirRaiz(activa.rel).catch((e) => avisar(String(e), 'error'))}
-          title="Compilar este archivo como raíz del documento"
+          onClick={() => void abrirPantallaProyecto({ raiz: activa.rel })}
+          title="Proponer este archivo como documento principal (abre la pantalla Proyecto)"
         >
           Usar como raíz
         </button>

@@ -30,7 +30,7 @@ export const tauriBackend: Backend = {
       open: string | null;
       root: string | null;
       smoke: boolean;
-      smoke_mode: 'f1' | 'f2' | 'f3' | 'f4' | 'f5' | 'f6' | 'f7' | 'f8';
+      smoke_mode: 'f1' | 'f2' | 'f3' | 'f4' | 'f5' | 'f6' | 'f7' | 'f8' | 'f8b';
       smoke_file: string | null;
       smoke_pausa_ms: number;
     }>('launch_options');
@@ -54,6 +54,11 @@ export const tauriBackend: Backend = {
   cancelBuild: () => llamar('cancel_build'),
   history: (limit) => llamar('history', { limit: limit ?? null }),
   typicalTimes: () => llamar('typical_times'),
+  detectProject: (root) => llamar('detect_project', { root: root ?? null }),
+  configOnDisk: () => llamar('config_on_disk'),
+  validateConfig: (text) => llamar('validate_config', { text }),
+  writeConfig: (text) => llamar('write_config', { text }),
+  probeConfig: (text, part) => llamar('probe_config', { text, part: part ?? null }),
   runDoctor: () => llamar('run_doctor'),
   orphans: () => llamar('orphans'),
   killOrphans: (pids) => llamar('kill_orphans', { pids }),

@@ -9,6 +9,7 @@ pub mod cocinero;
 pub mod doctor;
 pub mod cola;
 pub mod config;
+pub mod detectar;
 pub mod error;
 pub mod figcache;
 pub mod figures;

@@ -6,6 +6,7 @@ import { EditorPane } from './panels/EditorPane';
 import { Sidebar } from './panels/Sidebar';
 import { BottomPanel } from './panels/BottomPanel';
 import { Aviso, Dialogo } from './panels/Overlays';
+import { ProyectoPantalla } from './panels/ProyectoPantalla';
 import { QuickPick } from './panels/QuickPick';
 import { TopBar } from './panels/TopBar';
 import { useApp } from './store/app';
@@ -57,7 +58,9 @@ export default function App() {
         // El smoke de aceptación sólo se carga cuando se pide: no entra en el uso normal.
         if (opts.smoke && !smokeIniciado) {
           smokeIniciado = true;
-          void (opts.smokeMode === 'f8'
+          void (opts.smokeMode === 'f8b'
+            ? import('./smoke-f8b').then((m) => m.correrSmokeF8b(opts))
+            : opts.smokeMode === 'f8'
             ? import('./smoke-f8').then((m) => m.correrSmokeF8(opts))
             : opts.smokeMode === 'f7'
             ? import('./smoke-f7').then((m) => m.correrSmokeF7(opts))
@@ -101,6 +104,7 @@ export default function App() {
           <BottomPanel />
         </Panel>
       </PanelGroup>
+      <ProyectoPantalla />
       <Aviso />
       <Dialogo />
       <QuickPick />

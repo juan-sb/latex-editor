@@ -6,6 +6,7 @@ import { abrirBusquedaEnArchivo, aplicarEnVista } from '../editor/docs';
 import { aplicarFormato, type NombreFormato } from '../editor/formato';
 import { getBackend } from '../backend';
 import { useApp } from '../store/app';
+import { abrirPantallaProyecto } from '../store/proyecto';
 import { buscarPorEvento, esNativoPeligroso, formatoAtajo, resolverAtajos, type AtajosPorId, type AtajosResueltos } from './atajos';
 
 export interface Comando {
@@ -95,6 +96,7 @@ export const COMANDOS: Comando[] = [
   { id: 'panel.log', titulo: 'Mostrar el log del build', categoria: 'Paneles', atajos: [], ejecutar: () => app().mostrarPanelInferior('log') },
   { id: 'panel.historial', titulo: 'Mostrar el historial de trabajos (por qué tardó cada build)', categoria: 'Paneles', atajos: [], ejecutar: () => app().mostrarPanelInferior('historial') },
   { id: 'panel.doctor', titulo: 'Mostrar el doctor', categoria: 'Paneles', atajos: [], ejecutar: () => app().mostrarPanelInferior('doctor') },
+  { id: 'proyecto.configurar', titulo: 'Configurar el proyecto: documento principal, partes, perfiles, salidas, variables', categoria: 'Compilación', atajos: [], ejecutar: () => void abrirPantallaProyecto() },
   { id: 'doctor.correr', titulo: 'Correr el doctor: revisar TeX y el proyecto', categoria: 'Compilación', atajos: [], ejecutar: () => void app().correrDoctor() },
   { id: 'procesos.huerfanos', titulo: 'Buscar procesos de TeX que quedaron de antes', categoria: 'Compilación', atajos: [], ejecutar: () => void app().revisarHuerfanos() },
 

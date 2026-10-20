@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import type { AutoCompileMode, OutsideSave, Tipico } from '../backend';
 import { perfilActivo, useApp } from '../store/app';
 import { lineaDeBuild, textoDeTipico } from '../store/barra';
+import { abrirPantallaProyecto } from '../store/proyecto';
 import { textoDeProgreso } from '../store/figuras';
 import { resumen } from '../store/problemas';
 import { Menu } from './Menu';
@@ -45,7 +46,6 @@ export function TopBar() {
   const rootFile = useApp((s) => s.rootFile);
   const build = useApp((s) => s.build);
   const abrirCarpeta = useApp((s) => s.abrirCarpeta);
-  const elegirRaiz = useApp((s) => s.elegirRaiz);
   const elegirPerfil = useApp((s) => s.elegirPerfil);
   const compilar = useApp((s) => s.compilar);
   const cancelar = useApp((s) => s.cancelarBuild);
@@ -53,7 +53,6 @@ export function TopBar() {
   const setOutsideSave = useApp((s) => s.setOutsideSave);
   const setVariable = useApp((s) => s.setVariable);
   const publicar = useApp((s) => s.publicar);
-  const guardarConfig = useApp((s) => s.guardarConfig);
   const mostrarPanel = useApp((s) => s.mostrarPanel);
   const figProgreso = useApp((s) => s.figProgreso);
   const exportando = useApp((s) => s.exportando);
@@ -64,9 +63,6 @@ export function TopBar() {
   const corriendo = build.status === 'running';
   // Exportar es un trabajo más de la cola: mientras corre o espera, Cancelar lo corta.
   const ocupado = corriendo || exportando !== null;
-  const candidatas = project?.candidates ?? [];
-  // La raíz puede ser un archivo que no está entre las candidatas (se eligió desde una pestaña).
-  const opciones = rootFile && !candidatas.includes(rootFile) ? [rootFile, ...candidatas] : candidatas;
   const config = project?.config ?? null;
   const estado = project?.state;
   const activo = perfilActivo(project);
@@ -87,19 +83,14 @@ export function TopBar() {
       {project && (
         <>
           <span className="proyecto" title={project.root}>{project.name}</span>
-          <label className="raiz">
-            Raíz
-            <select
-              value={rootFile ?? ''}
-              onChange={(e) => e.target.value && elegirRaiz(e.target.value).catch((er) => avisar(String(er), 'error'))}
-              disabled={corriendo}
-            >
-              {!rootFile && <option value="">(elegir)</option>}
-              {opciones.map((c) => (
-                <option key={c} value={c}>{c}</option>
-              ))}
-            </select>
-          </label>
+          {/* La raíz ya no se elige acá: está en latexviewer.json y se cambia desde la pantalla Proyecto (F8b). */}
+          <button
+            className="boton chico raiz-actual"
+            onClick={() => void abrirPantallaProyecto()}
+            title={rootFile ? `Documento principal: ${rootFile}. Clic para configurar el proyecto (raíz, partes, perfiles, salidas…)` : 'Elegir el documento principal y configurar el proyecto'}
+          >
+            {rootFile ?? 'Elegir el documento…'}
+          </button>
           {config && estado && (
             <>
               <label className="raiz">
@@ -162,11 +153,9 @@ export function TopBar() {
                 <button className="menu-item" data-cierra onClick={() => void publicar()} disabled={!config.publishDir || corriendo} title={config.publishDir ? `Copia el PDF a ${config.publishDir}` : 'El proyecto no define publish.dir'}>
                   Publicar el PDF del último build
                 </button>
-                {!project.configSaved && (
-                  <button className="menu-item" data-cierra onClick={() => void guardarConfig()}>
-                    Guardar latexviewer.json
-                  </button>
-                )}
+                <button className="menu-item" data-cierra onClick={() => void abrirPantallaProyecto()}>
+                  Configurar el proyecto…
+                </button>
               </Menu>
             </>
           )}

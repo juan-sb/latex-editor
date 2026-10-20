@@ -38,6 +38,8 @@ mod bake;
 mod diagnostico;
 mod export;
 mod historia;
+mod proyecto;
+pub use proyecto::{ListadoProbado, Probada, Validacion};
 pub use bake::{Cocinando, ErrorFigura, FiglistView, FiguraView, FiguresStatus};
 
 // --- lo que ve la interfaz ----------------------------------------------------------------------------------------------

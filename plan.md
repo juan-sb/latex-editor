@@ -668,18 +668,18 @@ Orden de trabajo: 1, 3 y 2 (la 3 es chica y la 2 usa lo de las otras dos).
    - [x] `figlist.json` guarda la raíz y la lista de partes con que se armó. Si no coinciden con las actuales, no vale ni para limpiar ni para saltear el listado.
    - [x] Un perfil de todas las partes (cocina incluida) inyecta `\includeonly` con la lista completa, así un `\includeonly` propio de la raíz no lo recorta (verificado en `docs/spikes/S6.md`: gana el último). «Completa» se marca sólo si la lista cubre cada parte que tiene figuras según el índice.
    - [x] Antes de un build, si al perfil le faltan PDFs de figuras de sus partes (la figlist completa dice cuáles, por slug), se cocinan esas en paralelo primero, como después de un cambio de estilo. Aceptación: en una copia del libro con el cache como el de inspo, compilar el parcial con Butterworth no cocina de a una.
-   - [ ] La raíz se elige en la pantalla Proyecto y se guarda en `latexviewer.json`. Sale de la barra superior y de `state.json`.
+   - [x] La raíz se elige en la pantalla Proyecto y se guarda en `latexviewer.json`. Sale de la barra superior y de `state.json`.
 2. **Pantalla «Proyecto».** Se abre sola si no hay `latexviewer.json`; después, desde el menú ⋯ y la paleta. Nadie tiene que tocar el JSON. Todo lo que se pueda se detecta y se explica en palabras de usuario:
-   - [ ] Documento principal: cada candidata con un motivo. Se recomienda la que ningún otro archivo incluye y no tiene `\includeonly` propio. Las que tienen `\includeonly` o definen flags antes de cargar el preámbulo se marcan como «raíz auxiliar» (en el libro: `cap_actual`, `libro_fast`, `libro_cocina` y `libro_export`).
-   - [ ] Partes: los capítulos encontrados. Detectar las macros propias que envuelven `\include` (`\Capitulo` en `structure.tex`) para llenar `parts.commands` solo.
-   - [ ] Compilación reducida: detectar los `\ifdefined\X` del proyecto y proponer cada uno según lo que envuelve, con una frase de qué hace. Si envuelve `tableofcontents`, `printbibliography`, `includepdf` o `makeindex`, va a `partial`; si envuelve `\tikzexternalize`, a `externalize`; si envuelve `mode=list and make`, a `figureList`.
-   - [ ] Figuras: si el proyecto externaliza, modo `project`, con la carpeta y el archivo de estilo detectados (el `prefix=` y el archivo del md5 del sello). Si no externaliza pero tiene tikz, ofrecer el modo `app` con una línea de qué se gana. Sin tikz, `off`.
-   - [ ] Perfiles: como tarjetas con su uso («mientras escribís», «leer de corrido», «revisar el libro entero», «entregar»), el tiempo típico sacado del historial y qué publica cada uno.
-   - [ ] Salidas: la carpeta de publicar y la de exportar, con vista previa del nombre («PDF/Capítulos/08 - Funciones de Aproximación.pdf»).
-   - [ ] Variables: alta simple (nombre, etiqueta, opciones). Si el doctor ve un `\def` incondicional, se explica ahí.
-   - [ ] Avanzado: el JSON con validación, para quien quiera.
-   - [ ] Probar: corre el doctor y un listado de una parte, y muestra el resultado.
-   - [ ] Guardar: muestra el diff de `latexviewer.json` antes de escribirlo.
+   - [x] Documento principal: cada candidata con un motivo. Se recomienda la que ningún otro archivo incluye y no tiene `\includeonly` propio. Las que tienen `\includeonly` o definen flags antes de cargar el preámbulo se marcan como «raíz auxiliar» (en el libro: `cap_actual`, `libro_fast`, `libro_cocina` y `libro_export`).
+   - [x] Partes: los capítulos encontrados. Detectar las macros propias que envuelven `\include` (`\Capitulo` en `structure.tex`) para llenar `parts.commands` solo.
+   - [x] Compilación reducida: detectar los `\ifdefined\X` del proyecto y proponer cada uno según lo que envuelve, con una frase de qué hace. Si envuelve `tableofcontents`, `printbibliography`, `includepdf` o `makeindex`, va a `partial`; si envuelve `\tikzexternalize`, a `externalize`; si envuelve `mode=list and make`, a `figureList`.
+   - [x] Figuras: si el proyecto externaliza, modo `project`, con la carpeta y el archivo de estilo detectados (el `prefix=` y el archivo del md5 del sello). Si no externaliza pero tiene tikz, ofrecer el modo `app` con una línea de qué se gana. Sin tikz, `off`.
+   - [x] Perfiles: como tarjetas con su uso («mientras escribís», «leer de corrido», «revisar el libro entero», «entregar»), el tiempo típico sacado del historial y qué publica cada uno.
+   - [x] Salidas: la carpeta de publicar y la de exportar, con vista previa del nombre («PDF/Capítulos/08 - Funciones de Aproximación.pdf»).
+   - [x] Variables: alta simple (nombre, etiqueta, opciones). Si el doctor ve un `\def` incondicional, se explica ahí.
+   - [x] Avanzado: el JSON con validación, para quien quiera.
+   - [x] Probar: corre el doctor y un listado de una parte, y muestra el resultado.
+   - [x] Guardar: muestra el diff de `latexviewer.json` antes de escribirlo.
    Aceptación: abrir una copia de `inspo/Proyecto` sin `latexviewer.json` y llegar a la configuración de `fixtures/configs/libro-tc.latexviewer.json` (con `entrega`) sólo confirmando, sin escribir nada a mano. Lo mismo con `libro-include` y `articulo-simple`.
 3. **Barra mientras compila.**
    - [x] El selector de perfil muestra siempre la etiqueta, también durante el build.

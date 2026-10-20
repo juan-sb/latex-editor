@@ -356,7 +356,7 @@ fn sin_comentario(l: &str) -> &str {
 }
 
 /// Un `\def\X` (o `\gdef`, `\edef`, `\xdef`) sin guardia de una variable declarada: pisa el valor que pone el driver antes de cargar la raíz.
-fn defs_sin_guardia(texto: &str, nombre: &str) -> Vec<u32> {
+pub(crate) fn defs_sin_guardia(texto: &str, nombre: &str) -> Vec<u32> {
     let def = Regex::new(&format!(r"\\[gex]?def\s*\\{}\b", regex::escape(nombre))).expect("patrón válido");
     let guardia = Regex::new(&format!(r"\\(?:ifdefined|@ifundefined|ifx|providecommand|IfFileExists|ifcsname)\b[^\n]*\\?{}\b|\\ifx\s*\\{}\s*\\(?:undefined|@undefined)", regex::escape(nombre), regex::escape(nombre))).expect("patrón válido");
     let lineas: Vec<&str> = texto.lines().collect();
@@ -380,7 +380,7 @@ fn defs_sin_guardia(texto: &str, nombre: &str) -> Vec<u32> {
 /// definición que lo hace por `\input` (o `\subfile`) y si alguna lo hace por `\include`. `\includeonly` sólo vale para `\include`: si
 /// ninguna definición usa `\include`, un perfil de partes elegidas compila todo igual. Una definición con `\input` junto a otra con
 /// `\include` (el libro: según `\CapitulosPorInput`, que sólo pone el driver de la cocción) no es un problema.
-fn definiciones_de_parte(texto: &str, cmd: &str) -> (Option<u32>, bool) {
+pub(crate) fn definiciones_de_parte(texto: &str, cmd: &str) -> (Option<u32>, bool) {
     let (mut por_input, mut con_include) = (None, false);
     let c = regex::escape(cmd);
     let def = Regex::new(&format!(
@@ -410,7 +410,10 @@ fn definiciones_de_parte(texto: &str, cmd: &str) -> (Option<u32>, bool) {
             }
         }
         for cuerpo in &bloques {
-            if cuerpo.contains("\\include") {
+            // `\include{`, no `\includegraphics` ni `\includepdf`.
+            static INCLUDE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+            let include = INCLUDE.get_or_init(|| Regex::new(r"\\include\s*\{").expect("patrón válido"));
+            if include.is_match(cuerpo) {
                 con_include = true;
             } else if (cuerpo.contains("\\input") || cuerpo.contains("\\subfile")) && por_input.is_none() {
                 por_input = Some(texto[..m.start()].matches('\n').count() as u32 + 1);
@@ -791,6 +794,8 @@ mod tests {
         // Como el libro: una definición por `\input` (la cocción) y otra por `\include`: `\includeonly` sirve y no se avisa.
         let libro = "\\ifdefined\\CapitulosPorInput\n    \\newcommand{\\Capitulo}[1]{\\FigCacheReset\\clearpage\\input{#1}\\clearpage}\n\\else\n    \\newcommand{\\Capitulo}[1]{\\FigCacheReset\\include{#1}}\n\\fi\n";
         assert_eq!(definiciones_de_parte(libro, "Capitulo"), (Some(2), true));
+        // Una macro que arma una figura con `\includegraphics` no es una parte.
+        assert_eq!(definiciones_de_parte("\\newcommand{\\Imagen}[1]{\\includegraphics{#1}}\n", "Imagen"), (None, false));
     }
 
     #[test]
