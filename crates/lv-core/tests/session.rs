@@ -343,6 +343,29 @@ fn cuenta_las_pasadas_que_informa_latexmk() {
 }
 
 #[test]
+fn el_build_avisa_cada_pasada_y_cada_figura_de_pgf_mientras_pasa_y_antes_del_final() {
+    let d = proyecto();
+    // La herramienta que corre, la figura que pgf lanza adentro de la pasada, y otra pasada.
+    let script = "$p = $env:LV_PERFIL\nNew-Item -ItemType Directory -Force \".lv/build/$p\" | Out-Null\n\"Run number 1 of rule 'pdflatex'\"\n\"Invoking: pdflatex -jobname \"\"figuras-cache/C7C9E7-butter-2\"\" x\"\n\"Run number 1 of rule 'biber'\"\n\"Run number 2 of rule 'pdflatex'\"\nSet-Content \".lv/build/$p/lv-$p.pdf\" 'x'\n";
+    let (s, r) = abrir(&d, script);
+    s.request_build(Some("rapido")).unwrap();
+    esperar_finales(&r, 1, 60);
+    let vistos: Vec<String> = r
+        .eventos
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|e| match e {
+            BuildEvent::Pass { n, tool, .. } => Some(format!("{tool} {n}")),
+            BuildEvent::Figure { n, name, .. } => Some(format!("figura {n} {name}")),
+            BuildEvent::Finished { .. } => Some("fin".into()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(vistos, ["pdflatex 1", "figura 1 C7C9E7-butter-2", "biber 1", "pdflatex 2", "fin"], "{vistos:?}");
+}
+
+#[test]
 fn el_finished_trae_el_conteo_de_problemas_del_log_y_la_lista_se_pide_aparte() {
     let d = proyecto();
     let script = format!(

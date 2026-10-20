@@ -25,6 +25,7 @@ import {
   type ResultadoBusqueda,
   type Simbolos,
   type StatePatch,
+  type Tipico,
 } from '../backend';
 import {
   aplicarProblemas,
@@ -44,6 +45,7 @@ import { pdfApi } from '../pdf/api';
 import { describir, resolverDefinicion, resolverUsos, tokenEnCursor } from '../nav/definiciones';
 import { fragmentoDelCursor } from '../nav/fragmento';
 import { refinarForward, refinarInverse } from '../sync/saltos';
+import type { FiguraDeBuild, PasoDeBuild } from './barra';
 import { logBuffer } from './logbuffer';
 import { FILTRO_INICIAL, listaDeProblemas, siguiente, visibles, type FiltroProblemas } from './problemas';
 
@@ -79,6 +81,11 @@ export interface BuildState {
   errors: number | null;
   warnings: number | null;
   badboxes: number | null;
+  /** En vivo, mientras corre (F8b): la regla de latexmk que está corriendo y la última figura que pgf lanzó adentro. */
+  paso: PasoDeBuild | null;
+  figura: FiguraDeBuild | null;
+  /** Cuándo arrancó el build en curso (para el tiempo y el típico de la barra). */
+  inicioMs: number | null;
 }
 
 export interface DialogButton {
@@ -193,6 +200,8 @@ interface AppState {
   panelInferior: PanelInferior;
   /** El historial de trabajos (`.lv/history.jsonl`, el más nuevo primero): se lee al mostrar el panel y cuando termina un trabajo con el panel a la vista. */
   historialTrabajos: EntradaHistorial[];
+  /** Lo que tarda un build típico de cada perfil (del historial): la barra lo pone al lado del tiempo que va corriendo. */
+  tipicos: Record<string, Tipico>;
   /** El último informe del doctor y si hay uno corriendo (lanza las herramientas de TeX, tarda unos segundos). */
   doctor: InformeDoctor | null;
   doctorCorriendo: boolean;
@@ -254,6 +263,7 @@ interface AppState {
   mostrarPanel(p: PanelIzquierdo): void;
   mostrarPanelInferior(p: PanelInferior): void;
   cargarHistorial(): Promise<void>;
+  cargarTipicos(): Promise<void>;
   /** Corre el doctor. `alAbrir`: sólo avisa (con un botón para verlo) si encontró errores o avisos. */
   correrDoctor(opciones?: { alAbrir?: boolean }): Promise<void>;
   /** Al abrir: procesos de TeX del proyecto que quedaron de antes, con la opción de matarlos. */
@@ -330,6 +340,9 @@ export const BUILD_INICIAL: BuildState = {
   errors: null,
   warnings: null,
   badboxes: null,
+  paso: null,
+  figura: null,
+  inicioMs: null,
 };
 
 let inicializado = false;
@@ -389,6 +402,7 @@ export const useApp = create<AppState>()((set, get) => {
     problemaIdx: -1,
     panelInferior: 'log',
     historialTrabajos: [],
+    tipicos: {},
     doctor: null,
     doctorCorriendo: false,
     irA: null,
@@ -460,6 +474,7 @@ export const useApp = create<AppState>()((set, get) => {
         problems: [],
         problemaIdx: -1,
         historialTrabajos: [],
+        tipicos: {},
         doctor: null,
         doctorCorriendo: false,
         irA: null,
@@ -499,6 +514,7 @@ export const useApp = create<AppState>()((set, get) => {
       // Si el archivo existe pero está roto ya se avisó (y es un aviso más importante que éste).
       void get().cargarSimbolos();
       void get().cargarFiguras();
+      void get().cargarTipicos();
       void (async () => {
         if (info.lockedBy !== null) {
           // Otra instancia tiene el proyecto: acá se puede leer y editar, pero dos colas sobre el mismo `.lv` y el mismo cache se pisarían.
@@ -719,7 +735,7 @@ export const useApp = create<AppState>()((set, get) => {
       // Guardar todo y compilar (Ctrl+Enter): compilar con el disco viejo daría un PDF que no es lo que se ve.
       if (opciones?.guardar !== false && !(await get().guardarTodo({ auto: false }))) return;
       const yaCorria = get().build.status === 'running';
-      if (!yaCorria) set((x) => ({ build: { ...x.build, status: 'running', ms: null, code: null, passes: null, pendiente: null } }));
+      if (!yaCorria) set((x) => ({ build: { ...x.build, status: 'running', ms: null, code: null, passes: null, pendiente: null, paso: null, figura: null, inicioMs: Date.now() } }));
       try {
         // Si ya hay un build corriendo, el core deja este pedido pendiente (y los pedidos seguidos se coalescen).
         const ack = await getBackend().build(perfil, opciones?.motivo);
@@ -768,7 +784,20 @@ export const useApp = create<AppState>()((set, get) => {
           logBuffer.clear();
           logBuffer.append(`$ ${e.cmdline}\n`);
         }
-        set({ build: { status: 'running', id: e.id, perfil: e.perfil, ms: null, code: null, cmdline: e.cmdline, passes: null, repaired: e.retry, pendiente: null, errors: null, warnings: null, badboxes: null } });
+        // Un reintento (después de reparar un `.aux`) sigue contando desde el pedido: el tiempo no vuelve a cero.
+        set((s) => ({
+          build: {
+            status: 'running', id: e.id, perfil: e.perfil, ms: null, code: null, cmdline: e.cmdline, passes: null, repaired: e.retry, pendiente: null, errors: null, warnings: null, badboxes: null,
+            // El tiempo cuenta desde el pedido (`compilar` ya lo puso: incluye la cocción previa de figuras) y no se reinicia en un reintento.
+            paso: null, figura: null, inicioMs: s.build.status === 'running' && s.build.inicioMs !== null ? s.build.inicioMs : Date.now(),
+          },
+        }));
+      } else if (e.type === 'pass' || e.type === 'figure') {
+        // Sólo los del build en curso (los de una exportación o un fragmento tienen otro id).
+        set((s) => {
+          if (s.build.status !== 'running' || s.build.id !== e.id) return {};
+          return { build: e.type === 'pass' ? { ...s.build, paso: { tool: e.tool, n: e.n } } : { ...s.build, figura: { n: e.n, nombre: e.name } } };
+        });
       } else if (e.type === 'log') {
         logBuffer.append(e.text);
       } else {
@@ -789,6 +818,7 @@ export const useApp = create<AppState>()((set, get) => {
         // Un build puede haber cocinado figuras por su cuenta (pgf cocina de a una las que faltan) o haber descartado alguna rota.
         void get().cargarFiguras();
         if (get().panelInferior === 'historial') void get().cargarHistorial();
+        void get().cargarTipicos();
         const que = status === 'ok' ? 'terminó bien' : status === 'cancelled' ? 'cancelado' : `falló (código ${e.code ?? '?'})`;
         const pasadas = e.passes > 0 ? `, ${e.passes} pasada${e.passes === 1 ? '' : 's'}` : '';
         logBuffer.append(`\n== ${que} en ${(e.ms / 1000).toFixed(1)} s${pasadas}${e.repaired ? ' (después de reparar los auxiliares)' : ''}\n`);
@@ -1149,6 +1179,15 @@ export const useApp = create<AppState>()((set, get) => {
         set({ historialTrabajos: await getBackend().history(200) });
       } catch {
         // Sin historial el panel queda vacío: no es crítico.
+      }
+    },
+
+    async cargarTipicos() {
+      if (!get().project) return set({ tipicos: {} });
+      try {
+        set({ tipicos: await getBackend().typicalTimes() });
+      } catch {
+        // Sin el típico la barra muestra sólo el tiempo: no es crítico.
       }
     },
 

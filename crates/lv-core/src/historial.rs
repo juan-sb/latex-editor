@@ -8,6 +8,7 @@
 //! otros procesos de TeX había corriendo. `pistas` convierte eso en frases para el panel.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
@@ -180,6 +181,54 @@ pub fn leer(root: &Path, limite: usize) -> Vec<Entrada> {
 pub fn con_pistas(e: Entrada) -> EntradaView {
     let pistas = pistas(&e);
     EntradaView { entrada: e, pistas }
+}
+
+/// Lo que tarda un build de un perfil en esta máquina, para que la barra lo ponga al lado del tiempo que va corriendo.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Tipico {
+    /// La mediana de los últimos builds buenos del perfil.
+    pub ms: u64,
+    pub pasadas: u32,
+    /// Cuántos builds entraron en la cuenta.
+    pub n: u32,
+}
+
+/// De cuántos builds se saca el típico: los últimos.
+const BUILDS_PARA_EL_TIPICO: usize = 10;
+
+fn mediana(mut v: Vec<u64>) -> u64 {
+    v.sort_unstable();
+    v[v.len() / 2]
+}
+
+/// El tiempo típico de cada perfil: la mediana de sus últimos 10 builds que salieron bien, sin cancelar y sin reparar (dos builds en uno).
+/// Si hay al menos 3 «en caliente» (con los auxiliares y el `.fdb_latexmk` del perfil ya ahí), cuentan sólo ésos: el primero de un perfil
+/// recompila todo y no es lo que se espera de un guardado. `lineas`: las más nuevas primero (`leer`).
+pub fn tipicos_de(lineas: &[Entrada]) -> BTreeMap<String, Tipico> {
+    let mut por_perfil: BTreeMap<&str, Vec<&Entrada>> = BTreeMap::new();
+    for e in lineas.iter().filter(|e| e.tipo == "build" && e.ok && !e.cancelado && !e.reparado) {
+        if let Some(p) = e.perfil.as_deref() {
+            let v = por_perfil.entry(p).or_default();
+            if v.len() < BUILDS_PARA_EL_TIPICO {
+                v.push(e);
+            }
+        }
+    }
+    por_perfil
+        .into_iter()
+        .map(|(perfil, v)| {
+            let calientes: Vec<&Entrada> = v.iter().copied().filter(|e| e.aux_faltantes.is_empty() && !e.limpio_antes).collect();
+            let usadas = if calientes.len() >= 3 { calientes } else { v };
+            let ms = mediana(usadas.iter().map(|e| e.ms).collect());
+            let pasadas = mediana(usadas.iter().map(|e| u64::from(e.pasadas)).collect()) as u32;
+            (perfil.to_string(), Tipico { ms, pasadas, n: usadas.len() as u32 })
+        })
+        .collect()
+}
+
+pub fn tipicos(root: &Path) -> BTreeMap<String, Tipico> {
+    tipicos_de(&leer(root, 400))
 }
 
 // --- las pistas ----------------------------------------------------------------------------------------------------------------
@@ -441,6 +490,32 @@ mod tests {
         assert!(p.contains("cleanBefore"), "{p}");
         assert!(pistas(&Entrada { ok: false, codigo: Some(12), ..build() }).iter().any(|x| x == "falló (código 12)"));
         assert!(pistas(&Entrada { ok: false, cancelado: true, ..build() }).iter().any(|x| x == "se canceló"));
+    }
+
+    #[test]
+    fn el_tipico_de_un_perfil_es_la_mediana_de_sus_ultimos_builds_buenos_en_caliente() {
+        let b = |perfil: &str, ms: u64| Entrada { tipo: "build".into(), perfil: Some(perfil.into()), ms, ok: true, pasadas: 2, ..Default::default() };
+        // Más nuevos primero. Uno cancelado, uno fallido, uno reparado y uno en frío (le faltaba el .fdb_latexmk) no cuentan si hay en caliente.
+        let lineas = vec![
+            b("parcial", 5000),
+            Entrada { cancelado: true, ok: false, ..b("parcial", 90_000) },
+            b("parcial", 4000),
+            Entrada { ok: false, ..b("parcial", 1) },
+            Entrada { reparado: true, ..b("parcial", 70_000) },
+            b("parcial", 6000),
+            Entrada { aux_faltantes: vec!["fdb_latexmk".into()], ..b("parcial", 40_000) },
+            Entrada { tipo: "bake".into(), perfil: Some("parcial".into()), ms: 123_456, ok: true, ..Default::default() },
+            b("rapido", 10_000),
+        ];
+        let t = tipicos_de(&lineas);
+        assert_eq!(t["parcial"], Tipico { ms: 5000, pasadas: 2, n: 3 }, "mediana de 5, 4 y 6 s: sin el cancelado, el fallido, el reparado ni el de frío");
+        // Con menos de 3 en caliente se usan todos los buenos (el de frío incluido): mejor eso que nada.
+        assert_eq!(t["rapido"], Tipico { ms: 10_000, pasadas: 2, n: 1 });
+        // Sólo cuentan los últimos 10.
+        let muchas: Vec<Entrada> = (0..15).map(|i| b("completo", if i < 10 { 3000 } else { 99_000 })).collect();
+        assert_eq!(tipicos_de(&muchas)["completo"].n, 10);
+        assert_eq!(tipicos_de(&muchas)["completo"].ms, 3000);
+        assert!(tipicos_de(&[]).is_empty());
     }
 
     #[test]

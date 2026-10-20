@@ -682,9 +682,9 @@ Orden de trabajo: 1, 3 y 2 (la 3 es chica y la 2 usa lo de las otras dos).
    - [ ] Guardar: muestra el diff de `latexviewer.json` antes de escribirlo.
    Aceptación: abrir una copia de `inspo/Proyecto` sin `latexviewer.json` y llegar a la configuración de `fixtures/configs/libro-tc.latexviewer.json` (con `entrega`) sólo confirmando, sin escribir nada a mano. Lo mismo con `libro-include` y `articulo-simple`.
 3. **Barra mientras compila.**
-   - [ ] El selector de perfil muestra siempre la etiqueta, también durante el build.
-   - [ ] Una línea de estado en vivo con el perfil, las partes, la pasada y la herramienta (`pdflatex`, `biber`), la figura que pgf está cocinando adentro («cocinando figura 3: butter-2») y el tiempo, con el típico del historial al lado.
-   - [ ] Emitir eventos de pasada y de figura desde el `Contador` (`build:pass`, `build:figure`).
+   - [x] El selector de perfil muestra siempre la etiqueta, también durante el build.
+   - [x] Una línea de estado en vivo con el perfil, las partes, la pasada y la herramienta (`pdflatex`, `biber`), la figura que pgf está cocinando adentro («cocinando figura 3: butter-2») y el tiempo, con el típico del historial al lado.
+   - [x] Emitir eventos de pasada y de figura desde el `Contador` (`build:pass`, `build:figure`).
 
 ### F9. Migración del libro
 

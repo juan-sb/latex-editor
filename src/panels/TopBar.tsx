@@ -2,22 +2,29 @@
 // auto-compilación y el resultado del último build. El menú ⋯ tiene lo que se usa menos: variables, publicar, guardar
 // latexviewer.json y qué hacer cuando se guarda un archivo de una parte que el perfil no incluye.
 import { useEffect, useState } from 'react';
-import type { AutoCompileMode, OutsideSave } from '../backend';
+import type { AutoCompileMode, OutsideSave, Tipico } from '../backend';
 import { perfilActivo, useApp } from '../store/app';
+import { lineaDeBuild, textoDeTipico } from '../store/barra';
 import { textoDeProgreso } from '../store/figuras';
 import { resumen } from '../store/problemas';
 import { Menu } from './Menu';
 
-function Cronometro({ activo }: { activo: boolean }) {
+/** Los segundos que lleva el build (desde que se pidió) y, al lado, lo típico de ese perfil según el historial. */
+function Cronometro({ desde, tipico }: { desde: number | null; tipico: Tipico | undefined }) {
   const [seg, setSeg] = useState(0);
   useEffect(() => {
-    if (!activo) return;
-    const t0 = Date.now();
-    setSeg(0);
-    const t = setInterval(() => setSeg((Date.now() - t0) / 1000), 250);
+    const t0 = desde ?? Date.now();
+    const actualizar = () => setSeg((Date.now() - t0) / 1000);
+    actualizar();
+    const t = setInterval(actualizar, 250);
     return () => clearInterval(t);
-  }, [activo]);
-  return <>{seg.toFixed(0)} s</>;
+  }, [desde]);
+  const t = textoDeTipico(tipico, seg);
+  return (
+    <>
+      {seg.toFixed(0)} s{t && <span className="tipico"> ({t})</span>}
+    </>
+  );
 }
 
 const nombreCorto = (n: string) => n.split('/').pop() ?? n;
@@ -65,7 +72,12 @@ export function TopBar() {
   const activo = perfilActivo(project);
   const visibles = config?.profiles.filter((p) => !p.hidden) ?? [];
   const partes = resumenDePartes(activo?.parts, estado?.selection ?? [], project?.parts.length ?? 0);
-  const etiquetaPerfil = (id: string) => build.perfil === id && corriendo ? `${id} …` : (config?.profiles.find((p) => p.id === id)?.label ?? id);
+  // Siempre la etiqueta, también durante el build (antes mostraba el id con «…»).
+  const etiquetaPerfil = (id: string) => config?.profiles.find((p) => p.id === id)?.label ?? id;
+  const tipicos = useApp((s) => s.tipicos);
+  // Lo que compila el build en curso (puede no ser el perfil activo: quedó en cola o lo pidió un menú).
+  const enCurso = config?.profiles.find((p) => p.id === build.perfil);
+  const partesEnCurso = enCurso ? resumenDePartes(enCurso.parts, estado?.selection ?? [], project?.parts.length ?? 0) : '';
 
   return (
     <div className="barra-superior">
@@ -178,7 +190,10 @@ export function TopBar() {
           <span className={`estado-build ${build.status}`}>
             {build.status === 'running' && (
               <>
-                {figProgreso && build.id === null ? 'Esperando las figuras…' : <>Compilando «{build.perfil ?? '…'}»…</>} <Cronometro activo />
+                {figProgreso && build.id === null
+                  ? 'Esperando las figuras…'
+                  : lineaDeBuild({ perfil: build.perfil ? etiquetaPerfil(build.perfil) : '…', partes: partesEnCurso, paso: build.paso, figura: build.figura })}{' '}
+                <Cronometro desde={build.inicioMs} tipico={build.perfil ? tipicos[build.perfil] : undefined} />
                 {build.pendiente && <span className="pendiente" title="Se compila una vez más cuando termine"> · 1 pendiente</span>}
               </>
             )}

@@ -2,7 +2,7 @@
 //!
 //!   cargo run -p lv-core --example build -- <carpeta> [perfil] [--root <raíz.tex>] [--parts "A,B"] [--figuras | --limpiar | --exportar "A,B"|todas | --fragmento <archivo.tex>]
 //!
-//! Sin `--root` usa la de `latexviewer.json` o `.lv/state.json`; sin perfil, el activo (o `completo`). Imprime el log
+//! Sin `--root` usa la de `latexviewer.json`; sin perfil, el activo (o `completo`). Imprime el log
 //! crudo tal como llega y sale con 0 si el build fue ok. Con `--figuras` no compila: cocina las figuras del documento entero
 //! (el botón Cocinar del panel Figuras) y sale con 0 si todas salieron bien. En los dos casos espera a que la sesión quede
 //! ociosa, así que incluye lo que la cola deja después (la cocción del resto tras un build). Sirve para probar el motor solo
@@ -43,6 +43,8 @@ fn main() {
             let _ = o.write_all(text.as_bytes());
             let _ = o.flush();
         }
+        BuildEvent::Pass { n, tool, .. } => eprintln!("   [{tool} {n}]"),
+        BuildEvent::Figure { n, name, .. } => eprintln!("   [pgf lanzó la figura {n}: {name}]"),
         BuildEvent::Queued { perfil } => eprintln!("== en cola: {perfil}"),
         BuildEvent::Error { message } => eprintln!("== error: {message}"),
         BuildEvent::BakeQueued => eprintln!("== cocción de figuras en cola"),

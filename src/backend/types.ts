@@ -260,6 +260,10 @@ export type BuildEvent =
   | { type: 'queued'; perfil: string }
   | { type: 'started'; id: number; perfil: string; cmdline: string; retry: boolean }
   | { type: 'log'; id: number; text: string }
+  /** Arrancó una regla de latexmk (`pdflatex`, `biber`...); `n` es la vez de esa herramienta en este build. */
+  | { type: 'pass'; id: number; n: number; tool: string }
+  /** pgf lanzó la subcompilación de una figura adentro del build (la `n`-ésima); `name` sin carpeta. */
+  | { type: 'figure'; id: number; n: number; name: string }
   | {
       type: 'finished';
       id: number;
@@ -301,6 +305,14 @@ export type BuildEvent =
   | { type: 'exportstarted'; id: number; total: number }
   | { type: 'exportprogress'; id: number; done: number; total: number; part: string; num: string | null; file: string | null; ok: boolean }
   | { type: 'exportfinished'; id: number; ok: boolean; cancelled: boolean; exported: number; failed: number; ms: number; dir: string; error: string | null };
+
+/** Lo que tarda un build típico de un perfil en esta máquina: mediana de los últimos buenos del historial. */
+export interface Tipico {
+  ms: number;
+  pasadas: number;
+  /** Cuántos builds entraron en la cuenta. */
+  n: number;
+}
 
 /** Los perfiles de servicio de la app (ocultos): lo que compila cada parte exportada y la vista previa de un fragmento. */
 export const PERFIL_EXPORT = 'export';
@@ -482,6 +494,8 @@ export interface Backend {
   cancelBuild(): Promise<boolean>;
   /** Las últimas líneas del historial de trabajos (la más nueva primero), con sus pistas. */
   history(limit?: number): Promise<EntradaHistorial[]>;
+  /** Lo que tarda un build típico de cada perfil (id del perfil -> típico). */
+  typicalTimes(): Promise<Record<string, Tipico>>;
   /** El doctor: lanza las herramientas de TeX unos segundos y mira el proyecto; no cambia nada. */
   runDoctor(): Promise<InformeDoctor>;
   /** Procesos de TeX del proyecto que quedaron de antes. */

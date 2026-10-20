@@ -6,7 +6,7 @@
 use lv_core::build::{BuildEvent, Sink};
 use lv_core::config::{State, StatePatch};
 use lv_core::doctor::Informe;
-use lv_core::historial::EntradaView;
+use lv_core::historial::{EntradaView, Tipico};
 use lv_core::procesos::ProcesoTex;
 use lv_core::error::{Error, ErrorInfo};
 use lv_core::figcache::Limpieza;
@@ -144,6 +144,8 @@ fn sink_de(app: AppHandle) -> Sink {
         let nombre = match &ev {
             BuildEvent::Started { .. } => "build:started",
             BuildEvent::Log { .. } => "build:log",
+            BuildEvent::Pass { .. } => "build:pass",
+            BuildEvent::Figure { .. } => "build:figure",
             BuildEvent::Finished { .. } => "build:finished",
             BuildEvent::Queued { .. } => "build:queued",
             BuildEvent::Error { .. } => "build:error",
@@ -264,6 +266,13 @@ async fn build(state: TauriState<'_, AppState>, profile: Option<String>, reason:
 async fn history(state: TauriState<'_, AppState>, limit: Option<usize>) -> Res<Vec<EntradaView>> {
     let s = sesion(&state)?;
     tauri::async_runtime::spawn_blocking(move || s.history(limit.unwrap_or(200))).await.map_err(|e| otro(&e.to_string()))
+}
+
+/// Lo que tarda un build típico de cada perfil (mediana de los últimos, del historial), para la barra mientras compila.
+#[tauri::command]
+async fn typical_times(state: TauriState<'_, AppState>) -> Res<std::collections::BTreeMap<String, Tipico>> {
+    let s = sesion(&state)?;
+    tauri::async_runtime::spawn_blocking(move || s.typical_times()).await.map_err(|e| otro(&e.to_string()))
 }
 
 /// El doctor: lanza las herramientas de TeX unos segundos y mira el proyecto. No cambia nada.
@@ -427,6 +436,7 @@ fn main() {
             read_pdf,
             build,
             history,
+            typical_times,
             run_doctor,
             orphans,
             kill_orphans,

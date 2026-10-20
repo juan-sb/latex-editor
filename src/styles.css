@@ -179,6 +179,8 @@ button, input, select { font: inherit; color: inherit; }
 .barra-superior { flex-wrap: wrap; row-gap: 4px; }
 .barra-superior .partes-resumen { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: var(--acento-suave); border-color: var(--acento); }
 .estado-build .pendiente { color: var(--texto-suave); }
+.estado-build .tipico { color: var(--texto-suave); font-size: 12px; }
+.estado-build.running { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 55vw; }
 .menu { position: relative; }
 .menu-panel { position: absolute; top: calc(100% + 4px); z-index: 30; min-width: 280px; padding: 6px; background: var(--panel); border: 1px solid var(--borde); border-radius: 6px; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.3); display: flex; flex-direction: column; gap: 4px; }
 .menu-panel.der { right: 0; }

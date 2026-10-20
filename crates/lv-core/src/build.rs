@@ -40,6 +40,12 @@ pub enum BuildEvent {
     /// `retry`: es el reintento después de reparar un `.aux` truncado (el panel no borra el log).
     Started { id: u64, perfil: String, cmdline: String, retry: bool },
     Log { id: u64, text: String },
+    /// Arrancó una regla de latexmk (`Run number N of rule 'X'` del stdout): `tool` es `pdflatex`, `biber`, `makeindex`...; `n`, la vez
+    /// que corre esa herramienta en este build (la pasada 2 de `pdflatex`). Es lo que la barra muestra mientras compila.
+    Pass { id: u64, n: u32, tool: String },
+    /// pgf lanzó la subcompilación de una figura dentro del build (el `-jobname "<cache>/<figura>"` de su línea `Invoking`): `n` es el
+    /// orden en este build y `name`, la figura sin carpeta (`C7C9E7-butter-2`).
+    Figure { id: u64, n: u32, name: String },
     /// `passes`: pasadas de pdflatex (o del motor) que contó latexmk. `truncated_aux`: el log trae el error de un `.aux`
     /// cortado. `repaired`: este build es el reintento después de borrar los auxiliares.
     Finished {
@@ -377,6 +383,17 @@ pub(crate) struct Contador {
     pub figuras: Vec<String>,
     /// Cuándo arrancó cada regla de latexmk (`Run number N of rule 'X'`): sirve para saber cuánto tardó cada pasada.
     marcas: Vec<(String, Instant)>,
+    /// Lo que se vio desde la última vez que se pidió (`tomar_novedades`): el lector del stream lo avisa a la interfaz.
+    novedades: Vec<Novedad>,
+}
+
+/// Algo que ocurrió en el build y la barra quiere saber mientras pasa.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Novedad {
+    /// Arrancó una regla de latexmk; `n` es la vez de esa herramienta (la 2.ª de `pdflatex`).
+    Regla { n: u32, regla: String },
+    /// pgf lanzó la subcompilación de una figura (la `n`-ésima de este build).
+    Figura { n: u32, nombre: String },
 }
 
 /// La regla de una línea `Run number 2 of rule 'pdflatex'`.
@@ -414,6 +431,11 @@ impl Contador {
             .collect()
     }
 
+    /// Lo que se vio desde la última vez (reglas que arrancaron y figuras que pgf lanzó), en orden.
+    pub(crate) fn tomar_novedades(&mut self) -> Vec<Novedad> {
+        std::mem::take(&mut self.novedades)
+    }
+
     pub(crate) fn push(&mut self, s: &str) {
         let previo = self.cola.len();
         let ventana = format!("{}{}", self.cola, s);
@@ -431,10 +453,13 @@ impl Contador {
         while let Some(i) = self.linea.find('\n') {
             if let Some(regla) = regla_de(&self.linea[..i]) {
                 self.marcas.push((regla.to_string(), Instant::now()));
+                let n = self.marcas.iter().filter(|(r, _)| r == regla).count() as u32;
+                self.novedades.push(Novedad::Regla { n, regla: regla.to_string() });
             }
             if let Some(n) = jobname_de(&self.linea[..i]) {
                 if !self.figuras.iter().any(|f| f == n) {
                     self.figuras.push(n.to_string());
+                    self.novedades.push(Novedad::Figura { n: self.figuras.len() as u32, nombre: n.to_string() });
                 }
             }
             self.linea.drain(..=i);
@@ -638,6 +663,13 @@ impl Builder {
                     Ok(s) => {
                         contador.push(&s);
                         buf.push_str(&s);
+                        // La pasada, la herramienta y la figura que pgf está cocinando se avisan apenas se ven (la barra las muestra).
+                        for nv in contador.tomar_novedades() {
+                            sink(match nv {
+                                Novedad::Regla { n, regla } => BuildEvent::Pass { id, n, tool: regla },
+                                Novedad::Figura { n, nombre } => BuildEvent::Figure { id, n, name: crate::figures::nombre_corto(&nombre).to_string() },
+                            });
+                        }
                     }
                     Err(RecvTimeoutError::Timeout) => {}
                     Err(RecvTimeoutError::Disconnected) => break,
@@ -806,6 +838,42 @@ mod tests {
         let mut c = Contador::default();
         c.push("File ended while scanning use of \\foo");
         assert!(!c.truncado, "otros errores de fin de archivo no disparan la reparación");
+    }
+
+    #[test]
+    fn el_contador_avisa_cada_regla_con_su_vez_y_cada_figura_que_pgf_lanza_en_orden() {
+        let mut c = Contador::default();
+        c.push("Run number 1 of rule 'pdflatex'\n");
+        c.push("Run number 1 of rule 'pdflatex'\n"); // el mismo texto otra vez es otra línea: otra pasada
+        assert_eq!(
+            c.tomar_novedades(),
+            [Novedad::Regla { n: 1, regla: "pdflatex".into() }, Novedad::Regla { n: 2, regla: "pdflatex".into() }]
+        );
+        assert!(c.tomar_novedades().is_empty(), "lo avisado no se repite");
+        // Dos herramientas distintas cuentan cada una por su lado; las figuras de pgf, en el orden en que se lanzan y sin repetir.
+        c.push("Run number 1 of rule 'biber'\nInvoking: pdflatex -jobname \"figuras-cache/C7C9E7-butter-0\" x\n");
+        c.push("Invoking: pdflatex -jobname \"figuras-cache/C7C9E7-butter-1\" x\nInvoking: pdflatex -jobname \"figuras-cache/C7C9E7-butter-0\" x\n");
+        assert_eq!(
+            c.tomar_novedades(),
+            [
+                Novedad::Regla { n: 1, regla: "biber".into() },
+                Novedad::Figura { n: 1, nombre: "figuras-cache/C7C9E7-butter-0".into() },
+                Novedad::Figura { n: 2, nombre: "figuras-cache/C7C9E7-butter-1".into() },
+            ]
+        );
+        assert_eq!(c.pasadas, 2);
+        assert_eq!(c.figuras.len(), 2);
+    }
+
+    #[test]
+    fn las_novedades_se_ven_aunque_la_linea_llegue_partida_entre_dos_fragmentos() {
+        let mut c = Contador::default();
+        c.push("Run number 3 of ru");
+        assert!(c.tomar_novedades().is_empty(), "la línea todavía no terminó");
+        c.push("le 'pdflatex'\nInvoking: pdflatex -jobname \"figuras-cache/AB12CD-cap");
+        assert_eq!(c.tomar_novedades(), [Novedad::Regla { n: 1, regla: "pdflatex".into() }], "la 3.ª del texto, pero la 1.ª que el contador vio");
+        c.push("-0\" x\n");
+        assert_eq!(c.tomar_novedades(), [Novedad::Figura { n: 1, nombre: "figuras-cache/AB12CD-cap-0".into() }]);
     }
 
     #[test]

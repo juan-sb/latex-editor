@@ -22,6 +22,7 @@ import {
   type ProfileInfo,
   type ProjectInfo,
   type StatePatch,
+  type Tipico,
 } from '../backend';
 import { cerrarTodos, editarDoc, getDoc, moverCursor, textoDe } from '../editor/docs';
 import { BUILD_INICIAL, BUSQUEDA_INICIAL, FRAGMENTO_INICIAL, useApp } from './app';
@@ -115,6 +116,7 @@ function falso(archivos: Record<string, Partial<Archivo> & { text: string }>, pr
     /** Por qué se pidió cada build (el segundo argumento de `build`), sin ensuciar `llamadas`. */
     motivos: [] as (string | undefined)[],
     historial: [] as EntradaHistorial[],
+    tipicos: {} as Record<string, Tipico>,
     informe: { hallazgos: [], ms: 5, distribucion: 'MiKTeX 26.5' } as InformeDoctor,
     huerfanos: [] as ProcesoTex[],
     /** Los PID que la interfaz mandó matar. */
@@ -174,6 +176,7 @@ function falso(archivos: Record<string, Partial<Archivo> & { text: string }>, pr
       return control.ack;
     },
     history: async () => control.historial,
+    typicalTimes: async () => control.tipicos,
     runDoctor: async () => control.informe,
     orphans: async () => control.huerfanos,
     killOrphans: async (pids) => {
@@ -285,6 +288,7 @@ beforeEach(() => {
     problemaIdx: -1,
     panelInferior: 'log',
     historialTrabajos: [],
+    tipicos: {},
     doctor: null,
     doctorCorriendo: false,
     irA: null,
@@ -1671,6 +1675,61 @@ describe('exportar, fragmento, layout y archivos cambiados afuera (F7)', () => {
   });
 });
 
+describe('la barra mientras compila (F8b)', () => {
+  const empezar = (id = 1, perfil = 'parcial') => {
+    st().manejarEventoBuild({ type: 'started', id, perfil, cmdline: 'latexmk', retry: false });
+  };
+
+  it('guarda la herramienta que corre y la figura que pgf lanza, y los borra al empezar otro build', async () => {
+    falso({});
+    await st().init();
+    empezar();
+    expect(st().build).toMatchObject({ status: 'running', paso: null, figura: null });
+    st().manejarEventoBuild({ type: 'pass', id: 1, n: 1, tool: 'pdflatex' });
+    st().manejarEventoBuild({ type: 'figure', id: 1, n: 3, name: 'C7C9E7-butter-2' });
+    expect(st().build).toMatchObject({ paso: { tool: 'pdflatex', n: 1 }, figura: { n: 3, nombre: 'C7C9E7-butter-2' } });
+    st().manejarEventoBuild({ type: 'pass', id: 1, n: 1, tool: 'biber' });
+    expect(st().build.paso).toEqual({ tool: 'biber', n: 1 });
+    st().manejarEventoBuild({ type: 'finished', id: 1, perfil: 'parcial', ok: true, code: 0, cancelled: false, ms: 1500, pdf: 'x.pdf', updated: true, passes: 2, truncated_aux: false, repaired: false, errors: 0, warnings: 0, badboxes: 0 });
+    empezar(2);
+    expect(st().build).toMatchObject({ id: 2, paso: null, figura: null });
+  });
+
+  it('ignora los pasos de un build que no es el que está en curso (una exportación, un fragmento)', async () => {
+    falso({});
+    await st().init();
+    empezar();
+    st().manejarEventoBuild({ type: 'pass', id: 99, n: 1, tool: 'pdflatex' });
+    st().manejarEventoBuild({ type: 'figure', id: 99, n: 1, name: 'AAAAAA-x-0' });
+    expect(st().build).toMatchObject({ paso: null, figura: null });
+  });
+
+  it('el tiempo cuenta desde el pedido (incluye la cocción previa) y un reintento no lo reinicia', async () => {
+    falso({});
+    await st().init();
+    await st().compilar('parcial', { guardar: false });
+    const pedido = st().build.inicioMs;
+    expect(pedido).not.toBeNull();
+    await new Promise((r) => setTimeout(r, 20));
+    empezar();
+    expect(st().build.inicioMs).toBe(pedido);
+    st().manejarEventoBuild({ type: 'started', id: 2, perfil: 'parcial', cmdline: 'latexmk', retry: true });
+    expect(st().build.inicioMs).toBe(pedido);
+  });
+
+  it('lee el típico de cada perfil al abrir y cuando termina un build', async () => {
+    const f = falso({});
+    f.control.tipicos = { parcial: { ms: 5000, pasadas: 2, n: 4 } };
+    await st().init();
+    await st().cargarTipicos();
+    expect(st().tipicos.parcial).toEqual({ ms: 5000, pasadas: 2, n: 4 });
+    f.control.tipicos = { parcial: { ms: 6000, pasadas: 2, n: 5 } };
+    empezar();
+    st().manejarEventoBuild({ type: 'finished', id: 1, perfil: 'parcial', ok: true, code: 0, cancelled: false, ms: 1500, pdf: 'x.pdf', updated: true, passes: 2, truncated_aux: false, repaired: false, errors: 0, warnings: 0, badboxes: 0 });
+    await vi.waitFor(() => expect(st().tipicos.parcial.ms).toBe(6000));
+  });
+});
+
 describe('historial, doctor y procesos (F8)', () => {
   const huerfano = (pid: number): ProcesoTex => ({ pid, nombre: 'pdflatex.exe', cwd: '/p', linea: 'pdflatex main.tex' });
 
@@ -1694,12 +1753,12 @@ describe('historial, doctor y procesos (F8)', () => {
     st().mostrarPanelInferior('historial');
     await vi.waitFor(() => expect(st().historialTrabajos).toHaveLength(1));
     f.control.historial = [linea('bake'), linea('build')];
-    f.control.emitirBuild({ type: 'bakefinished', ok: true, cancelled: false, cooked: 3, failed: 0, ms: 5, error: null } as unknown as BuildEvent);
+    st().manejarEventoBuild({ type: 'bakefinished', ok: true, cancelled: false, cooked: 3, failed: 0, ms: 5, error: null } as unknown as BuildEvent);
     await vi.waitFor(() => expect(st().historialTrabajos).toHaveLength(2));
     // Con otro panel a la vista no se lee (no hay nadie mirando).
     st().mostrarPanelInferior('log');
     f.control.historial = [linea('export')];
-    f.control.emitirBuild({ type: 'bakefinished', ok: true, cancelled: false, cooked: 0, failed: 0, ms: 5, error: null } as unknown as BuildEvent);
+    st().manejarEventoBuild({ type: 'bakefinished', ok: true, cancelled: false, cooked: 0, failed: 0, ms: 5, error: null } as unknown as BuildEvent);
     await Promise.resolve();
     expect(st().historialTrabajos).toHaveLength(2);
   });

@@ -65,6 +65,11 @@ impl Session {
         historial::leer(&self.root, limite).into_iter().map(historial::con_pistas).collect()
     }
 
+    /// Lo que tarda un build típico de cada perfil en esta máquina (la barra lo muestra al lado del tiempo que va corriendo).
+    pub fn typical_times(&self) -> std::collections::BTreeMap<String, historial::Tipico> {
+        historial::tipicos(&self.root)
+    }
+
     /// Qué pidió el build que va a empezar: lo último que se pidió (como la cola, gana el último), `manual` si nadie dijo nada.
     pub(super) fn tomar_motivo(&self) -> String {
         self.motivo.lock().ok().and_then(|mut m| m.take()).unwrap_or_else(|| "manual".into())
