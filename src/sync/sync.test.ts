@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buscarForward, buscarInverse, casiIgual, dentroDeCajas, palabraEnPunto, type PalabraPdf, type Rect } from './buscar';
+import { buscarForward, buscarInverse, buscarRango, casiIgual, dentroDeCajas, palabraEnPunto, type PalabraPdf, type Rect } from './buscar';
 import { aTextoPlano, clave, palabraEn, palabrasDeLinea } from './texto';
 
 const palabras = (l: string) => palabrasDeLinea(l).map((p) => p.texto);
@@ -132,6 +132,54 @@ describe('del fuente al PDF', () => {
     const r = buscarForward(f, k, p, [caja(100)]);
     expect(r).not.toBeNull();
     expect(r!.rects[0].x).toBeGreaterThan(150);
+  });
+});
+
+describe('un tramo del fuente al PDF (lo seleccionado en el editor)', () => {
+  const pdf = [
+    ...renglon('La desnormalización transforma una función de', 100),
+    ...renglon('transferencia normalizada en una de las que cumple', 114),
+    ...renglon('la plantilla real de una función de transferencia', 128),
+    ...renglon('otro párrafo que no es éste', 300),
+  ];
+  const cajas = [caja(100), caja(114), caja(128)];
+  const fuente = palabrasDeLinea('La desnormalización transforma una función de transferencia normalizada en una de las que cumple la plantilla real de una función de transferencia');
+  const i = (c: string) => fuente.findIndex((p) => p.clave === c);
+
+  it('un tramo adentro de un renglón da una sola caja que va de la primera palabra a la última', () => {
+    const r = buscarRango(fuente, i('desnormalizacion'), i('una'), pdf, cajas)!;
+    expect(r.rects).toHaveLength(1);
+    const primera = pdf.find((p) => p.clave === 'desnormalizacion')!;
+    const ultima = pdf.find((p) => p.clave === 'una')!;
+    expect(r.rects[0]).toEqual({ page: 1, x: primera.x, y: 100, w: ultima.x + ultima.w - primera.x, h: 10 });
+  });
+
+  it('un tramo que cruza renglones da una caja por renglón, y la del medio ocupa el renglón entero', () => {
+    const r = buscarRango(fuente, i('funcion'), i('normalizada'), pdf, cajas)!;
+    expect(r.rects.map((x) => x.y)).toEqual([100, 114]);
+    const transferencia = pdf.find((p) => p.clave === 'transferencia' && p.y === 114)!;
+    const normalizada = pdf.find((p) => p.clave === 'normalizada')!;
+    expect(r.rects[1].x).toBe(transferencia.x);
+    expect(r.rects[1].x + r.rects[1].w).toBe(normalizada.x + normalizada.w);
+    const largo = buscarRango(fuente, i('desnormalizacion'), fuente.length - 1, pdf, cajas)!;
+    expect(largo.rects.map((x) => x.y)).toEqual([100, 114, 128]); // tres renglones: todo el párrafo
+  });
+
+  it('con una sola palabra es lo mismo que buscarForward, y sin la punta final se queda con la primera', () => {
+    const k = i('plantilla');
+    expect(buscarRango(fuente, k, k, pdf, cajas)!.rects).toEqual(buscarForward(fuente, k, pdf, cajas)!.rects);
+    // Una palabra del fuente que el PDF no tiene (por ejemplo, la sacó una macro): se resalta lo que sí se encontró.
+    const raro = palabrasDeLinea('La desnormalización transforma palabrainexistente');
+    const r = buscarRango(raro, 0, 3, pdf, cajas)!;
+    expect(r.rects).toHaveLength(1);
+    expect(r.rects[0].y).toBe(100);
+    expect(buscarRango(palabrasDeLinea('zzz qqq'), 0, 1, pdf, cajas)).toBeNull();
+  });
+
+  it('un hasta anterior al desde no da un rectángulo al revés', () => {
+    const r = buscarRango(fuente, i('plantilla'), i('desnormalizacion'), pdf, cajas)!;
+    expect(r.rects).toHaveLength(1);
+    expect(r.rects[0].w).toBeGreaterThan(0);
   });
 });
 

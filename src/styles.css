@@ -21,10 +21,12 @@
   --ed-fondo: #ffffff;
   --ed-texto: #1f2328;
   --ed-cursor: #000000;
-  --ed-seleccion: #b3d4fc;
+  --ed-seleccion: #9cc7fa;
+  --ed-seleccion-inactiva: #d0d7de;
   --ed-gutter: #f6f8fa;
   --ed-gutter-texto: #8c959f;
-  --ed-linea-activa: #f1f6fb;
+  /* Con transparencia: la línea activa se dibuja sobre la capa de la selección y, opaca, la tapaba. */
+  --ed-linea-activa: rgba(60, 120, 200, 0.07);
   --ed-par: #d6f0d0;
   --ed-par-borde: #79c26b;
   --ed-busqueda: #ffe08a;
@@ -58,10 +60,11 @@
     --ed-fondo: #16191d;
     --ed-texto: #d8dee4;
     --ed-cursor: #ffffff;
-    --ed-seleccion: #264f78;
+    --ed-seleccion: #2c5f94;
+    --ed-seleccion-inactiva: #3b434c;
     --ed-gutter: #1b1f24;
     --ed-gutter-texto: #6e7681;
-    --ed-linea-activa: #1d242b;
+    --ed-linea-activa: rgba(150, 180, 220, 0.07);
     --ed-par: #2a4a2a;
     --ed-par-borde: #4c8f4c;
     --ed-busqueda: #6b5a14;

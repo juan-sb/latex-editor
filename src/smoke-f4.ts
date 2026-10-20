@@ -256,6 +256,59 @@ export async function correrSmokeF4(opts: LaunchOptions): Promise<void> {
       if (ok < Math.ceil(total * 0.9)) throw new Error(`alineación ${ok}/${total}: ${JSON.stringify(datos.alineacionFalla)}`);
     });
 
+    await paso('seleccionar un tramo en el editor y saltar al PDF resalta el tramo entero (no una palabra suelta)', async () => {
+      const host = pdfActual.host!;
+      let ok = 0;
+      let total = 0;
+      let rectangulos = 0;
+      for (const p of parrafos.slice(15, 25)) {
+        await store().abrirArchivo(p.rel);
+        const doc = getDoc(p.rel)!;
+        const palabras = palabrasDeLinea(p.texto);
+        // Un tramo de 8 palabras del medio del párrafo, seleccionado de derecha a izquierda (el cursor queda al principio): el caso que
+        // fallaba era resaltar sólo la palabra donde quedó el cursor.
+        const a = Math.floor(palabras.length / 2);
+        const primera = palabras[a];
+        const ultima = palabras[a + 7];
+        const lineaFuente = doc.state.doc.line(p.n);
+        await dormir(60);
+        moverCursor(p.rel, lineaFuente.from + ultima.fin, lineaFuente.from + primera.inicio);
+        total++;
+        if (!(await store().irAlPdf())) continue;
+        const res = await backend.synctexForward(p.rel, p.n);
+        if (!res) continue;
+        const pagina = (await refinarForward(host, res, p.texto, primera.inicio + 1)).rects[0].page;
+        await esperarCapaDeTexto(pagina);
+        await dormir(250);
+        const marcas = [...document.querySelectorAll<HTMLElement>('.lv-resaltado')].map((m) => m.getBoundingClientRect());
+        if (marcas.length === 0) continue;
+        rectangulos += marcas.length;
+        // Los `span` de la capa de texto son renglones enteros: «la palabra está bajo el resaltado» no distingue una palabra de ocho.
+        // Se mide el ANCHO: lo resaltado tiene que ser lo que ocupan en el PDF las 8 palabras (según lo que mide un carácter en el
+        // renglón donde está la primera), y el primer rectángulo tiene que estar en el renglón de la primera palabra.
+        const spans = [...document.querySelectorAll<HTMLElement>(`.page[data-page-number="${pagina}"] .textLayer span`)];
+        const spanDe = (m: DOMRect, k: string) =>
+          spans.find((s) => {
+            if (!clave(s.textContent ?? '').includes(k)) return false;
+            const b = s.getBoundingClientRect();
+            const cx = m.left + m.width / 2;
+            const cy = m.top + m.height / 2;
+            return cx >= b.left && cx <= b.right && cy >= b.top && cy <= b.bottom;
+          });
+        const ordenadas = [...marcas].sort((x, y) => x.top - y.top || x.left - y.left);
+        const enElRenglon = spanDe(ordenadas[0], primera.clave.length >= 4 ? primera.clave : clave(primera.texto + palabras[a + 1].texto));
+        const caracteres = palabras.slice(a, a + 8).reduce((n, w) => n + w.texto.length, 0) + 7;
+        const porCaracter = enElRenglon ? enElRenglon.getBoundingClientRect().width / Math.max(1, (enElRenglon.textContent ?? '').length) : 0;
+        const esperado = caracteres * porCaracter;
+        const ancho = marcas.reduce((n, m) => n + m.width, 0);
+        if (enElRenglon && ancho >= esperado * 0.6 && ancho <= esperado * 1.5) ok++;
+        else datos.tramoFalla = { primera: primera.texto, ultima: ultima.texto, marcas: marcas.length, ancho: Math.round(ancho), esperado: Math.round(esperado), enElRenglon: !!enElRenglon };
+      }
+      datos.tramo = { ok, de: total, rectangulos };
+      detalle(`${ok}/${total} tramos con su primera y su última palabra bajo el resaltado (${rectangulos} rectángulos)`);
+      if (ok < Math.ceil(total * 0.8)) throw new Error(`tramo ${ok}/${total}: ${JSON.stringify(datos.tramoFalla)}`);
+    });
+
     await paso('un doble clic de verdad sobre el resaltado lleva a la misma palabra del fuente', async () => {
       const host = pdfActual.host!;
       let ok = 0;

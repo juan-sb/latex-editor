@@ -100,6 +100,33 @@ export async function correrSmokeF5(opts: LaunchOptions): Promise<void> {
       await esperarHasta(() => lineasMarcadas(getDoc('cap-dos.tex')!.state).length === 3, 5000, 'que vuelvan las marcas');
     });
 
+    await paso('seleccionar texto se ve: la capa de selección lleva el color del tema (no el de CodeMirror) y la línea activa no la tapa', async () => {
+      await store().abrirArchivo('cap-uno.tex');
+      const a = posDe('cap-uno.tex', 'repetida');
+      moverCursor('cap-uno.tex', a, a + 'repetida'.length);
+      await esperarHasta(() => document.querySelector('.cm-selectionBackground') !== null, 5000, 'la capa de selección');
+      // El color de una variable CSS, ya resuelto por el navegador (lo que pinta de verdad).
+      const color = (v: string): string => {
+        const d = document.createElement('div');
+        d.style.backgroundColor = `var(${v})`;
+        document.body.appendChild(d);
+        const c = getComputedStyle(d).backgroundColor;
+        d.remove();
+        return c;
+      };
+      const pintado = getComputedStyle(document.querySelector('.cm-selectionBackground')!).backgroundColor;
+      const validos = [color('--ed-seleccion'), color('--ed-seleccion-inactiva')];
+      if (!validos.includes(pintado)) throw new Error(`la selección se pinta ${pintado} y el tema dice ${validos.join(' o ')} (con foco o sin él)`);
+      // Lo que no puede pasar: el color por omisión de CodeMirror, casi blanco sobre el fondo oscuro.
+      if (['rgb(215, 212, 240)', 'rgb(217, 217, 217)'].includes(pintado)) throw new Error(`la selección se pinta con el color de CodeMirror: ${pintado}`);
+      const linea = getComputedStyle(document.querySelector('.cm-activeLine')!).backgroundColor;
+      const alfa = /^rgba\(.*,\s*([\d.]+)\)$/.exec(linea)?.[1];
+      if (alfa === undefined || Number(alfa) >= 0.5) throw new Error(`la línea activa es opaca (${linea}) y tapa la selección que se dibuja detrás`);
+      datos.seleccionPintada = { pintado, linea };
+      detalle(`selección ${pintado}, línea activa ${linea}`);
+      moverCursor('cap-uno.tex', a);
+    });
+
     await paso('Ctrl+B: envuelve la selección en \\textbf{…} y vuelve a sacarlo; Ctrl+I sin selección deja el cursor adentro', async () => {
       await store().abrirArchivo('cap-uno.tex');
       const original = textoDe('cap-uno.tex')!;

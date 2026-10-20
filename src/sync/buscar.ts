@@ -60,11 +60,24 @@ export interface ResultadoForward {
  * `null` si no aparece: el que llama resalta las cajas de la línea, como hace cualquier SyncTeX.
  */
 export function buscarForward(fuente: PalabraFuente[], idx: number, pdf: PalabraPdf[], cajas: Rect[]): ResultadoForward | null {
+  const l = localizar(fuente, idx, pdf, cajas);
+  return l ? { rects: l.dentro.slice(l.k, l.k + l.n).map(({ page, x, y, w, h }) => ({ page, x, y, w, h })), contexto: l.contexto } : null;
+}
+
+/** Dónde cayó una palabra del fuente: `k` es su posición entre las palabras del PDF que están adentro de las cajas, `n` cuántas son (2 si la cortó un guion). */
+interface Localizada {
+  k: number;
+  n: number;
+  contexto: number;
+  dentro: PalabraPdf[];
+}
+
+function localizar(fuente: PalabraFuente[], idx: number, pdf: PalabraPdf[], cajas: Rect[]): Localizada | null {
   const objetivo = fuente[idx];
   if (!objetivo) return null;
   const dentro = dentroDeCajas(pdf, cajas);
   if (dentro.length === 0) return null;
-  const buscar = (igual: (a: string, b: string) => boolean): ResultadoForward | null => {
+  const buscar = (igual: (a: string, b: string) => boolean): Localizada | null => {
     let mejor: { k: number; n: number; score: number; contexto: number } | null = null;
     for (let k = 0; k < dentro.length; k++) {
       let n = consumir(dentro, k, objetivo.clave);
@@ -89,9 +102,40 @@ export function buscarForward(fuente: PalabraFuente[], idx: number, pdf: Palabra
       const score = contexto * 10 - Math.abs(relFuente - relPdf) * 10;
       if (!mejor || score > mejor.score) mejor = { k, n, score, contexto };
     }
-    return mejor ? { rects: dentro.slice(mejor.k, mejor.k + mejor.n).map(({ page, x, y, w, h }) => ({ page, x, y, w, h })), contexto: mejor.contexto } : null;
+    return mejor ? { k: mejor.k, n: mejor.n, contexto: mejor.contexto, dentro } : null;
   };
   return buscar((a, b) => a === b) ?? buscar(casiIgual);
+}
+
+/** Cuántas palabras del PDF se juntan, como máximo, en un resaltado de un tramo (un párrafo largo tiene ~100). */
+const MAXIMO_DE_PALABRAS_DEL_RANGO = 400;
+
+/**
+ * Del fuente al PDF para un TRAMO: de la palabra `desde` a la `hasta` de la línea del fuente. Se ubican las dos puntas como en
+ * `buscarForward` y se juntan todas las palabras del PDF que hay entre ellas, una caja por renglón (el tramo puede cortarse en varios
+ * renglones del PDF). Si no se encuentra la punta final se resalta lo que se encontró de la primera; `null` si no aparece ninguna.
+ */
+export function buscarRango(fuente: PalabraFuente[], desde: number, hasta: number, pdf: PalabraPdf[], cajas: Rect[]): ResultadoForward | null {
+  const a = localizar(fuente, desde, pdf, cajas);
+  if (!a) return null;
+  const b = hasta > desde ? localizar(fuente, hasta, pdf, cajas) : a;
+  const fin = b && b.k + b.n > a.k ? b.k + b.n : a.k + a.n;
+  const palabras = a.dentro.slice(a.k, Math.min(fin, a.k + MAXIMO_DE_PALABRAS_DEL_RANGO));
+  const renglones: Rect[] = [];
+  for (const p of palabras) {
+    const r = renglones[renglones.length - 1];
+    // Mismo renglón: misma página y el centro vertical a menos de la mitad de la altura del anterior.
+    if (r && r.page === p.page && Math.abs(p.y + p.h / 2 - (r.y + r.h / 2)) <= r.h * 0.6) {
+      const x0 = Math.min(r.x, p.x);
+      const y0 = Math.min(r.y, p.y);
+      const x1 = Math.max(r.x + r.w, p.x + p.w);
+      const y1 = Math.max(r.y + r.h, p.y + p.h);
+      Object.assign(r, { x: x0, y: y0, w: x1 - x0, h: y1 - y0 });
+    } else {
+      renglones.push({ page: p.page, x: p.x, y: p.y, w: p.w, h: p.h });
+    }
+  }
+  return { rects: renglones, contexto: Math.min(a.contexto, b?.contexto ?? a.contexto) };
 }
 
 /** La palabra del PDF bajo el punto `(x, y)` de la página, o la más cercana de su misma línea. `-1` si la página no tiene texto. */

@@ -3,7 +3,7 @@
 // recorren exactamente el mismo camino.
 import type { SyncForward, SyncInverse } from '../backend';
 import type { PdfApi } from '../pdf/api';
-import { buscarForward, buscarInverse, palabraEnPunto, type LineaFuente, type Rect } from './buscar';
+import { buscarForward, buscarInverse, buscarRango, palabraEnPunto, type LineaFuente, type Rect } from './buscar';
 import { palabraEn, palabrasDeLinea } from './texto';
 
 export interface RefinadoForward {
@@ -23,6 +23,26 @@ export async function refinarForward(host: PdfApi, res: SyncForward, texto: stri
   const indice = palabraEn(fuente, columna);
   const encontrada = indice >= 0 ? buscarForward(fuente, indice, palabrasPdf, res.rects) : null;
   return { rects: encontrada?.rects ?? res.rects, palabra: encontrada !== null, indice };
+}
+
+/**
+ * Del fuente al PDF para un TRAMO de una línea (`desde` y `hasta` son columnas de la línea original; `hasta` exclusivo): lo que se
+ * seleccionó en el editor. Resalta las palabras del tramo, un rectángulo por renglón del PDF, y no sólo la palabra donde está el cursor
+ * (que con una selección es el extremo, y el rectángulo quedaba corrido respecto de lo seleccionado).
+ */
+export async function refinarRango(host: PdfApi, res: SyncForward, texto: string, desde: number, hasta: number): Promise<RefinadoForward> {
+  const paginas = [...new Set(res.rects.map((r) => r.page))];
+  const palabrasPdf = (await Promise.all(paginas.map((p) => host.palabrasDePagina(p)))).flat();
+  const fuente = palabrasDeLinea(texto);
+  const primera = palabraEn(fuente, desde);
+  if (primera < 0) return { rects: res.rects, palabra: false, indice: -1 };
+  // La última palabra del tramo: la última que empieza antes de `hasta` (al menos la primera).
+  let ultima = primera;
+  fuente.forEach((p, k) => {
+    if (k > primera && p.inicio < hasta) ultima = k;
+  });
+  const encontrada = buscarRango(fuente, primera, ultima, palabrasPdf, res.rects);
+  return { rects: encontrada?.rects ?? res.rects, palabra: encontrada !== null, indice: primera };
 }
 
 export interface FuenteLeible {

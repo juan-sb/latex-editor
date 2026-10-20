@@ -44,7 +44,8 @@ import { setFuenteSimbolos, setManejadorDefinicion } from '../editor/extensions'
 import { pdfApi } from '../pdf/api';
 import { describir, resolverDefinicion, resolverUsos, tokenEnCursor } from '../nav/definiciones';
 import { fragmentoDelCursor } from '../nav/fragmento';
-import { refinarForward, refinarInverse } from '../sync/saltos';
+import type { Rect } from '../sync/buscar';
+import { refinarForward, refinarInverse, refinarRango } from '../sync/saltos';
 import type { FiguraDeBuild, PasoDeBuild } from './barra';
 import { logBuffer } from './logbuffer';
 import { abrirPantallaProyecto, setAlGuardar } from './proyecto';
@@ -1512,7 +1513,11 @@ export const useApp = create<AppState>()((set, get) => {
         if (!silencioso) get().avisar('Abrí un archivo y poné el cursor donde quieras ir en el PDF.');
         return false;
       }
-      const cabeza = doc.state.selection.main.head;
+      // Con una selección se va a lo SELECCIONADO (de su comienzo, no del extremo donde quedó el cursor) y se resalta el tramo entero: antes
+      // se resaltaba una sola palabra, la del cursor, y quedaba corrida respecto de lo que se había seleccionado.
+      const sel = doc.state.selection.main;
+      const conSeleccion = !sel.empty;
+      const cabeza = conSeleccion ? sel.from : sel.head;
       const linea = doc.state.doc.lineAt(cabeza);
       let res;
       try {
@@ -1535,9 +1540,34 @@ export const useApp = create<AppState>()((set, get) => {
       }
       const host = pdfApi.host;
       if (!host) return false;
-      const { rects } = await refinarForward(host, res, linea.text, cabeza - linea.from);
-      host.mostrar(rects[0].page, rects[0]);
-      if (resaltar) host.resaltar(rects[0].page, rects);
+      let rects: Rect[];
+      if (!conSeleccion) {
+        ({ rects } = await refinarForward(host, res, linea.text, cabeza - linea.from));
+      } else {
+        // Cada línea del fuente que toca la selección (hasta 10: un párrafo del libro es una sola línea) con su tramo.
+        rects = [];
+        const ultima = Math.min(doc.state.doc.lineAt(sel.to).number, linea.number + 9);
+        for (let n = linea.number; n <= ultima; n++) {
+          const l = doc.state.doc.line(n);
+          const desde = Math.max(sel.from, l.from) - l.from;
+          const hasta = Math.min(sel.to, l.to) - l.from;
+          if (hasta <= desde && n !== linea.number) continue; // una línea vacía
+          let r = n === linea.number ? res : null;
+          if (!r) {
+            try {
+              r = await getBackend().synctexForward(rel, n);
+            } catch {
+              r = null;
+            }
+          }
+          if (!r || r.pdf !== res.pdf) continue;
+          rects.push(...(await refinarRango(host, r, l.text, desde, Math.max(hasta, desde + 1))).rects);
+        }
+        if (rects.length === 0) rects = res.rects;
+      }
+      const primera = rects.reduce((a, b) => (b.page < a.page || (b.page === a.page && b.y < a.y) ? b : a), rects[0]);
+      host.mostrar(primera.page, primera);
+      if (resaltar) host.resaltar(primera.page, rects);
       return true;
     },
 

@@ -32,8 +32,16 @@ const tema = EditorView.theme({
   '.cm-scroller': { fontFamily: 'var(--fuente-mono)', fontSize: '13.5px', lineHeight: '1.55', overflow: 'auto' },
   '.cm-content': { caretColor: 'var(--ed-cursor)', padding: '6px 0' },
   '.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--ed-cursor)' },
-  '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection': { backgroundColor: 'var(--ed-seleccion)' },
+  // La selección se dibuja en una capa DETRÁS del texto (`drawSelection`). Tiene que ganarle al color de CodeMirror: el suyo con foco
+  // (`&light.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground`, #d7d4f0) es más específico que cualquier regla
+  // de este tema y, como el tema oscuro de la app sale de `prefers-color-scheme` y CodeMirror cree que siempre es claro, sobre el
+  // fondo oscuro quedaba un bloque casi blanco con el texto claro encima: ilegible. Por eso el `!important`.
+  '.cm-selectionBackground': { backgroundColor: 'var(--ed-seleccion-inactiva) !important' },
+  '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground': { backgroundColor: 'var(--ed-seleccion) !important' },
+  '.cm-content ::selection': { backgroundColor: 'var(--ed-seleccion)' },
   '.cm-gutters': { backgroundColor: 'var(--ed-gutter)', color: 'var(--ed-gutter-texto)', border: 'none' },
+  // La línea activa va SOBRE la capa de la selección: si fuera opaca la tapaba (cada párrafo del libro es una sola línea, así que
+  // seleccionar un párrafo no se veía). Con transparencia la selección se ve a través.
   '.cm-activeLine': { backgroundColor: 'var(--ed-linea-activa)' },
   '.cm-activeLineGutter': { backgroundColor: 'var(--ed-linea-activa)' },
   '.cm-matchingBracket': { backgroundColor: 'var(--ed-par)', outline: '1px solid var(--ed-par-borde)' },
