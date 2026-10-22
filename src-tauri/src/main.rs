@@ -450,6 +450,19 @@ async fn publish(state: TauriState<'_, AppState>, profile: String) -> Res<Publis
         .map_err(|e| e.info())
 }
 
+/// Muestra en el explorador de archivos la carpeta de los PDF publicados (`publicar`) o exportados (`exportar`): la opción «Abrir la
+/// carpeta PDF» de `Menu.bat` del libro. Con `LV_SMOKE` no abre nada (un smoke no puede dejar ventanas del explorador en la pantalla).
+#[tauri::command]
+async fn open_output_dir(state: TauriState<'_, AppState>, cual: String) -> Res<String> {
+    let s = sesion(&state)?;
+    let dir = s.carpeta_de_salida(&cual).map_err(|e| e.info())?;
+    if var("LV_SMOKE").is_none() {
+        let programa = if cfg!(windows) { "explorer" } else if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+        std::process::Command::new(programa).arg(&dir).spawn().map_err(|e| otro(&format!("no se pudo abrir {}: {e}", dir.display())))?;
+    }
+    Ok(dir.display().to_string())
+}
+
 fn main() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -496,6 +509,7 @@ fn main() {
             synctex_forward,
             synctex_inverse,
             publish,
+            open_output_dir,
             export_parts,
             preview_fragment,
         ])

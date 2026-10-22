@@ -730,14 +730,16 @@ Aceptación: `scripts/aceptacion-f8c.ps1` (sobre `fixtures/imagenes`, con TeX re
   Hecho: 176 archivos versionados (48 MB de repo), tag `pre-f9` en `7b4c314` de `inspo/`, con `core.autocrlf false` (el libro es LF puro y se conserva byte a byte). Lo guardado aparte: `.lv/` (81 archivos, 9,7 MB), `latexviewer.json` y la versión editada de la sección.
 
 **Paso 1, convivencia (commit en el repo de inspo).**
-- [ ] `latexviewer.json` armado como lo haría el autor (la detección de la pantalla Proyecto sobre `inspo/Proyecto`): con `entrega`, `export` a `../PDF/Capítulos`, `publish` a `../PDF` y la variable `OpcionPie`. **Todo lo que haya que corregir a mano es un defecto de la detección** y se anota en `docs/F9-paridad.md`.
-- [ ] `structure.tex`: `\ifdefined\OpcionPie\else\def\OpcionPie{completo}\fi` y `\ifdefined\lvPerfil\else\InputIfFileExists{opciones}{}{}\fi` (sólo cuando no compila la app), así `Menu.bat` sigue eligiendo el pie como hoy.
-- [ ] Lo viejo sigue igual: `compilar.ps1` con `capitulo`, `rapido` y `completo` da los mismos PDF que en `pre-f9` (raster y palabras por página).
-- [ ] El doctor sobre `inspo/Proyecto` no marca nada más que lo esperado (el `latexmkrc` viejo, que se reduce en el retiro).
+- [x] `latexviewer.json` armado como lo haría el autor (la detección de la pantalla Proyecto sobre `inspo/Proyecto`): con `entrega`, `export` a `../PDF/Capítulos`, `publish` a `../PDF` y la variable `OpcionPie`. **Todo lo que haya que corregir a mano es un defecto de la detección** y se anota en `docs/F9-paridad.md`.
+- [x] `structure.tex`: `\ifdefined\OpcionPie\else\def\OpcionPie{completo}\fi` y `\ifdefined\lvPerfil\else\InputIfFileExists{opciones}{}{}\fi` (sólo cuando no compila la app), así `Menu.bat` sigue eligiendo el pie como hoy.
+- [x] Lo viejo sigue igual: `compilar.ps1` con `capitulo`, `rapido` y `completo` da los mismos PDF que en `pre-f9` (raster y palabras por página).
+- [x] El doctor sobre `inspo/Proyecto` no marca nada más que lo esperado (el `latexmkrc` viejo, que se reduce en el retiro).
 
 **Paso 2, paridad.**
-- [ ] `docs/F9-paridad.md`: cada fila de la tabla de opciones de inspo (0 a 9 de Ctrl+Alt+T y las extra de `Menu.bat`) con su equivalente en la app, verificado.
-- [ ] **PDF idénticos:** el parcial contra `cap_actual`, el rápido contra `libro_fast` y la entrega (sin cache) contra el completo viejo, página a página (rasterizado más diff). Sólo se admite la fecha del pie y los metadatos. El `completo` con cache no entra (S5: 0,03 % de píxeles distintos).
+- [x] `docs/F9-paridad.md`: cada fila de la tabla de opciones de inspo (0 a 9 de Ctrl+Alt+T y las extra de `Menu.bat`) con su equivalente en la app, verificado.
+- [x] **PDF idénticos:** el parcial contra `cap_actual`, el rápido contra `libro_fast` y la entrega (sin cache) contra el completo viejo, página a página (rasterizado más diff). Sólo se admite la fecha del pie y los metadatos. El `completo` con cache no entra (S5: 0,03 % de píxeles distintos).
+
+  Hecho (detalle y números en `docs/F9-paridad.md`): la detección llegó sola al `latexviewer.json` del fixture (**cero defectos de la detección**); `compilar.ps1` con `capitulo`, `rapido` y `completo` da PDF y texto idénticos a `pre-f9`; la app (`parcial`, `rapido`, `entrega` y exportar las 8 partes) da PDF y texto idénticos a los del esquema viejo; el doctor sólo marca el PATH de latexmk. Commits en `inspo/`: `7b4c314` (`pre-f9`) y `d901277` (paso 1). **Lo que cambió respecto del plan:** la paridad encontró una opción de `Menu.bat` sin equivalente en la app, «Abrir la carpeta PDF»: se agregó «Abrir la carpeta de los PDF publicados / exportados» (menú de compilación y paleta; `Session::carpeta_de_salida` y el comando de Tauri `open_output_dir`). El parcial **en frío** (sin ningún `.aux` de las otras partes) numera el capítulo 8 y no 15; con los `.aux` de cualquier otro build sale idéntico al viejo.
 
 **Paso 3, instalador.**
 - [ ] `npx tauri build` con bundle NSIS, versión 0.9.0, instalación por usuario.

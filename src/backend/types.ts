@@ -643,6 +643,8 @@ export interface Backend {
   writeUserConfig(name: string, text: string): Promise<string>;
   /** Copia el PDF del perfil a `publish.dir`. */
   publish(profile: string): Promise<Published>;
+  /** Muestra en el explorador de archivos la carpeta de los PDF publicados o exportados (se crea si falta). Devuelve su ruta. */
+  openOutputDir(cual: 'publicar' | 'exportar'): Promise<string>;
   /** Exporta las partes (por su nombre; sin lista, todas) a PDF sueltos con el número de capítulo impreso. Pendiente si hay otro trabajo. */
   exportParts(parts?: string[]): Promise<BuildAck>;
   /** Compila un fragmento con el documento de contexto; el PDF queda en `.lv/build/fragmento/lv-fragmento.pdf`. */

@@ -273,6 +273,10 @@ function falso(archivos: Record<string, Partial<Archivo> & { text: string }>, pr
       llamadas.push(`publish ${p}`);
       return { pdf: `C:/pub/${p}.pdf`, synctex: null };
     },
+    openOutputDir: async (cual) => {
+      llamadas.push(`carpeta ${cual}`);
+      return `C:/pub/${cual}`;
+    },
     exportParts: async (partes) => {
       llamadas.push(`exportar ${partes ? partes.join(',') : 'todas'}`);
       if (control.errorExport) throw new BackendError('other', control.errorExport);
@@ -1794,6 +1798,16 @@ describe('exportar, fragmento, layout y archivos cambiados afuera (F7)', () => {
     st().menuCompilacion();
     await st().quick!.items.find((i) => i.id === 'exportar:activa')!.ejecutar();
     expect(f.llamadas).toContain('exportar Secciones/Uno');
+  });
+
+  it('el menú de compilación abre la carpeta de los PDF publicados y la de los exportados', async () => {
+    const f = falso({});
+    st().menuCompilacion();
+    const items = st().quick!.items;
+    expect(items.find((i) => i.id === 'carpeta:publicar')!.detalle).toBe('../PDF');
+    await items.find((i) => i.id === 'carpeta:publicar')!.ejecutar();
+    await items.find((i) => i.id === 'carpeta:exportar')!.ejecutar();
+    expect(f.llamadas).toEqual(expect.arrayContaining(['carpeta publicar', 'carpeta exportar']));
   });
 
   describe('imágenes en borrador', () => {

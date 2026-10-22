@@ -671,3 +671,19 @@ Start-Sleep -Seconds 30
     assert!(s.problems("rapido").iter().all(|p| p.kind != "figure"), "cancelar no es un error del proyecto");
     assert!(raiz.join(".lv/build/rapido/.sospechoso").exists());
 }
+
+#[test]
+fn la_carpeta_de_salida_es_absoluta_sin_prefijo_de_windows_y_se_crea_si_falta() {
+    let d = proyecto();
+    let (s, _r) = abrir(&d, OK);
+    assert!(!d.path().join("pub").exists());
+    let publicar = s.carpeta_de_salida("publicar").unwrap();
+    assert!(publicar.is_dir(), "tenía que crearse");
+    assert!(publicar.ends_with("pub"));
+    assert!(publicar.is_absolute());
+    assert!(!publicar.display().to_string().starts_with(r"\\?\"), "el explorador de archivos no abre rutas con ese prefijo: {}", publicar.display());
+    // Sin `export` en el JSON vale la carpeta por omisión.
+    let exportar = s.carpeta_de_salida("exportar").unwrap();
+    assert!(exportar.is_dir() && exportar.ends_with("export"));
+    assert!(s.carpeta_de_salida("otra").is_err());
+}

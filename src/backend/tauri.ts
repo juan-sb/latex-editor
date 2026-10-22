@@ -75,6 +75,7 @@ export const tauriBackend: Backend = {
   readUserConfig: (name) => llamar('read_user_config', { name }),
   writeUserConfig: (name, text) => llamar('write_user_config', { name, text }),
   publish: (profile) => llamar('publish', { profile }),
+  openOutputDir: (cual) => llamar('open_output_dir', { cual }),
   exportParts: (parts) => llamar('export_parts', { parts: parts ?? null }),
   previewFragment: (text) => llamar('preview_fragment', { text }),
   async onFsChanged(cb) {

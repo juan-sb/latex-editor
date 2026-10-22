@@ -272,6 +272,8 @@ interface AppState {
   setDraftImages(valor: boolean): Promise<void>;
   setVariable(nombre: string, valor: string): Promise<void>;
   publicar(): Promise<void>;
+  /** Abre en el explorador de archivos la carpeta de los PDF publicados (`publicar`) o exportados (`exportar`). */
+  abrirCarpetaDeSalida(cual: 'publicar' | 'exportar'): Promise<void>;
   guardarConfig(): Promise<void>;
   mostrarPanel(p: PanelIzquierdo): void;
   mostrarPanelInferior(p: PanelInferior): void;
@@ -1041,6 +1043,8 @@ export const useApp = create<AppState>()((set, get) => {
       items.push({ id: 'historial', titulo: 'Ver el historial de trabajos', detalle: 'por qué tardó cada uno', ejecutar: () => get().mostrarPanelInferior('historial') });
       items.push({ id: 'doctor', titulo: 'Correr el doctor', detalle: 'TeX, latexmk y el proyecto', ejecutar: () => void get().correrDoctor() });
       if (cfg.publishDir) items.push({ id: 'publicar', titulo: 'Publicar el PDF del último build', detalle: cfg.publishDir, ejecutar: () => get().publicar() });
+      if (cfg.publishDir) items.push({ id: 'carpeta:publicar', titulo: 'Abrir la carpeta de los PDF publicados', detalle: cfg.publishDir, ejecutar: () => get().abrirCarpetaDeSalida('publicar') });
+      items.push({ id: 'carpeta:exportar', titulo: 'Abrir la carpeta de los PDF exportados', detalle: cfg.exportDir, ejecutar: () => get().abrirCarpetaDeSalida('exportar') });
       get().abrirQuick({ titulo: 'Compilación', placeholder: 'Perfiles, variables, exportar, cocinar…', items });
     },
 
@@ -1183,6 +1187,14 @@ export const useApp = create<AppState>()((set, get) => {
       try {
         const r = await getBackend().publish(perfil);
         get().avisar(`Publicado: ${r.pdf}`);
+      } catch (e) {
+        get().avisar(mensajeDe(e), 'error');
+      }
+    },
+
+    async abrirCarpetaDeSalida(cual) {
+      try {
+        await getBackend().openOutputDir(cual);
       } catch (e) {
         get().avisar(mensajeDe(e), 'error');
       }

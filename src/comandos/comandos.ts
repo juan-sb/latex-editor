@@ -42,6 +42,8 @@ export const COMANDOS: Comando[] = [
   // Ctrl+Mayús+Enter es el de F2; Ctrl+Alt+C es el del plan (10.3).
   { id: 'build.compilarParte', titulo: 'Compilar la parte del archivo abierto', categoria: 'Compilación', atajos: ['Ctrl+Alt+C', 'Ctrl+Shift+Enter'], ejecutar: () => void app().compilarParteActiva() },
   { id: 'build.cancelar', titulo: 'Cancelar la compilación', categoria: 'Compilación', atajos: [], ejecutar: () => void app().cancelarBuild() },
+  { id: 'build.carpetaPublicados', titulo: 'Abrir la carpeta de los PDF publicados', categoria: 'Compilación', atajos: [], ejecutar: () => void app().abrirCarpetaDeSalida('publicar') },
+  { id: 'build.carpetaExportados', titulo: 'Abrir la carpeta de los PDF exportados', categoria: 'Compilación', atajos: [], ejecutar: () => void app().abrirCarpetaDeSalida('exportar') },
   { id: 'build.publicar', titulo: 'Publicar el PDF', categoria: 'Compilación', atajos: [], ejecutar: () => void app().publicar() },
   // F7: el menú de compilación de 10.3 (como el Ctrl+Alt+T de inspo), exportar y la vista previa de un fragmento.
   { id: 'build.menu', titulo: 'Menú de compilación: perfiles, variables, exportar, cocinar y limpiar', categoria: 'Compilación', atajos: ['Ctrl+Alt+T'], ejecutar: () => app().menuCompilacion() },

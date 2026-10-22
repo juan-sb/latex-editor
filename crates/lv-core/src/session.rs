@@ -988,6 +988,24 @@ impl Session {
 
     // --- publicar ---------------------------------------------------------------------------------------------------------
 
+    /// La carpeta donde caen los PDF que se entregan (`"publicar"`: `publish.dir`) o los capítulos exportados (`"exportar"`:
+    /// `export.dir`), absoluta, sin `..` y creada si todavía no existe (como la opción «Abrir la carpeta PDF» de `Menu.bat` del libro).
+    /// Es para mostrarla en el explorador de archivos: el que la abre es la capa de Tauri, no el core.
+    pub fn carpeta_de_salida(&self, cual: &str) -> Result<PathBuf> {
+        let cfg = self.lock()?.config.clone().ok_or_else(|| otro("no hay configuración"))?;
+        let rel = match cual {
+            "publicar" => cfg.publish.as_ref().map(|p| p.dir.clone()).ok_or_else(|| otro("el proyecto no define `publish.dir` en latexviewer.json"))?,
+            "exportar" => cfg.export_cfg().dir,
+            otra => return Err(otro(format!("carpeta de salida desconocida: {otra:?} (es «publicar» o «exportar»)"))),
+        };
+        let dir = self.root.join(rel);
+        std::fs::create_dir_all(&dir).map_err(|e| Error::Io(format!("{}: {e}", dir.display())))?;
+        // `canonicalize` en Windows devuelve `\\?\C:\...`, que el explorador de archivos no abre: se le saca el prefijo.
+        let abs = std::fs::canonicalize(&dir).map_err(|e| Error::Io(format!("{}: {e}", dir.display())))?;
+        let texto = abs.display().to_string();
+        Ok(PathBuf::from(texto.strip_prefix(r"\\?\").unwrap_or(&texto)))
+    }
+
     /// Copia el PDF del perfil (y su `.synctex.gz`) a `publish.dir` con el nombre configurado. Nunca se renombra el PDF
     /// de trabajo (fila 3 de la tabla de inspo): latexmk lo daría por desactualizado en cada guardado.
     pub fn publish(&self, perfil: &str) -> Result<Published> {
