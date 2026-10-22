@@ -552,3 +552,16 @@ Una corrida de cada uno, no un benchmark: completo 2,2 s y 1.396 KB; borrador 1,
 ### Regresión con F8c
 
 Con el exe final pasan F3, F4, F5, F6 y F8c. **F7, F8, F8b, F1 y F2 no se corrieron con este exe**: la corrida seguida se cortó por falta de memoria del sistema (2,9 GB libres de 15,9 antes de empezar) a mitad de F7 y no se repitió. Pasan `cargo test -p lv-core` (con los 3 tests nuevos del borrador), Vitest (264) y el typecheck. No se corrió `--features tex`.
+
+### Posición del resaltado de SyncTeX contra las letras (ajuste de F8c)
+
+Queja de Juan: el rectángulo del código al PDF «aparece como offseteado». El smoke de F4 sólo comprobaba que el centro del resaltado cayera sobre el `span` correcto y medía el ancho. Paso nuevo (`smoke-f4.ts`, el último): 25 tramos de 3 palabras al azar del libro (semilla fija), se selecciona en el editor, se salta al PDF y se compara el borde izquierdo y el derecho de lo resaltado contra el `Range` de esas palabras en la capa de texto de PDF.js (lo que se ve), en bp.
+
+| | borde izquierdo (mediana / máximo) | borde derecho (mediana / máximo) | salto (mediana / p95) |
+|---|---|---|---|
+| Antes: ancho de cada tramo repartido por cantidad de caracteres | 5,66 / 15,36 bp | 3,89 / 8,26 bp (*) | 8 / 18 ms |
+| Después: posiciones medidas con la fuente del tramo (`measureText`, como la capa de texto de PDF.js) | 0,12 / 1,09 bp | 0,15 / 1,05 bp | 12 / 35 ms |
+
+(*) El «antes» del borde derecho se midió sin contar la puntuación pegada a la última palabra («función,»), que el resaltado sí cubre; está algo inflado. El izquierdo no tiene ese problema. Piso del paso: máximo ≤ 3 bp.
+
+Causa: una «i» no mide lo que una «m», y en un renglón justificado el error del reparto uniforme se acumula hacia el final. El costo es el `getOperatorList()` de la página (carga las fuentes), por eso sube el salto: sigue lejos de los 150 ms. Los otros pasos de F4 no cambian (forward 49/50, inverse 49/50, 8/10 tramos, 5/5 dobles clics).

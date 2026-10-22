@@ -15,6 +15,7 @@ import { EventBus, PDFLinkService, PDFViewer, RenderingStates } from 'pdfjs-dist
 import 'pdfjs-dist/web/pdf_viewer.css';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import type { PdfApi } from './api';
+import { palabrasDelTramo } from './metricas';
 import { clave } from '../sync/texto';
 import type { PalabraPdf, Rect } from '../sync/buscar';
 
@@ -78,6 +79,8 @@ export class PdfViewerHost implements PdfApi {
   private temporizador: ReturnType<typeof setTimeout> | null = null;
   /** Las palabras de cada página, por documento: se arman una vez y se tiran con el documento. */
   private readonly palabras = new WeakMap<object, Map<number, PalabraPdf[]>>();
+  /** El contexto de un canvas que no se muestra: sólo sirve para medir texto (`palabrasDePagina`). */
+  private ctxMedida: CanvasRenderingContext2D | null = null;
   /** Las cargas se encolan: dos recargas seguidas no pueden pisarse a mitad de armar o de desarmar. */
   private cola: Promise<unknown> = Promise.resolve();
 
@@ -338,6 +341,14 @@ export class PdfViewerHost implements PdfApi {
     const [x0, y0, , y1] = pagina.view as number[];
     const alto = y1 - y0;
     const contenido = await pagina.getTextContent();
+    // Las fuentes de la página se cargan al armar su lista de operaciones (lo mismo que hace dibujarla): sin ellas el canvas mide con una
+    // fuente cualquiera. Si falla, se mide igual (con la de reserva sigue siendo mejor que repartir por cantidad de caracteres).
+    try {
+      await pagina.getOperatorList();
+    } catch {
+      // se sigue sin las fuentes
+    }
+    const ctx = (this.ctxMedida ??= document.createElement('canvas').getContext('2d'));
     const out: PalabraPdf[] = [];
     for (const it of contenido.items as any[]) {
       const str: string | undefined = it.str;
@@ -347,19 +358,17 @@ export class PdfViewerHost implements PdfApi {
       const ancho: number = it.width || tam * 0.5 * str.length;
       const baseX = e - x0;
       const baseY = alto - (f - y0); // la línea de base, medida desde arriba
-      for (const m of str.matchAll(/\S+/g)) {
-        const k = clave(m[0]);
+      // Dónde cae cada palabra: midiendo el texto con la fuente del tramo, como la capa de texto de PDF.js (ver `metricas.ts`).
+      const familia: string | undefined = contenido.styles?.[it.fontName]?.fontFamily;
+      let medir: ((t: string) => number) | null = null;
+      if (ctx && familia) {
+        ctx.font = `${tam}px ${familia}`;
+        medir = (t) => ctx.measureText(t).width;
+      }
+      for (const p of palabrasDelTramo(str, ancho, medir)) {
+        const k = clave(p.texto);
         if (!k) continue;
-        const ini = m.index ?? 0;
-        out.push({
-          texto: m[0],
-          clave: k,
-          page: n,
-          x: baseX + (ancho * ini) / str.length,
-          y: baseY - tam * 0.78,
-          w: (ancho * m[0].length) / str.length,
-          h: tam,
-        });
+        out.push({ texto: p.texto, clave: k, page: n, x: baseX + p.x, y: baseY - tam * 0.78, w: p.w, h: tam });
       }
     }
     porPagina.set(n, out);

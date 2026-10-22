@@ -348,6 +348,100 @@ export async function correrSmokeF4(opts: LaunchOptions): Promise<void> {
       detalle(`${ok}/${total} dobles clics llevaron a la palabra`);
       if (ok < Math.ceil(total * 0.8)) throw new Error(`doble clic ${ok}/${total}: ${JSON.stringify(datos.dobleClicFalla)}`);
     });
+
+    // Último a propósito: si falla, los pasos de arriba ya corrieron y sus números están en el resultado.
+    await paso('la POSICIÓN del resaltado coincide con el texto que se ve: bordes izquierdo y derecho contra las letras (capa de texto)', async () => {
+      const host = pdfActual.host!;
+      const rnd = azar(99);
+      // Cada carácter a su forma normalizada (sin acentos ni mayúsculas), de a uno: así los índices valen para el nodo de texto original.
+      const normal = (t: string) => [...t].map((ch) => ch.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase()).join('');
+      /** Dónde empieza y termina (px de pantalla) la palabra `k` dentro del span, la ocurrencia más cercana a `cerca`. `null` si el span no la tiene. */
+      const caja = (span: HTMLElement, k: string, cerca: number): { left: number; right: number } | null => {
+        const nodo = span.firstChild;
+        const texto = nodo?.textContent ?? '';
+        const n = normal(texto);
+        if (!nodo || n.length !== texto.length) return null;
+        let mejor: { left: number; right: number } | null = null;
+        for (let i = n.indexOf(k); i >= 0; i = n.indexOf(k, i + 1)) {
+          // El resaltado cubre la palabra del PDF entera, con su puntuación pegada («función,»): la verdad también.
+          let desde = i;
+          let hasta = i + k.length;
+          while (desde > 0 && /[\p{P}\p{S}]/u.test(texto[desde - 1])) desde--;
+          while (hasta < texto.length && /[\p{P}\p{S}]/u.test(texto[hasta])) hasta++;
+          const rg = document.createRange();
+          rg.setStart(nodo, desde);
+          rg.setEnd(nodo, hasta);
+          const b = rg.getBoundingClientRect();
+          if (!mejor || Math.abs(b.left - cerca) < Math.abs(mejor.left - cerca)) mejor = { left: b.left, right: b.right };
+        }
+        return mejor;
+      };
+      const izq: number[] = [];
+      const der: number[] = [];
+      let sinVerdad = 0;
+      let intentos = 0;
+      for (const p of parrafos.slice(25, 50)) {
+        const palabras = palabrasDeLinea(p.texto);
+        const aptas = palabras.map((w, i) => (i >= 3 && i < palabras.length - 5 && w.clave.length >= 4 && palabras[i + 2].clave.length >= 4 ? i : -1)).filter((i) => i >= 0);
+        if (aptas.length === 0) continue;
+        const a = aptas[Math.floor(rnd() * aptas.length)];
+        const primera = palabras[a];
+        const ultima = palabras[a + 2];
+        await store().abrirArchivo(p.rel);
+        const lineaFuente = getDoc(p.rel)!.state.doc.line(p.n);
+        await dormir(60);
+        moverCursor(p.rel, lineaFuente.from + primera.inicio, lineaFuente.from + ultima.fin);
+        intentos++;
+        if (!(await store().irAlPdf())) {
+          sinVerdad++;
+          continue;
+        }
+        await dormir(250);
+        const marcas = [...document.querySelectorAll<HTMLElement>('.lv-resaltado')].map((m) => ({ m, b: m.getBoundingClientRect() }));
+        if (marcas.length === 0) {
+          sinVerdad++;
+          continue;
+        }
+        marcas.sort((x, y) => x.b.top - y.b.top || x.b.left - y.b.left);
+        const pag = Number(marcas[0].m.closest('.page')?.getAttribute('data-page-number'));
+        await esperarCapaDeTexto(pag);
+        await dormir(150);
+        const esc = host.estado().escala;
+        const spans = [...document.querySelectorAll<HTMLElement>(`.page[data-page-number="${pag}"] .textLayer span`)];
+        // El span del renglón donde está cada punta del resaltado: el que contiene la palabra y cuyo alto cruza el centro del rectángulo.
+        const spanEn = (b: DOMRect, k: string) =>
+          spans.find((s) => {
+            const r = s.getBoundingClientRect();
+            return normal(s.textContent ?? '').includes(k) && b.top + b.height / 2 >= r.top && b.top + b.height / 2 <= r.bottom;
+          });
+        const primero = marcas[0].b;
+        const fin = marcas[marcas.length - 1].b;
+        const sa = spanEn(primero, primera.clave);
+        const sb = spanEn(fin, ultima.clave);
+        const ca = sa ? caja(sa, primera.clave, primero.left) : null;
+        const cb = sb ? caja(sb, ultima.clave, fin.right) : null;
+        if (!ca || !cb) {
+          sinVerdad++;
+          continue;
+        }
+        izq.push((primero.left - ca.left) / esc);
+        der.push((fin.right - cb.right) / esc);
+      }
+      const abs = (v: number[]) => v.map(Math.abs);
+      const med = (v: number[]) => percentil(v, 50);
+      datos.posicion = {
+        muestras: izq.length,
+        sinVerdad,
+        intentos,
+        izquierdoBp: { medianaAbs: +med(abs(izq)).toFixed(2), maxAbs: +Math.max(0, ...abs(izq)).toFixed(2), medianaConSigno: +med(izq).toFixed(2) },
+        derechoBp: { medianaAbs: +med(abs(der)).toFixed(2), maxAbs: +Math.max(0, ...abs(der)).toFixed(2), medianaConSigno: +med(der).toFixed(2) },
+      };
+      const d = datos.posicion as { izquierdoBp: { medianaAbs: number; maxAbs: number }; derechoBp: { medianaAbs: number; maxAbs: number } };
+      detalle(`${izq.length} tramos de 3 palabras (${sinVerdad} sin verdad): borde izquierdo ${d.izquierdoBp.medianaAbs} bp de mediana y ${d.izquierdoBp.maxAbs} de máximo; derecho ${d.derechoBp.medianaAbs} y ${d.derechoBp.maxAbs}`);
+      if (izq.length < 10) throw new Error(`sólo ${izq.length} muestras con verdad (${sinVerdad} sin ella de ${intentos})`);
+      // 3 bp = poco más de una letra a 11 pt. Un resaltado corrido una palabra (unos 30 bp) o media (15 bp) se ve a simple vista.
+      if (d.izquierdoBp.maxAbs > 3 || d.derechoBp.maxAbs > 3) throw new Error(`el resaltado no coincide con las letras: ${JSON.stringify(datos.posicion)}`);
+    });
   })();
 
   const tope = new Promise<never>((_, rechazar) => setTimeout(() => rechazar(new Error('tope de tiempo')), LIMITE_MS + 60_000));

@@ -75,7 +75,7 @@ export async function correrSmokeF8c(opts: LaunchOptions): Promise<void> {
       for (const r of rs) {
         if (Math.abs(r.left + r.width / 2 - cx) > 1.5) throw new Error(`un botón no está centrado sobre la barra: ${r.left + r.width / 2} contra ${cx}`);
         if (r.top < caja.top || r.bottom > caja.bottom) throw new Error('un botón se sale de la barra por arriba o por abajo');
-        if (r.width < 16 || r.height < 16) throw new Error(`botón muy chico: ${r.width}x${r.height}`);
+        if (r.width < 24 || r.height < 24) throw new Error(`botón muy chico: ${r.width}x${r.height}`);
       }
       const medio = (rs[0].top + rs[1].bottom) / 2;
       if (Math.abs(medio - cy) > 2) throw new Error(`el par no está centrado en vertical: ${medio} contra ${cy}`);
