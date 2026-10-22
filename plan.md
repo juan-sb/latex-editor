@@ -742,9 +742,11 @@ Aceptación: `scripts/aceptacion-f8c.ps1` (sobre `fixtures/imagenes`, con TeX re
   Hecho (detalle y números en `docs/F9-paridad.md`): la detección llegó sola al `latexviewer.json` del fixture (**cero defectos de la detección**); `compilar.ps1` con `capitulo`, `rapido` y `completo` da PDF y texto idénticos a `pre-f9`; la app (`parcial`, `rapido`, `entrega` y exportar las 8 partes) da PDF y texto idénticos a los del esquema viejo; el doctor sólo marca el PATH de latexmk. Commits en `inspo/`: `7b4c314` (`pre-f9`) y `d901277` (paso 1). **Lo que cambió respecto del plan:** la paridad encontró una opción de `Menu.bat` sin equivalente en la app, «Abrir la carpeta PDF»: se agregó «Abrir la carpeta de los PDF publicados / exportados» (menú de compilación y paleta; `Session::carpeta_de_salida` y el comando de Tauri `open_output_dir`). El parcial **en frío** (sin ningún `.aux` de las otras partes) numera el capítulo 8 y no 15; con los `.aux` de cualquier otro build sale idéntico al viejo.
 
 **Paso 3, instalador.**
-- [ ] `npx tauri build` con bundle NSIS, versión 0.9.0, instalación por usuario.
-- [ ] `INSTALAR.md`: MiKTeX con latexmk, Perl y biber; LaTeX 2021-06 o posterior; aviso de SmartScreen (el instalador no está firmado); al abrir un proyecto por primera vez aparecen la pantalla Proyecto y el doctor.
-- [ ] Instalar, abrir `inspo/Proyecto` y desinstalar.
+- [x] `npx tauri build` con bundle NSIS, versión 0.9.0, instalación por usuario.
+- [x] `INSTALAR.md`: MiKTeX con latexmk, Perl y biber; LaTeX 2021-06 o posterior; aviso de SmartScreen (el instalador no está firmado); al abrir un proyecto por primera vez aparecen la pantalla Proyecto y el doctor.
+- [x] Instalar, abrir `inspo/Proyecto` y desinstalar.
+
+  Hecho: `LaTeX Viewer_0.9.0_x64-setup.exe` de 3,77 MiB, instalación por usuario en `%LOCALAPPDATA%\LaTeX Viewer` con acceso directo y entrada en Aplicaciones. Probado: instalar sin ventanas (`/S`), abrir `inspo/Proyecto` con la app instalada (arrancó, escribió `.lv/lock` y la ventana cerró bien) y desinstalar (carpeta, entrada y acceso directo borrados). **No se probó en una máquina limpia** (sin MiKTeX, Perl o WebView2): se probó en la de Juan, que ya los tiene. El instalador queda en `target\release\bundle\nsis\`.
 
 **Cierre.** Regresión completa de F1 a F8c más F9 con la máquina libre, **una sola vez** para F8c y F9 (Juan cierra lo pesado antes). Frenar con el resumen.
 
