@@ -1,6 +1,6 @@
 [package]
 name = "lv-app"
-version = "0.1.0"
+version = "0.9.0"
 edition = "2021"
 description = "LaTeX Viewer 2: capa fina de Tauri sobre lv-core"
 default-run = "lv-app"
