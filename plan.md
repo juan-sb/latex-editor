@@ -721,16 +721,34 @@ Aceptación: `scripts/aceptacion-f8c.ps1` (sobre `fixtures/imagenes`, con TeX re
 
 ### F9. Migración del libro
 
-Se hace en el repo real del libro, en una rama, con el OK de Juan antes de borrar nada.
+**Decidido con Juan.** Se hace sobre `inspo/` (no hay otro repo del libro; Juan aprueba tocarlo **sólo para F9**, con commits en su propio repo), **en transición**: primero convive con el esquema viejo y el **retiro** va en un segundo paso, con el OK de Juan después de unos días de uso suyo y del autor. El autor también va a usar la app, así que entra un instalador. En este snapshot no existe `.vscode` (no hay tareas ni receta que retirar).
 
-- [ ] `latexviewer.json` del libro (el de 4.1, ajustado).
-- [ ] `structure.tex`: el default de `\OpcionPie` con guardia y sin `\InputIfFileExists{opciones}`, para que gane el driver.
-- [ ] Si S1 eligió la opción A, retirar `\CapitulosPorInput` (ya no hace falta traer capítulos por `\input`).
+**Paso 0, red de seguridad.**
+- [ ] Sacar de `inspo/Proyecto` lo que dejó el uso de la app (`latexviewer.json`, `.lv/` y las ediciones de prueba de `Secciones/Funciones de Aproximación.tex`: «comaportamiento», «manasduleo», «mayo asdr orden» y una coordenada TikZ 2.3 a 2.2), guardado aparte en `spikes/work/pre-f9-uso-app/`, sin borrar nada. Con la app cerrada (el candado `.lv/lock`).
+- [ ] `git init` en `inspo/` (con `Menu.bat` y `Proyecto/`), el estado limpio como primer commit y el tag `pre-f9`. `inspo/.gitignore` con `PDF/` (`$out_dir` del `latexmkrc` es `../PDF`); el del libro ya ignora `.lv/`, `figuras-cache/` y el registro.
+- [ ] `scripts/copiar-libro.ps1` (por omisión), `bench-base` y `aceptacion-f1` copian de `pre-f9` con `git archive`, no del árbol de trabajo. En `CLAUDE.md`, «inspo no se toca» pasa a «sólo para F9, con commits en su propio repo».
+
+**Paso 1, convivencia (commit en el repo de inspo).**
+- [ ] `latexviewer.json` armado como lo haría el autor (la detección de la pantalla Proyecto sobre `inspo/Proyecto`): con `entrega`, `export` a `../PDF/Capítulos`, `publish` a `../PDF` y la variable `OpcionPie`. **Todo lo que haya que corregir a mano es un defecto de la detección** y se anota en `docs/F9-paridad.md`.
+- [ ] `structure.tex`: `\ifdefined\OpcionPie\else\def\OpcionPie{completo}\fi` y `\ifdefined\lvPerfil\else\InputIfFileExists{opciones}{}{}\fi` (sólo cuando no compila la app), así `Menu.bat` sigue eligiendo el pie como hoy.
+- [ ] Lo viejo sigue igual: `compilar.ps1` con `capitulo`, `rapido` y `completo` da los mismos PDF que en `pre-f9` (raster y palabras por página).
+- [ ] El doctor sobre `inspo/Proyecto` no marca nada más que lo esperado (el `latexmkrc` viejo, que se reduce en el retiro).
+
+**Paso 2, paridad.**
+- [ ] `docs/F9-paridad.md`: cada fila de la tabla de opciones de inspo (0 a 9 de Ctrl+Alt+T y las extra de `Menu.bat`) con su equivalente en la app, verificado.
+- [ ] **PDF idénticos:** el parcial contra `cap_actual`, el rápido contra `libro_fast` y la entrega (sin cache) contra el completo viejo, página a página (rasterizado más diff). Sólo se admite la fecha del pie y los metadatos. El `completo` con cache no entra (S5: 0,03 % de píxeles distintos).
+
+**Paso 3, instalador.**
+- [ ] `npx tauri build` con bundle NSIS, versión 0.9.0, instalación por usuario.
+- [ ] `INSTALAR.md`: MiKTeX con latexmk, Perl y biber; LaTeX 2021-06 o posterior; aviso de SmartScreen (el instalador no está firmado); al abrir un proyecto por primera vez aparecen la pantalla Proyecto y el doctor.
+- [ ] Instalar, abrir `inspo/Proyecto` y desinstalar.
+
+**Cierre.** Regresión completa de F1 a F8c más F9 con la máquina libre, **una sola vez** para F8c y F9 (Juan cierra lo pesado antes). Frenar con el resumen.
+
+**Retiro (espera el OK de Juan).**
+- [ ] Retirar `\CapitulosPorInput` (S1 eligió la opción A) y `cap_actual.tex`, `libro_fast.tex`, `libro_cocina.tex`, `libro_export.tex`, `opciones.tex`, los `.ps1` de compilación (`compilar`, `opciones`, `exportar_capitulo`, `cocinar_figuras`, `synctex_pdf`, `menu`, `comun`) y `Menu.bat`.
 - [ ] `latexmkrc`: queda sólo lo propio del libro (`$makeindex` con `StyleInd.ist`, reglas custom); sale la elección de raíz, el registro, la cocción y `$out_dir`.
-- [ ] Retirar `cap_actual.tex`, `libro_fast.tex`, `libro_cocina.tex`, `libro_export.tex`, `opciones.tex`, los `.ps1` de compilación (`compilar`, `opciones`, `exportar_capitulo`, `cocinar_figuras`, `synctex_pdf`, `menu`, `comun`), `Menu.bat` y las tareas/receta de `.vscode`.
 - [ ] Actualizar `README.md` y `CLAUDE.md` del libro.
-- [ ] **Paridad:** cada fila de la tabla de opciones de inspo (0 a 9 de Ctrl+Alt+T y las extra de `Menu.bat`) tiene su equivalente en la app, verificado a mano.
-- [ ] **PDF idénticos:** comparar página a página (rasterizado + diff de imágenes) el PDF viejo y el nuevo de parcial, rápido y entrega (el perfil sin cache, equivalente a la opción 3 del menú de inspo; el `completo` con cache no entra: S5 midió 0,03 % de píxeles distintos). Las únicas diferencias admitidas son la fecha del pie y metadatos.
 
 ### F10. Extras (cuando lo anterior esté firme)
 
