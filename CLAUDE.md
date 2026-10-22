@@ -18,7 +18,7 @@ El caso de prueba y la vara de rendimiento es el libro de `inspo/Proyecto`. Wind
 ## Cosas que se preguntan antes (a Juan)
 
 - Cambiar el stack.
-- Tocar algo dentro de `inspo/` (no se modifica nunca; tests y benchmarks corren sobre la copia en `fixtures/libro-tc/`, que arma `scripts/copiar-libro.ps1`).
+- Tocar algo dentro de `inspo/`. **Sólo para F9, con commits en su propio repo** (`inspo/.git`, tag `pre-f9` = el libro como estaba antes de migrarlo; los cambios de F9 van en commits aparte y el retiro del esquema viejo espera el OK de Juan). Fuera de F9, `inspo/` no se modifica. Tests y benchmarks corren sobre copias (`fixtures/libro-tc/`, spikes), que arma `scripts/copiar-libro.ps1` desde `pre-f9` (`git read-tree` con un índice temporal; sólo lo versionado, sin cache de figuras) o desde otra copia (`-Origen`).
 - Borrar cualquier cosa del libro.
 - Si falta algo instalado (Perl para latexmk, Rust, Node, una versión de MiKTeX), se avisa en vez de buscarle la vuelta.
 
@@ -96,7 +96,7 @@ crates/lv-core core en Rust (sin Tauri): fsio, project, config (latexviewer.json
                `src/nav/` el reconocimiento de lo que hay bajo el cursor (etiqueta, cita, archivo, comando) para F12.
 src-tauri/     capa fina de Tauri (comandos y eventos)
 src/           frontend: backend/ (interfaz y única implementación Tauri), store/, editor/, pdf/, panels/
-inspo/         referencia, intocable, no se versiona
+inspo/         el libro: repo propio (inspo/.git, tag pre-f9); sólo se toca en F9 (ver «Cosas que se preguntan antes»); no se versiona en este repo
 ```
 
 ## Cosas del build que ya costaron un fallo
