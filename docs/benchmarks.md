@@ -565,3 +565,7 @@ Queja de Juan: el rectángulo del código al PDF «aparece como offseteado». El
 (*) El «antes» del borde derecho se midió sin contar la puntuación pegada a la última palabra («función,»), que el resaltado sí cubre; está algo inflado. El izquierdo no tiene ese problema. Piso del paso: máximo ≤ 3 bp.
 
 Causa: una «i» no mide lo que una «m», y en un renglón justificado el error del reparto uniforme se acumula hacia el final. El costo es el `getOperatorList()` de la página (carga las fuentes), por eso sube el salto: sigue lejos de los 150 ms. Los otros pasos de F4 no cambian (forward 49/50, inverse 49/50, 8/10 tramos, 5/5 dobles clics).
+
+### Regresión parcial después de los ajustes de F8c (sólo F7, F8 y F8b)
+
+Con el exe final y la app cerrada (2,0 GB libres de 15,9): pasan **F7** (1 build a los 398 ms del cambio de afuera, 1 página distinta de 183, exportar dos partes en 29 s), **F8** (12 hallazgos del doctor, candado y segunda instancia, historial con una línea por trabajo) y **F8b** (el `latexviewer.json` escrito por la app es igual al del fixture; parcial en 16,5 s con los `.aux` fríos). Antes pasaron F3, F4 (con el paso nuevo de posición), F5, F6 y F8c con este código. **F1 y F2 se corren una sola vez al cierre de F9**, con la máquina libre.
