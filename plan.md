@@ -750,6 +750,8 @@ Aceptación: `scripts/aceptacion-f8c.ps1` (sobre `fixtures/imagenes`, con TeX re
 
 **Cierre.** Regresión completa de F1 a F8c más F9 con la máquina libre, **una sola vez** para F8c y F9 (Juan cierra lo pesado antes). Frenar con el resumen.
 
+  Hecho: pasan los diez smokes (F1 a F8c) con el exe 0.9.0, `cargo test -p lv-core` y Vitest; números en `docs/benchmarks.md`. En F2 el guardar a PDF visible se pasó de los umbrales absolutos (6,1 s y 11,9 s) con la máquina más cargada (latexmk mismo, 5,8 y 11,3 s); el smoke compara contra latexmk en la misma corrida y lo da por bueno.
+
 **Retiro (espera el OK de Juan).**
 - [ ] Retirar `\CapitulosPorInput` (S1 eligió la opción A) y `cap_actual.tex`, `libro_fast.tex`, `libro_cocina.tex`, `libro_export.tex`, `opciones.tex`, los `.ps1` de compilación (`compilar`, `opciones`, `exportar_capitulo`, `cocinar_figuras`, `synctex_pdf`, `menu`, `comun`) y `Menu.bat`.
 - [ ] `latexmkrc`: queda sólo lo propio del libro (`$makeindex` con `StyleInd.ist`, reglas custom); sale la elección de raíz, el registro, la cocción y `$out_dir`.

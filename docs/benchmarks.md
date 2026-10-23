@@ -569,3 +569,11 @@ Causa: una «i» no mide lo que una «m», y en un renglón justificado el error
 ### Regresión parcial después de los ajustes de F8c (sólo F7, F8 y F8b)
 
 Con el exe final y la app cerrada (2,0 GB libres de 15,9): pasan **F7** (1 build a los 398 ms del cambio de afuera, 1 página distinta de 183, exportar dos partes en 29 s), **F8** (12 hallazgos del doctor, candado y segunda instancia, historial con una línea por trabajo) y **F8b** (el `latexviewer.json` escrito por la app es igual al del fixture; parcial en 16,5 s con los `.aux` fríos). Antes pasaron F3, F4 (con el paso nuevo de posición), F5, F6 y F8c con este código. **F1 y F2 se corren una sola vez al cierre de F9**, con la máquina libre.
+
+### Regresión completa al cierre de F9 (F1 a F8c, una sola vez)
+
+Exe final (0.9.0, con el instalador), app cerrada, 3,0 GB libres de 15,9: **pasan F1 a F8c**, los diez smokes. F1: completo en 383 s (194 páginas; en F8b fueron 325 s, esta vez con la copia armada desde `pre-f9` y la máquina más cargada). F4: forward 49/50, inverse 49/50, la posición del resaltado 0,12 bp de mediana. F7: 1 build, 1 página distinta de 183. **F2 pasa, pero la máquina estaba más lenta que en F8b y los umbrales absolutos de guardar a PDF visible se pasaron**: parcial 6,1 s (umbral 5,0) y rápido 11,9 s (umbral 9,6); el propio latexmk tardó 5,8 y 11,3 s (en F8b 4,8 y 9,1) y lo que agrega la app es 361 y 550 ms (antes 200 a 400 ms). El smoke lo marca «FUERA del umbral absoluto» y lo da por bueno porque compara contra latexmk en esta misma corrida. 40 recargas, 610 cuadros, 0 en blanco, deriva 0; memoria del WebView 574 a 719 MB (pico 719; en F8b 687).
+
+### Paridad de F9 (`docs/F9-paridad.md`)
+
+La app contra el esquema viejo del libro, con el cache tibio: parcial, rápido, entrega y exportar las 8 partes dan **0 páginas distintas y el mismo texto**; `compilar.ps1` con `capitulo`, `rapido` y `completo` da lo mismo en `pre-f9` que con el `structure.tex` de F9 (6, 12 y 341 s contra 6, 11 y 350 s). La entrega tarda 367 s contra 340 s del completo viejo; exportar todas, 127 s contra 126 s. Instalador: 3,77 MiB.
