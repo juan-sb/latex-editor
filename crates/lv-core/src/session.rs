@@ -234,7 +234,8 @@ struct Plan {
     cache_dir: String,
     clean: bool,
     /// Partes excluidas y perfiles de donde sembrarlas (sólo si el perfil usa `\includeonly`).
-    seed: Option<(Vec<String>, Vec<String>)>,
+    /// (partes excluidas, perfiles de donde sembrarlas, perfiles de último recurso: la cocina y la exportación).
+    seed: Option<(Vec<String>, Vec<String>, Vec<String>)>,
     dirs: BTreeSet<String>,
     /// Lo que las figuras leen desde adentro de su `tikzpicture`, si el perfil externaliza (`None`: no hay nada que invalidar).
     datos_de_figuras: Option<Vec<figcache::DatoDeFigura>>,
@@ -591,6 +592,8 @@ impl Session {
             (
                 nombres.iter().filter(|n| !sel.contains(n)).cloned().collect::<Vec<_>>(),
                 cfg.profiles.keys().filter(|p| p.as_str() != perfil).cloned().collect::<Vec<_>>(),
+                // Si ningún perfil tiene el `.aux` de una parte: la cocina (el listado compila todas las partes) y la exportación.
+                vec![crate::cocinero::PERFIL_COCINA.to_string(), config::PERFIL_EXPORT.to_string()],
             )
         });
         // En el modo `app` el driver de un perfil que externaliza lleva la externalización de figuras.
@@ -728,8 +731,8 @@ impl Session {
                         c.figuras_invalidadas = i.figuras.len() as u32;
                     }
                 }
-                if let Some((excluidas, fuentes)) = &plan.seed {
-                    aux::seed(root, nombre, excluidas, fuentes)?;
+                if let Some((excluidas, fuentes, ultimo_recurso)) = &plan.seed {
+                    aux::seed(root, nombre, excluidas, fuentes, ultimo_recurso)?;
                 }
                 if let Some(texto) = &plan.fragmento {
                     // Antes del texto, el slug de las figuras del fragmento (en el modo `app` lo pone el driver).

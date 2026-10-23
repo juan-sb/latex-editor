@@ -577,3 +577,9 @@ Exe final (0.9.0, con el instalador), app cerrada, 3,0 GB libres de 15,9: **pasa
 ### Paridad de F9 (`docs/F9-paridad.md`)
 
 La app contra el esquema viejo del libro, con el cache tibio: parcial, rápido, entrega y exportar las 8 partes dan **0 páginas distintas y el mismo texto**; `compilar.ps1` con `capitulo`, `rapido` y `completo` da lo mismo en `pre-f9` que con el `structure.tex` de F9 (6, 12 y 341 s contra 6, 11 y 350 s). La entrega tarda 367 s contra 340 s del completo viejo; exportar todas, 127 s contra 126 s. Instalador: 3,77 MiB.
+
+### Sembrado de último recurso desde la cocina (0.9.1)
+
+Copia del libro sin ningún `.aux` (cache de figuras tibio), con el `latexviewer.json` del libro: una cocción (`--example build -- <carpeta> --figuras`, 17,1 s; el listado salió con código 0 y sin marcador, y la cocina dejó los 9 `.aux`) y un parcial con Desnormalización (17,3 s, 3 pasadas): el capítulo sale **«15. Desnormalización»** (antes «8.»), 48 páginas, **0 distintas** y el mismo texto que el `cap_actual.pdf` del esquema viejo. Con TeX real, `tests/siembra_tex.rs`: el capítulo del segundo libro de prueba sale 9 después de una cocción y 8 sin ella; el mismo test falla sin el cambio (control negativo).
+
+Con el exe 0.9.1 y 7,1 GB libres pasan F2 (esta vez dentro de los umbrales absolutos; memoria del WebView 557 a 625 MB), F6, F7 y F8b; `cargo test -p lv-core --features tex` pasa entero. No se corrió la regresión completa: no es el cierre de una fase.

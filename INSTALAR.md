@@ -1,4 +1,4 @@
-# Instalar LaTeX Viewer 0.9.0
+# Instalar LaTeX Viewer 0.9.1
 
 Editor de proyectos LaTeX grandes para Windows: compila solo lo que cambió (partes, cache de figuras), muestra el PDF al lado y salta del código al PDF y al revés.
 
@@ -13,7 +13,7 @@ No hace falta tener VS Code ni SumatraPDF: el editor y el visor del PDF son los 
 
 ## Instalar
 
-1. Ejecutar `LaTeX Viewer_0.9.0_x64-setup.exe`. Se instala **para el usuario actual**, sin permisos de administrador, y crea un acceso directo en el menú Inicio.
+1. Ejecutar `LaTeX Viewer_0.9.1_x64-setup.exe`. Se instala **para el usuario actual**, sin permisos de administrador, y crea un acceso directo en el menú Inicio.
 2. **Windows va a mostrar «Windows protegió su PC» (SmartScreen).** El instalador no está firmado. Apretar «Más información» y después «Ejecutar de todas formas».
 3. Abrir LaTeX Viewer.
 
@@ -25,6 +25,29 @@ No hace falta tener VS Code ni SumatraPDF: el editor y el visor del PDF son los 
 4. **Ctrl+Enter** compila con el perfil elegido; **Ctrl+Alt+T** abre el menú de compilación (perfiles, variables, exportar, publicar, cocinar figuras).
 
 La app guarda lo suyo en la carpeta `.lv/` del proyecto (si el proyecto es un repositorio git, la agrega al `.gitignore`). No abrir el mismo proyecto en dos instancias a la vez: la segunda avisa y no compila.
+
+## Usarla con tu copia del libro
+
+1. **Actualizá MiKTeX antes de instalar** (Consola de MiKTeX › Actualizaciones). Todo se probó con MiKTeX 26.5 y latexmk 4.88; el `README.md` del libro dice 25.4.
+2. **Abrí la carpeta del libro** (la que tiene `Funciones de Aproximación.tex`). Como no tiene `latexviewer.json`, se abre la pantalla Proyecto con la configuración ya armada: documento principal, los capítulos, la compilación reducida, el cache de figuras, los perfiles (`parcial`, `rapido`, `completo` y `entrega`), la carpeta de publicación y la de exportación. En la prueba salió igual a la que se escribió a mano, sin tocar nada. Revisala y confirmá.
+3. **Si querés elegir el pie desde la app** (Ctrl+Alt+T › Pie de página), cambiá estas dos líneas de `structure.tex` (buscá `\def\OpcionPie`, está donde se arma `\PieDeAutor`). Sin el cambio la app compila igual, pero el doctor avisa que `OpcionPie` no tiene guardia y el menú no la puede cambiar.
+
+   Antes:
+
+   ```latex
+   \def\OpcionPie{completo}
+   \InputIfFileExists{opciones}{}{}
+   ```
+
+   Después:
+
+   ```latex
+   \ifdefined\OpcionPie\else\def\OpcionPie{completo}\fi
+   \ifdefined\lvPerfil\else\InputIfFileExists{opciones}{}{}\fi
+   ```
+
+   Con el cambio, `Menu.bat` sigue eligiendo el pie como hoy (lee `opciones.tex`) y la app lo elige con su menú.
+4. **`Menu.bat` y VS Code siguen funcionando mientras tanto.** No los uses a la vez que la app sobre la misma carpeta (escriben los mismos auxiliares). Los PDF de la app quedan en `.lv/build/<perfil>/`, no en `PDF/`; lo que se entrega sale de **Publicar** (menú de compilación), que copia el PDF del perfil `entrega` a `PDF/`.
 
 ## Desinstalar
 

@@ -80,8 +80,16 @@ fn copiar_si_difiere(de: &Path, a: &Path) -> std::io::Result<bool> {
 
 /// Siembra en `destino` el `.aux` de cada parte de `excluidas` desde el perfil de `fuentes` que lo tenga más nuevo y no
 /// sea sospechoso. Devuelve cuántos copió.
-pub fn seed(root: &Path, destino: &str, excluidas: &[String], fuentes: &[String]) -> Result<usize> {
+///
+/// **Último recurso:** si ninguna de las `fuentes` tiene el `.aux` de una parte (un proyecto que todavía no compiló el rápido ni el
+/// completo), se busca entre los perfiles de `ultimo_recurso` (la cocina y la exportación, que no son perfiles del proyecto pero
+/// compilan el documento entero y dejan todos los `.aux`), con el mismo criterio: el más nuevo y no sospechoso. La paginación de
+/// la cocina no es la definitiva, pero sí lo son la numeración de los capítulos y las etiquetas, que es lo que se necesita: sin esto
+/// un parcial en frío numera el capítulo 8 y no 15 (medido en la paridad de F9).
+pub fn seed(root: &Path, destino: &str, excluidas: &[String], fuentes: &[String], ultimo_recurso: &[String]) -> Result<usize> {
     let buenas: Vec<&String> = fuentes.iter().filter(|f| f.as_str() != destino && !is_suspect(root, f)).collect();
+    // Las de último recurso que no estaban ya entre las fuentes (si el proyecto define `export`, ya contó como fuente).
+    let reserva: Vec<&String> = ultimo_recurso.iter().filter(|f| f.as_str() != destino && !fuentes.contains(f) && !is_suspect(root, f)).collect();
     let dest_dir = build_dir(root, destino);
     let mut copiados = 0;
     for parte in excluidas {
@@ -89,12 +97,10 @@ pub fn seed(root: &Path, destino: &str, excluidas: &[String], fuentes: &[String]
         let propio = dest_dir.join(&rel);
         let propio_mtime = mtime(&propio);
         // El más nuevo de los que lo tienen.
-        let mejor = buenas
-            .iter()
-            .map(|f| build_dir(root, f).join(&rel))
-            .filter_map(|p| mtime(&p).map(|m| (m, p)))
-            .max_by_key(|(m, _)| *m);
-        let Some((m, origen)) = mejor else { continue };
+        let mas_nuevo = |lista: &[&String]| {
+            lista.iter().map(|f| build_dir(root, f).join(&rel)).filter_map(|p| mtime(&p).map(|m| (m, p))).max_by_key(|(m, _)| *m)
+        };
+        let Some((m, origen)) = mas_nuevo(&buenas).or_else(|| mas_nuevo(&reserva)) else { continue };
         if propio_mtime.is_some_and(|p| p >= m) {
             continue;
         }
@@ -182,17 +188,17 @@ mod tests {
         escribir(r, ".lv/build/completo/Secciones/Dos.aux", "nuevo");
         let fuentes = vec!["rapido".to_string(), "completo".to_string(), "parcial".to_string()];
         let excl = vec!["Secciones/Dos".to_string(), "Secciones/Tres".to_string()];
-        assert_eq!(seed(r, "parcial", &excl, &fuentes).unwrap(), 1, "Tres no existe en ninguno");
+        assert_eq!(seed(r, "parcial", &excl, &fuentes, &[]).unwrap(), 1, "Tres no existe en ninguno");
         assert_eq!(fs::read_to_string(r.join(".lv/build/parcial/Secciones/Dos.aux")).unwrap(), "nuevo");
         // Segunda vez: el propio ya es igual o más nuevo, no se copia (ni se toca su mtime).
         let m1 = mtime(&r.join(".lv/build/parcial/Secciones/Dos.aux"));
         pausa();
-        assert_eq!(seed(r, "parcial", &excl, &fuentes).unwrap(), 0);
+        assert_eq!(seed(r, "parcial", &excl, &fuentes, &[]).unwrap(), 0);
         assert_eq!(mtime(&r.join(".lv/build/parcial/Secciones/Dos.aux")), m1);
         // Un origen más nuevo pero con el mismo contenido tampoco provoca una copia.
         pausa();
         escribir(r, ".lv/build/rapido/Secciones/Dos.aux", "nuevo");
-        assert_eq!(seed(r, "parcial", &excl, &fuentes).unwrap(), 0);
+        assert_eq!(seed(r, "parcial", &excl, &fuentes, &[]).unwrap(), 0);
         assert_eq!(mtime(&r.join(".lv/build/parcial/Secciones/Dos.aux")), m1);
     }
 
@@ -205,17 +211,67 @@ mod tests {
         assert!(is_suspect(r, "rapido"));
         let fuentes = vec!["rapido".to_string()];
         let excl = vec!["Secciones/Dos".to_string()];
-        assert_eq!(seed(r, "parcial", &excl, &fuentes).unwrap(), 0);
+        assert_eq!(seed(r, "parcial", &excl, &fuentes, &[]).unwrap(), 0);
         assert!(!r.join(".lv/build/parcial/Secciones/Dos.aux").exists());
         clear_suspect(r, "rapido");
-        assert_eq!(seed(r, "parcial", &excl, &fuentes).unwrap(), 1, "un build bueno vuelve a ser origen válido");
+        assert_eq!(seed(r, "parcial", &excl, &fuentes, &[]).unwrap(), 1, "un build bueno vuelve a ser origen válido");
+    }
+
+    #[test]
+    fn el_ultimo_recurso_sirve_solo_si_ningun_perfil_tiene_la_parte() {
+        let d = tempfile::tempdir().unwrap();
+        let r = d.path();
+        let fuentes = vec!["rapido".to_string(), "completo".to_string()];
+        let reserva = vec!["cocina".to_string(), "export".to_string()];
+        let excl = vec!["Secciones/Dos".to_string(), "Secciones/Tres".to_string()];
+        // Un proyecto en frío: sólo la cocción dejó `.aux` (la de Dos, en la cocina; la de Tres, en la exportación).
+        escribir(r, ".lv/build/cocina/Secciones/Dos.aux", "cocina");
+        escribir(r, ".lv/build/export/Secciones/Tres.aux", "export");
+        assert_eq!(seed(r, "parcial", &excl, &fuentes, &reserva).unwrap(), 2);
+        assert_eq!(fs::read_to_string(r.join(".lv/build/parcial/Secciones/Dos.aux")).unwrap(), "cocina");
+        assert_eq!(fs::read_to_string(r.join(".lv/build/parcial/Secciones/Tres.aux")).unwrap(), "export");
+        // Sin último recurso no se siembra nada (como antes).
+        assert_eq!(seed(r, "otro", &excl, &fuentes, &[]).unwrap(), 0);
+        // Un perfil normal con la parte tiene prioridad AUNQUE el de último recurso sea más nuevo.
+        pausa();
+        escribir(r, ".lv/build/rapido/Secciones/Dos.aux", "rapido");
+        pausa();
+        escribir(r, ".lv/build/cocina/Secciones/Dos.aux", "cocina más nueva");
+        assert_eq!(seed(r, "otro", &excl, &fuentes, &reserva).unwrap(), 2);
+        assert_eq!(fs::read_to_string(r.join(".lv/build/otro/Secciones/Dos.aux")).unwrap(), "rapido");
+        // Entre la cocina y la exportación gana la más nueva.
+        pausa();
+        escribir(r, ".lv/build/export/Secciones/Dos.aux", "export más nueva");
+        assert_eq!(seed(r, "solo", &["Secciones/Dos".to_string()], &[], &reserva).unwrap(), 1);
+        assert_eq!(fs::read_to_string(r.join(".lv/build/solo/Secciones/Dos.aux")).unwrap(), "export más nueva");
+    }
+
+    #[test]
+    fn no_siembra_de_la_cocina_ni_de_la_exportacion_si_son_sospechosas() {
+        let d = tempfile::tempdir().unwrap();
+        let r = d.path();
+        escribir(r, ".lv/build/cocina/Secciones/Dos.aux", "truncado\\newlabel{");
+        mark_suspect(r, "cocina").unwrap();
+        let reserva = vec!["cocina".to_string(), "export".to_string()];
+        let excl = vec!["Secciones/Dos".to_string()];
+        assert_eq!(seed(r, "parcial", &excl, &[], &reserva).unwrap(), 0);
+        assert!(!r.join(".lv/build/parcial/Secciones/Dos.aux").exists());
+        // Una exportación buena sí sirve aunque la cocina no.
+        escribir(r, ".lv/build/export/Secciones/Dos.aux", "export");
+        assert_eq!(seed(r, "parcial", &excl, &[], &reserva).unwrap(), 1);
+        // Y si la cocina vuelve a salir bien, vuelve a valer.
+        clear_suspect(r, "cocina");
+        pausa();
+        escribir(r, ".lv/build/cocina/Secciones/Dos.aux", "cocina buena");
+        assert_eq!(seed(r, "parcial", &excl, &[], &reserva).unwrap(), 1);
+        assert_eq!(fs::read_to_string(r.join(".lv/build/parcial/Secciones/Dos.aux")).unwrap(), "cocina buena");
     }
 
     #[test]
     fn el_perfil_no_se_siembra_a_si_mismo() {
         let d = tempfile::tempdir().unwrap();
         escribir(d.path(), ".lv/build/parcial/x.aux", "a");
-        assert_eq!(seed(d.path(), "parcial", &["x".to_string()], &["parcial".to_string()]).unwrap(), 0);
+        assert_eq!(seed(d.path(), "parcial", &["x".to_string()], &["parcial".to_string()], &[]).unwrap(), 0);
     }
 
     #[test]

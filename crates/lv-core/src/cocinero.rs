@@ -11,7 +11,7 @@
 //! compartido. Cancelar mata el árbol entero (Job Object) y borra lo que quedó cortado. La cocción cede el paso: si `cede()`
 //! dice que hay un build esperando, deja de lanzar, espera las que están en vuelo y devuelve lo que falta.
 
-use crate::auxiliares::build_dir;
+use crate::auxiliares::{build_dir, clear_suspect, mark_suspect};
 use crate::error::{Error, Result};
 use crate::figures::{self, FiguraRota};
 use crate::procs::Job;
@@ -144,9 +144,12 @@ impl Cocinero {
         cmd.args(["-shell-escape", "-interaction=nonstopmode", "-file-line-error"])
             .arg(format!("-output-directory=.lv/build/{PERFIL_COCINA}"))
             .arg(format!(".lv/drivers/{JOB_COCINA}.tex"));
+        // Sospechoso hasta que el listado salga bien, como cualquier build (el marcador sobrevive a un cierre brusco): los `.aux` de la
+        // cocina sirven de último recurso para sembrar un parcial (`auxiliares::seed`) y uno de un listado cortado puede estar truncado.
+        mark_suspect(&o.root, PERFIL_COCINA)?;
         let mut hijo = cmd.spawn().map_err(|e| self.error_de_lanzamiento(o, e))?;
         job.assign(&hijo);
-        loop {
+        let estado = loop {
             if cancelado.load(Ordering::SeqCst) {
                 job.terminate();
                 let _ = hijo.kill();
@@ -154,17 +157,21 @@ impl Cocinero {
                 return Err(Error::Other("cancelado".into()));
             }
             match hijo.try_wait() {
-                Ok(Some(_)) => break,
+                Ok(Some(st)) => break st,
                 Ok(None) => std::thread::sleep(Duration::from_millis(20)),
                 Err(e) => return Err(Error::Io(e.to_string())),
             }
-        }
+        };
         let figlist = salida.join(format!("{JOB_COCINA}.figlist"));
         let texto = fs::read_to_string(&figlist).map_err(|_| {
             Error::Other(format!(
                 "el listado de figuras no generó {JOB_COCINA}.figlist: el documento no compila hasta ahí (revisá .lv/build/{PERFIL_COCINA}/{JOB_COCINA}.log)"
             ))
         })?;
+        // Con errores (código distinto de 0) sigue sospechoso aunque haya llegado a escribir la lista de figuras.
+        if estado.success() {
+            clear_suspect(&o.root, PERFIL_COCINA);
+        }
         Ok(crate::figcache::parsear_figlist(&texto))
     }
 

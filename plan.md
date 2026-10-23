@@ -752,6 +752,8 @@ Aceptación: `scripts/aceptacion-f8c.ps1` (sobre `fixtures/imagenes`, con TeX re
 
   Hecho: pasan los diez smokes (F1 a F8c) con el exe 0.9.0, `cargo test -p lv-core` y Vitest; números en `docs/benchmarks.md`. En F2 el guardar a PDF visible se pasó de los umbrales absolutos (6,1 s y 11,9 s) con la máquina más cargada (latexmk mismo, 5,8 y 11,3 s); el smoke compara contra latexmk en la misma corrida y lo da por bueno.
 
+**Antes de pasarle el instalador al autor (0.9.1).** (1) Sembrado de último recurso: si ningún perfil tiene el `.aux` de una parte, el parcial lo siembra de la cocina y de la exportación si no son sospechosos; el listado de la cocina ahora lleva su marcador `.sospechoso` (se saca sólo con código 0). Una cocción y un parcial con Desnormalización sobre una copia del libro sin ningún `.aux` dan «15. Desnormalización», 0 páginas distintas contra el viejo. (2) `INSTALAR.md`: sección «Usarla con tu copia del libro» (actualizar MiKTeX, abrir la carpeta y confirmar, las dos líneas de `structure.tex` con el antes y el después, y que `Menu.bat` y VS Code siguen andando). (3) Instalador 0.9.1, probado instalar, abrir `inspo/Proyecto` y desinstalar. **Del retiro no se hizo nada.**
+
 **Retiro (espera el OK de Juan).**
 - [ ] Retirar `\CapitulosPorInput` (S1 eligió la opción A) y `cap_actual.tex`, `libro_fast.tex`, `libro_cocina.tex`, `libro_export.tex`, `opciones.tex`, los `.ps1` de compilación (`compilar`, `opciones`, `exportar_capitulo`, `cocinar_figuras`, `synctex_pdf`, `menu`, `comun`) y `Menu.bat`.
 - [ ] `latexmkrc`: queda sólo lo propio del libro (`$makeindex` con `StyleInd.ist`, reglas custom); sale la elección de raíz, el registro, la cocción y `$out_dir`.

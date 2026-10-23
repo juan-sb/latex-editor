@@ -87,6 +87,11 @@ struct Caso {
 }
 
 fn caso() -> Caso {
+    caso_con_motor(MOTOR_FALSO)
+}
+
+/// Lo mismo con otro "pdflatex" (por ejemplo uno cuyo listado termina con error).
+fn caso_con_motor(motor_falso: &str) -> Caso {
     let d = TempDir::new().unwrap();
     let e = |rel: &str, t: &str| {
         let p = d.path().join(rel);
@@ -102,7 +107,7 @@ fn caso() -> Caso {
     e("sello.txt", &sello);
     let r = Recolector::nuevo();
     let latexmk = Builder::con_programa("powershell", args_de(&script(OK)));
-    let motor = Cocinero::con_programa("powershell", args_de(&script(MOTOR_FALSO)));
+    let motor = Cocinero::con_programa("powershell", args_de(&script(motor_falso)));
     let s = Session::open_with_cocinero(d.path(), r.sink.clone(), latexmk, motor).unwrap();
     Caso { d, s, r }
 }
@@ -656,4 +661,75 @@ fn con_el_cache_apagado_no_hay_coccion() {
     let s = Session::open_with_cocinero(c.d.path(), r.sink.clone(), latexmk, Cocinero::new()).unwrap();
     let e = s.request_bake().unwrap_err().to_string();
     assert!(e.contains("apagado"), "{e}");
+}
+
+#[test]
+fn el_listado_de_la_cocina_es_sospechoso_hasta_que_sale_bien() {
+    // Sale bien: sin marcador.
+    let c = caso();
+    c.s.request_bake().unwrap();
+    c.esperar("la cocción", 60, |c| c.ocioso() && c.secuencia().len() == 3);
+    assert!(!c.d.path().join(".lv/build/cocina/.sospechoso").exists(), "el listado salió bien: sus .aux valen de último recurso");
+    // Con errores (código distinto de 0) aunque haya llegado a escribir la lista: sigue sospechoso y no se siembra de ahí.
+    let mal = caso_con_motor(&MOTOR_FALSO.replacen("exit 0", "exit 1", 1));
+    mal.s.request_bake().unwrap();
+    mal.esperar("la cocción", 60, |c| c.ocioso() && c.secuencia().iter().any(|e| e.starts_with("cocido(")));
+    assert!(mal.d.path().join(".lv/build/cocina/.sospechoso").exists(), "un listado con errores deja el marcador");
+}
+
+#[test]
+fn un_parcial_en_frio_siembra_de_la_cocina_cuando_ningun_perfil_tiene_el_aux_y_no_si_la_cocina_es_sospechosa() {
+    let aux_uno = |c: &Caso| c.d.path().join(".lv/build/parcial/Secciones/Uno.aux");
+    let c = caso();
+    c.s.request_bake().unwrap();
+    c.esperar("la cocción", 60, |c| c.ocioso() && c.secuencia().len() == 3);
+    // La cocina compiló todas las partes y dejó su .aux (el motor falso no lo escribe: se lo ponemos).
+    fs::create_dir_all(c.d.path().join(".lv/build/cocina/Secciones")).unwrap();
+    c.escribir(".lv/build/cocina/Secciones/Uno.aux", "\\relax\n\\@setckpt{Secciones/Uno}{\\setcounter{chapter}{8}}\n");
+    c.s.set_state(lv_core::config::StatePatch { selection: Some(vec!["Secciones/Dos".into()]), ..Default::default() }).unwrap();
+    // Puede quedar en cola si algo de la cocción todavía no terminó: lo que importa es que el parcial llegue a correr.
+    c.s.request_build(Some("parcial")).unwrap();
+    c.esperar("el parcial", 60, |c| c.ocioso() && c.secuencia().iter().any(|e| e == "fin(parcial)"));
+    let diag = || {
+        let mut v = Vec::new();
+        for e in walk(&c.d.path().join(".lv/build")) { v.push(e); }
+        format!("secuencia {:?}; sospechoso cocina: {}; archivos: {:?}; driver: {}", c.secuencia(), c.d.path().join(".lv/build/cocina/.sospechoso").exists(), v, fs::read_to_string(c.d.path().join(".lv/drivers/lv-parcial.tex")).unwrap_or_default())
+    };
+    assert!(aux_uno(&c).is_file(), "ni el rápido ni el completo existen: la cocina es el último recurso; {}", diag());
+    assert!(fs::read_to_string(aux_uno(&c)).unwrap().contains("setcounter{chapter}{8}"));
+
+    // Con la cocina sospechosa no se siembra.
+    let s = caso();
+    s.s.request_bake().unwrap();
+    s.esperar("la cocción", 60, |c| c.ocioso() && c.secuencia().len() == 3);
+    fs::create_dir_all(s.d.path().join(".lv/build/cocina/Secciones")).unwrap();
+    s.escribir(".lv/build/cocina/Secciones/Uno.aux", "truncado");
+    s.escribir(".lv/build/cocina/.sospechoso", "x");
+    s.s.set_state(lv_core::config::StatePatch { selection: Some(vec!["Secciones/Dos".into()]), ..Default::default() }).unwrap();
+    s.s.request_build(Some("parcial")).unwrap();
+    s.esperar("el parcial", 60, |c| c.ocioso() && c.secuencia().iter().any(|e| e == "fin(parcial)"));
+    assert!(!aux_uno(&s).exists(), "una cocina sospechosa no siembra");
+
+    // Un perfil normal con la parte tiene prioridad sobre la cocina.
+    let n = caso();
+    n.s.request_bake().unwrap();
+    n.esperar("la cocción", 60, |c| c.ocioso() && c.secuencia().len() == 3);
+    fs::create_dir_all(n.d.path().join(".lv/build/cocina/Secciones")).unwrap();
+    fs::create_dir_all(n.d.path().join(".lv/build/rapido/Secciones")).unwrap();
+    n.escribir(".lv/build/rapido/Secciones/Uno.aux", "del rapido");
+    std::thread::sleep(Duration::from_millis(50));
+    n.escribir(".lv/build/cocina/Secciones/Uno.aux", "de la cocina, mas nueva");
+    n.s.set_state(lv_core::config::StatePatch { selection: Some(vec!["Secciones/Dos".into()]), ..Default::default() }).unwrap();
+    n.s.request_build(Some("parcial")).unwrap();
+    n.esperar("el parcial", 60, |c| c.ocioso() && c.secuencia().iter().any(|e| e == "fin(parcial)"));
+    assert_eq!(fs::read_to_string(aux_uno(&n)).unwrap(), "del rapido");
+}
+
+fn walk(d: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    for e in fs::read_dir(d).into_iter().flatten().flatten() {
+        let p = e.path();
+        if p.is_dir() { out.extend(walk(&p)); } else { out.push(p.display().to_string().replace(&d.display().to_string(), "")); }
+    }
+    out
 }
