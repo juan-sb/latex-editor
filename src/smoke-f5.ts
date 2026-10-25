@@ -8,6 +8,8 @@ import { contenidoDeVista, editarDoc, escribirComoTecleado, getDoc, moverCursor,
 import { lineasMarcadas } from './editor/problemas';
 import { dormir, esperarHasta, iguales } from './smoke-util';
 import { useApp } from './store/app';
+import { useProyecto } from './store/proyecto';
+import { useTema } from './store/tema';
 
 interface Paso {
   nombre: string;
@@ -368,6 +370,49 @@ export async function correrSmokeF5(opts: LaunchOptions): Promise<void> {
       ctrl('b');
       if (!textoDe('cap-uno.tex')!.includes('\\textbf{palabra}')) throw new Error('Ctrl+B no volvió');
       restaurar('cap-uno.tex', original);
+    });
+
+    await paso('tema: el botón alterna sistema, claro y oscuro, cambia los colores de la app y del editor y queda en preferencias.json', async () => {
+      const boton = () => document.querySelector<HTMLButtonElement>('.barra-superior .tema-boton');
+      if (!boton()) throw new Error('no está el botón del tema');
+      const atributo = (): string | undefined => document.documentElement.dataset.theme;
+      const fondo = () => getComputedStyle(document.documentElement).getPropertyValue('--fondo').trim();
+      const fondoEditor = () => {
+        const e = document.querySelector('.cm-editor');
+        return e ? getComputedStyle(e).backgroundColor : '';
+      };
+      const fijar = async (objetivo: 'claro' | 'oscuro') => {
+        for (let i = 0; i < 3 && useTema.getState().tema !== objetivo; i++) {
+          boton()!.click();
+          await dormir(100);
+        }
+        if (useTema.getState().tema !== objetivo) throw new Error(`no se llegó a ${objetivo}`);
+      };
+      await fijar('claro');
+      const fondoClaro = fondo();
+      const editorClaro = fondoEditor();
+      if (atributo() !== 'light') throw new Error(`claro: data-theme = ${atributo()}`);
+      await fijar('oscuro');
+      if (atributo() !== 'dark') throw new Error(`oscuro: data-theme = ${atributo()}`);
+      if (fondo() === fondoClaro) throw new Error(`--fondo no cambió (${fondo()})`);
+      if (fondoEditor() === editorClaro) throw new Error(`el fondo del editor no cambió (${fondoEditor()})`);
+      const guardado = await backend.readUserConfig('preferencias.json');
+      if (!guardado || !guardado.includes('"oscuro"')) throw new Error(`preferencias.json: ${guardado}`);
+      await fijar('claro');
+      if (fondo() !== fondoClaro || fondoEditor() !== editorClaro) throw new Error('al volver al claro los colores no volvieron');
+      detalle(`claro ${fondoClaro} / oscuro, editor ${editorClaro} → distinto`);
+      // Se deja como estaba: sin preferencia, o sea el del sistema.
+      await useTema.getState().setTema('sistema');
+      await backend.writeUserConfig('preferencias.json', '{}');
+    });
+
+    await paso('engranaje junto al nombre del proyecto: abre la pantalla Proyecto', async () => {
+      const cog = document.querySelector<HTMLButtonElement>('.barra-superior .config-proyecto');
+      if (!cog) throw new Error('no está el engranaje');
+      cog.click();
+      await dormir(300);
+      if (!useProyecto.getState().abierta) throw new Error('la pantalla Proyecto no se abrió');
+      useProyecto.getState().cerrar();
     });
   })();
 

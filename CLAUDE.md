@@ -63,7 +63,7 @@ Si un spike o la implementación contradicen el plan, se actualiza `plan.md` y s
 - `cargo run -p lv-core --example problemas -- <raíz> <log|blg|ilg>`: lo que el parser saca de un log, para mirar uno nuevo antes de escribir su prueba. Los logs de `fixtures/logs/` se generan con `--example build` sobre `fixtures/errores` (copiado a `spikes/work`).
 - `scripts/compilar-fixtures.ps1`: compila los fixtures con latexmk a secas.
 - `cargo test -p lv-core --test diagnostico` (y con `--features tex` el doctor contra TeX de verdad), `--test candado` (candado con un proceso ajeno de verdad; cambia `LV_NOMBRE_APP`, por eso es una prueba sola en su archivo).
-- Variables de entorno de la app: `LV_OPEN` (carpeta a abrir), `LV_ROOT` (raíz del documento), `LV_SMOKE` (`1`, `f2` a `f8`, `f8b` y `f8c`), `LV_SMOKE_FILE` (en `f8`, `segunda` hace que la instancia haga de segunda), `LV_SMOKE_OUT`, `LV_NOMBRE_APP` (el nombre del ejecutable que el candado reconoce como «la app»; sólo para las pruebas), `LV_LATEXMK` (otro ejecutable en lugar de latexmk), `LV_CONFIG_DIR` (otro directorio de configuración del usuario, para que los smokes no toquen el `keybindings.json` real).
+- Variables de entorno de la app: `LV_OPEN` (carpeta a abrir), `LV_ROOT` (raíz del documento), `LV_SMOKE` (`1`, `f2` a `f8`, `f8b` y `f8c`), `LV_SMOKE_FILE` (en `f8`, `segunda` hace que la instancia haga de segunda), `LV_SMOKE_OUT`, `LV_NOMBRE_APP` (el nombre del ejecutable que el candado reconoce como «la app»; sólo para las pruebas), `LV_LATEXMK` (otro ejecutable en lugar de latexmk), `LV_CONFIG_DIR` (otro directorio de configuración del usuario, para que los smokes no toquen el `keybindings.json` ni el `preferencias.json` (el tema) reales).
 
 ## Estructura
 

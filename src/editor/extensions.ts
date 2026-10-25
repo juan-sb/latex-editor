@@ -34,7 +34,7 @@ const tema = EditorView.theme({
   '.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--ed-cursor)' },
   // La selección se dibuja en una capa DETRÁS del texto (`drawSelection`). Tiene que ganarle al color de CodeMirror: el suyo con foco
   // (`&light.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground`, #d7d4f0) es más específico que cualquier regla
-  // de este tema y, como el tema oscuro de la app sale de `prefers-color-scheme` y CodeMirror cree que siempre es claro, sobre el
+  // de este tema y, como el tema oscuro de la app sale de `data-theme` y CodeMirror cree que siempre es claro, sobre el
   // fondo oscuro quedaba un bloque casi blanco con el texto claro encima: ilegible. Por eso el `!important`.
   '.cm-selectionBackground': { backgroundColor: 'var(--ed-seleccion-inactiva) !important' },
   '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground': { backgroundColor: 'var(--ed-seleccion) !important' },

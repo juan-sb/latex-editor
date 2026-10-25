@@ -8,6 +8,7 @@ import { lineaDeBuild, textoDeTipico } from '../store/barra';
 import { abrirPantallaProyecto } from '../store/proyecto';
 import { textoDeProgreso } from '../store/figuras';
 import { resumen } from '../store/problemas';
+import { siguienteTema, textoDelTema, useTema } from '../store/tema';
 import { Menu } from './Menu';
 
 /** Los segundos que lleva el build (desde que se pidió) y, al lado, lo típico de ese perfil según el historial. */
@@ -61,6 +62,8 @@ export function TopBar() {
   const menuCompilacion = useApp((s) => s.menuCompilacion);
   const mostrarPanelInferior = useApp((s) => s.mostrarPanelInferior);
   const avisar = useApp((s) => s.avisar);
+  const tema = useTema((s) => s.tema);
+  const alternarTema = useTema((s) => s.alternar);
   const corriendo = build.status === 'running';
   // Exportar es un trabajo más de la cola: mientras corre o espera, Cancelar lo corta.
   const ocupado = corriendo || exportando !== null;
@@ -84,6 +87,14 @@ export function TopBar() {
       {project && (
         <>
           <span className="proyecto" title={project.root}>{project.name}</span>
+          <button
+            className="icono-boton config-proyecto"
+            onClick={() => void abrirPantallaProyecto()}
+            title="Configurar el proyecto: documento principal, partes, perfiles, salidas, variables"
+            aria-label="Configurar el proyecto"
+          >
+            ⚙
+          </button>
           {/* La raíz ya no se elige acá: está en latexviewer.json y se cambia desde la pantalla Proyecto (F8b). */}
           <button
             className="boton chico raiz-actual"
@@ -210,6 +221,14 @@ export function TopBar() {
           </span>
         </>
       )}
+      <button
+        className={`icono-boton tema-boton${project ? '' : ' solo'}`}
+        onClick={() => void alternarTema()}
+        title={`Tema: ${textoDelTema(tema)}. Clic para pasar a ${textoDelTema(siguienteTema(tema))}.`}
+        aria-label={`Tema: ${textoDelTema(tema)}`}
+      >
+        {tema === 'claro' ? '☀' : tema === 'oscuro' ? '🌙' : '🖥'}
+      </button>
     </div>
   );
 }

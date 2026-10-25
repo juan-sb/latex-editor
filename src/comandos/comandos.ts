@@ -7,6 +7,7 @@ import { aplicarFormato, type NombreFormato } from '../editor/formato';
 import { getBackend } from '../backend';
 import { useApp } from '../store/app';
 import { abrirPantallaProyecto } from '../store/proyecto';
+import { useTema } from '../store/tema';
 import { buscarPorEvento, esNativoPeligroso, formatoAtajo, resolverAtajos, type AtajosPorId, type AtajosResueltos } from './atajos';
 
 export interface Comando {
@@ -52,6 +53,7 @@ export const COMANDOS: Comando[] = [
   { id: 'build.exportarTodas', titulo: 'Exportar todas las partes a PDF', categoria: 'Compilación', atajos: [], ejecutar: () => void app().exportarPartes() },
   { id: 'fragmento.vistaPrevia', titulo: 'Vista previa del fragmento (selección o entorno actual)', categoria: 'Compilación', atajos: ['Ctrl+Alt+F'], ejecutar: () => void app().previsualizarFragmento() },
   { id: 'vista.layout', titulo: 'Alternar el layout (editor y PDF, sólo editor, sólo PDF)', categoria: 'Vista', atajos: ['Ctrl+\\'], ejecutar: () => app().alternarLayout() },
+  { id: 'vista.tema', titulo: 'Cambiar el tema: sistema, claro, oscuro', categoria: 'Vista', atajos: [], ejecutar: () => void useTema.getState().alternar() },
   { id: 'problemas.siguiente', titulo: 'Problema siguiente', categoria: 'Compilación', atajos: ['F8'], ejecutar: () => void app().saltarProblema(1) },
   { id: 'problemas.anterior', titulo: 'Problema anterior', categoria: 'Compilación', atajos: ['Shift+F8'], ejecutar: () => void app().saltarProblema(-1) },
 
