@@ -4,7 +4,7 @@ import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { bracketMatching, HighlightStyle, indentOnInput, StreamLanguage, syntaxHighlighting } from '@codemirror/language';
 import { stex } from '@codemirror/legacy-modes/mode/stex';
 import { highlightSelectionMatches, search, searchKeymap } from '@codemirror/search';
-import { EditorState, type Extension } from '@codemirror/state';
+import { Annotation, Compartment, EditorState, type Extension, type StateEffect } from '@codemirror/state';
 import { drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers } from '@codemirror/view';
 import { tags as t } from '@lezer/highlight';
 import { extensionAutocompletar, type FuenteDeSimbolos } from './autocompletar';
@@ -47,6 +47,45 @@ const tema = EditorView.theme({
   '.cm-matchingBracket': { backgroundColor: 'var(--ed-par)', outline: '1px solid var(--ed-par-borde)' },
   '.cm-panels': { backgroundColor: 'var(--panel)', color: 'var(--texto)' },
   '.cm-searchMatch': { backgroundColor: 'var(--ed-busqueda)' },
+  // El panel de buscar y reemplazar (Ctrl+F / Ctrl+H). CodeMirror le pone a los campos y botones un 70 % y a las etiquetas un 80 %
+  // del tamaño del editor, que acá es el del body (13 px): quedaban en ~9 px, ilegibles. Se llevan al tamaño del resto de la
+  // interfaz y a sus colores (el degradé de sus botones es del tema claro y en el oscuro desentonaba). Las reglas van con `&` para
+  // empatar en especificidad con las `&light .cm-button` de CodeMirror y ganarles por orden.
+  '& .cm-panel.cm-search': { padding: '6px 32px 6px 10px', fontFamily: 'var(--fuente)', fontSize: '13px', lineHeight: '1.4' },
+  '& .cm-panel.cm-search label': { fontSize: '13px', color: 'var(--texto-suave)', marginRight: '10px', cursor: 'pointer' },
+  '& .cm-panel.cm-search input[type=checkbox]': { margin: '0 4px 0 0', verticalAlign: 'middle' },
+  '& .cm-panel.cm-search .cm-textfield': {
+    fontSize: '13px', fontFamily: 'var(--fuente-mono)', padding: '3px 8px', margin: '2px 6px 2px 0', minWidth: '240px',
+    border: '1px solid var(--borde)', borderRadius: '4px', backgroundColor: 'var(--ed-fondo)', color: 'var(--texto)', outline: 'none',
+  },
+  '& .cm-panel.cm-search .cm-textfield:focus': { borderColor: 'var(--acento)', boxShadow: '0 0 0 1px var(--acento)' },
+  '& .cm-panel.cm-search .cm-button': {
+    fontSize: '13px', fontFamily: 'var(--fuente)', padding: '3px 10px', margin: '2px 4px 2px 0', cursor: 'pointer',
+    border: '1px solid var(--borde)', borderRadius: '4px', backgroundImage: 'none', backgroundColor: 'var(--panel)', color: 'var(--texto)',
+  },
+  '& .cm-panel.cm-search .cm-button:hover': { backgroundColor: 'var(--hover)' },
+  '& .cm-panel.cm-search [name=close]': { fontSize: '20px', lineHeight: '1', top: '6px', right: '10px', padding: '0 4px', color: 'var(--texto-suave)', cursor: 'pointer' },
+});
+
+/** Los textos del panel de búsqueda (y de los demás de CodeMirror) en español, como el resto de la interfaz. */
+const frases = EditorState.phrases.of({
+  Find: 'Buscar',
+  Replace: 'Reemplazar',
+  next: 'siguiente',
+  previous: 'anterior',
+  all: 'todas',
+  'match case': 'mayúsculas',
+  regexp: 'regex',
+  'by word': 'palabra completa',
+  replace: 'reemplazar',
+  'replace all': 'reemplazar todas',
+  close: 'cerrar',
+  'current match': 'coincidencia actual',
+  'on line': 'en la línea',
+  'replaced match on line $': 'reemplazada la coincidencia de la línea $',
+  'replaced $ matches': '$ coincidencias reemplazadas',
+  'Go to line': 'Ir a la línea',
+  go: 'ir',
 });
 
 // El editor no importa el store (el store importa el editor): lo que necesita de él entra por estos ganchos.
@@ -76,6 +115,29 @@ const ctrlClic = EditorView.domEventHandlers({
   },
 });
 
+// Resaltar las otras apariciones de lo seleccionado sirve cuando el usuario selecciona algo, pero no cuando la selección la pone un
+// salto (PDF → código selecciona la palabra clickeada): ahí se encendían todas las palabras iguales del archivo y la que importaba no
+// se distinguía. El salto apaga el resaltado (`efectosDeSalto`) y se vuelve a prender con la primera selección que haga el usuario.
+const coincidencias = new Compartment();
+const SIN_COINCIDENCIAS: Extension = [];
+const deSalto = Annotation.define<boolean>();
+
+/** Lo que tiene que llevar el `dispatch` de un salto que selecciona una palabra para que no se resalten sus repeticiones. */
+export function efectosDeSalto(): { effects: StateEffect<unknown>; annotations: Annotation<boolean> } {
+  return { effects: coincidencias.reconfigure(SIN_COINCIDENCIAS), annotations: deSalto.of(true) };
+}
+
+/** Si el estado resalta las repeticiones de lo seleccionado (para los tests). */
+export function resaltaCoincidencias(state: EditorState): boolean {
+  return coincidencias.get(state) !== SIN_COINCIDENCIAS;
+}
+
+const reactivarCoincidencias = EditorState.transactionExtender.of((tr) =>
+  tr.selection && !tr.annotation(deSalto) && coincidencias.get(tr.startState) === SIN_COINCIDENCIAS
+    ? { effects: coincidencias.reconfigure(highlightSelectionMatches()) }
+    : null,
+);
+
 /** Soft wrap por defecto: cada párrafo del libro es una sola línea de hasta ~500 caracteres. */
 export function extensionesBase(): Extension[] {
   return [
@@ -88,7 +150,8 @@ export function extensionesBase(): Extension[] {
     indentOnInput(),
     bracketMatching(),
     highlightActiveLine(),
-    highlightSelectionMatches(),
+    coincidencias.of(highlightSelectionMatches()),
+    reactivarCoincidencias,
     search({ top: true }),
     EditorView.lineWrapping,
     latexLanguage(),
@@ -98,5 +161,6 @@ export function extensionesBase(): Extension[] {
     extensionAutocompletar(() => fuenteSimbolos()),
     ctrlClic,
     tema,
+    frases,
   ];
 }

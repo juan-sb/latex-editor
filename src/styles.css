@@ -78,6 +78,12 @@
 }
 
 * { box-sizing: border-box; }
+/* El CSS de PDF.js da por hecho `content-box`: la página mide el ancho del viewport MÁS sus bordes de 9 px. Con el `border-box` de arriba
+   el contenido de cada página quedaba 18 px más angosto y más bajo que el viewport: PDF.js pintaba el canvas para 702 px y se mostraba
+   achicado en 684 (un 2,6 %, interpolado: borroso a cualquier escala), mientras que el resaltado de SyncTeX y el punto de un clic usan la
+   escala del viewport. El resaltado caía estirado y corrido hasta un renglón hacia abajo al pie de la página, y el doble clic, lo mismo
+   al revés (medido con el TP5 y el código del visor en Chromium). */
+.pdfViewer, .pdfViewer * { box-sizing: content-box; }
 html, body, #root { height: 100%; margin: 0; }
 body { background: var(--fondo); color: var(--texto); font: 13px/1.4 var(--fuente); overflow: hidden; }
 button, input, select { font: inherit; color: inherit; }
@@ -159,6 +165,15 @@ button, input, select { font: inherit; color: inherit; }
 .editor .cm-editor { height: 100%; }
 .editor .cm-editor.cm-focused { outline: none; }
 .editor-panel > .vacio { position: absolute; top: 40px; left: 0; right: 0; }
+/* Pestañas de imágenes y PDF del proyecto (VisorArchivo) */
+.visor-archivo { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.visor-barra { display: flex; align-items: center; gap: 6px; padding: 3px 8px; border-bottom: 1px solid var(--borde); background: var(--panel); }
+.visor-ruta { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--texto-suave); font-size: 12px; }
+.visor-dato { color: var(--texto-suave); font-size: 12px; white-space: nowrap; }
+.visor-imagen { flex: 1; min-height: 0; overflow: auto; display: flex; background: var(--pdf-fondo); }
+.visor-imagen img { margin: auto; max-width: calc(100% - 24px); max-height: calc(100% - 24px); object-fit: contain; background: #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3); }
+.visor-imagen.real img { max-width: none; max-height: none; margin: 12px auto; }
+.visor-imagen > .vacio, .visor-pdf > .vacio { margin: auto; color: #e6e8eb; }
 
 /* PDF */
 .pdf-panel { height: 100%; display: flex; flex-direction: column; background: var(--panel); }

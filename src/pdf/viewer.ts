@@ -66,6 +66,24 @@ const visiblesListos = (v: Visor): boolean => {
   return !!vistas && vistas.length > 0 && vistas.every((x) => x.view.renderingState === RenderingStates.FINISHED);
 };
 
+/**
+ * Nitidez con escalas de pantalla fraccionarias (125 %, 150 %). PDF.js pinta cada página en un canvas con exactamente
+ * `devicePixelRatio` píxeles por px de CSS, pero el borde de la página (9 px de CSS = 11,25 px reales a 125 %) y el centrado
+ * dejan el canvas en una posición fraccionaria de la pantalla, y Chromium lo copia con interpolación bilineal: el texto
+ * queda borroso aunque la resolución sea la correcta. Medido en Chromium a 125 %: el canvas se pintaba corrido 0,25 px en x
+ * y 0,5 px en y y la captura difería del bitmap; con `image-rendering: pixelated` la captura es el bitmap exacto, píxel a píxel.
+ * Alinear el canvas desde el layout (`translate` o `left`) no sirve: Chromium no lo pinta donde dice `getBoundingClientRect`.
+ * Sólo se pone cuando el canvas está 1:1 con la pantalla: mientras PDF.js estira el canvas viejo durante un zoom (o a zoom muy
+ * alto, cuando pinta una versión reducida debajo del detalle), el vecino más cercano se vería en escalones.
+ */
+function nitidez(div: HTMLElement): void {
+  const dpr = window.devicePixelRatio || 1;
+  div.querySelectorAll<HTMLCanvasElement>('.canvasWrapper canvas').forEach((c) => {
+    const ancho = c.getBoundingClientRect().width * dpr;
+    c.style.imageRendering = ancho > 0 && Math.abs(c.width - ancho) <= 1 ? 'pixelated' : '';
+  });
+}
+
 async function esperarVisibles(v: Visor, limiteMs: number): Promise<void> {
   const t0 = performance.now();
   while (!visiblesListos(v) && performance.now() - t0 < limiteMs) await frame();
@@ -147,6 +165,11 @@ export class PdfViewerHost implements PdfApi {
     const ac = new AbortController();
     const viewer = new PDFViewer({ container: cont, viewer: v, eventBus: bus, linkService: link, abortSignal: ac.signal } as any);
     link.setViewer(viewer);
+    bus.on('pagerendered', (e: any) => {
+      if (e?.source?.div) nitidez(e.source.div);
+    });
+    // Al cambiar el zoom PDF.js estira los canvas que ya tiene hasta volver a pintarlos: sin interpolación se verían en escalones.
+    bus.on('scalechanging', () => cont.querySelectorAll<HTMLCanvasElement>('canvas').forEach((c) => (c.style.imageRendering = '')));
     return { cont, viewer, bus, link, doc: null, task: null, ac };
   }
 

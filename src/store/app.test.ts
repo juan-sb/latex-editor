@@ -383,6 +383,32 @@ describe('abrir y editar', () => {
     expect(st().notice?.nivel).toBe('error');
   });
 
+  it('una imagen o un PDF abren una pestaña de visor sin leerse como texto', async () => {
+    const f = falso({ 'a.tex': { text: 'uno\n' } });
+    await st().abrirArchivo('Circuitos/TC ST.png');
+    await st().abrirArchivo('Circuitos/Pierce.PDF');
+    expect(f.llamadas.filter((l) => l.startsWith('read '))).toHaveLength(0);
+    expect(tab('Circuitos/TC ST.png')).toMatchObject({ name: 'TC ST.png', visor: 'imagen', readOnly: true, dirty: false });
+    expect(tab('Circuitos/Pierce.PDF').visor).toBe('pdf');
+    expect(st().activeRel).toBe('Circuitos/Pierce.PDF');
+    // Reabrir la activa, pasar a otra y volver: siempre la misma pestaña.
+    await st().abrirArchivo('a.tex');
+    st().activar('Circuitos/TC ST.png');
+    expect(st().activeRel).toBe('Circuitos/TC ST.png');
+    await st().abrirArchivo('Circuitos/TC ST.png');
+    expect(st().tabs).toHaveLength(3);
+    await st().cerrarTab('Circuitos/TC ST.png');
+    expect(st().tabs.map((t) => t.rel)).toEqual(['Circuitos/Pierce.PDF', 'a.tex']);
+  });
+
+  it('una imagen abierta que cambia afuera sube su epoch (el visor la vuelve a leer)', async () => {
+    falso({});
+    await st().abrirArchivo('fig.png');
+    expect(tab('fig.png').epoch).toBe(0);
+    await st().alCambiarAfuera(['fig.png']);
+    expect(tab('fig.png').epoch).toBe(1);
+  });
+
   it('editar marca modificado; deshacer el cambio lo deja limpio', async () => {
     falso({ 'a.tex': { text: 'uno\ndos\n' } });
     await st().abrirArchivo('a.tex');

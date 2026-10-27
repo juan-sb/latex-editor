@@ -54,6 +54,12 @@ pub struct Synctex {
     inputs: Vec<(u16, String)>,
     /// sp a bp.
     scale: f64,
+    /// Corrimiento del origen, en bp, que se suma a cada coordenada (`X Offset` / `Y Offset` del preámbulo). pdfTeX escribe 0
+    /// y ya guarda las coordenadas desde la esquina de la página; XeTeX (salida `xdv`) escribe 4736287 sp (1 in) porque sus
+    /// coordenadas son las del DVI, que tiene el origen a una pulgada del borde. Sin sumarlo, con xelatex todo quedaba
+    /// corrido 72 bp hacia arriba y a la izquierda: el inverse caía en otra línea y el forward resaltaba en otro lado (TP5).
+    off_x: f64,
+    off_y: f64,
     nodes: Vec<Node>,
     pages: usize,
     /// (tag << 32 | línea, índice de nodo), ordenado.
@@ -151,6 +157,7 @@ impl Synctex {
     pub fn parse(data: &[u8]) -> Synctex {
         let mut inputs = Vec::new();
         let (mut unit, mut mag) = (1.0f64, 1000.0f64);
+        let (mut off_x, mut off_y) = (0.0f64, 0.0f64);
         let mut nodes: Vec<Node> = Vec::with_capacity(data.len() / 28);
         let mut stack: Vec<u32> = Vec::new();
         let mut page: u16 = 0;
@@ -174,6 +181,10 @@ impl Synctex {
                     unit = String::from_utf8_lossy(v).trim().parse().unwrap_or(1.0);
                 } else if let Some(v) = linea.strip_prefix(b"Magnification:") {
                     mag = String::from_utf8_lossy(v).trim().parse().unwrap_or(1000.0);
+                } else if let Some(v) = linea.strip_prefix(b"X Offset:") {
+                    off_x = String::from_utf8_lossy(v).trim().parse().unwrap_or(0.0);
+                } else if let Some(v) = linea.strip_prefix(b"Y Offset:") {
+                    off_y = String::from_utf8_lossy(v).trim().parse().unwrap_or(0.0);
                 } else if linea.starts_with(b"Content:") {
                     en_contenido = true;
                 }
@@ -253,7 +264,9 @@ impl Synctex {
                 by_page[n.page as usize].push(i as u32);
             }
         }
-        Synctex { inputs, scale: unit * (mag / 1000.0) / 65781.76, nodes, pages, fwd, by_page }
+        // El corrimiento va en sp sin magnificar (como en `synctex_parser.c`, que lo escala sólo por `Unit`).
+        let (off_x, off_y) = (off_x * unit / 65781.76, off_y * unit / 65781.76);
+        Synctex { inputs, scale: unit * (mag / 1000.0) / 65781.76, off_x, off_y, nodes, pages, fwd, by_page }
     }
 
     pub fn pages(&self) -> usize {
@@ -299,7 +312,7 @@ impl Synctex {
 
     fn rect_de(&self, n: &Node) -> Rect {
         let s = self.scale;
-        Rect { page: n.page as u32, x: n.x as f64 * s, y: (n.y - n.h) as f64 * s, w: n.w as f64 * s, h: (n.h + n.d) as f64 * s }
+        Rect { page: n.page as u32, x: n.x as f64 * s + self.off_x, y: (n.y - n.h) as f64 * s + self.off_y, w: n.w as f64 * s, h: (n.h + n.d) as f64 * s }
     }
 
     /// Código a PDF: las cajas de línea que contienen nodos de esa línea. Si la línea no tiene nada, la más cercana
@@ -316,12 +329,17 @@ impl Synctex {
         };
         let k2 = ((tag as u64) << 32) | usada;
         let a = self.fwd.partition_point(|&(k, _)| k < k2);
-        let mut cajas: Vec<u32> = Vec::new();
+        // (caja, fuerte). Una caja es «débil» si la línea sólo aparece en ella por lo que TeX arma al CERRAR un párrafo: TeX corta el
+        // párrafo recién cuando lee la línea siguiente (el `\item` de abajo, un `\end{...}`), así que la caja del último renglón y su
+        // relleno final (`\parfillskip`, pegado al borde derecho) llevan el número de ESA línea. Con el TP5: el `\item` de la línea 25
+        // marcaba el último renglón del ítem de arriba y el resaltado caía un renglón más arriba (ver el test).
+        let mut cajas: Vec<(u32, bool)> = Vec::new();
         for &(k, i) in &self.fwd[a..] {
             if k != k2 {
                 break;
             }
             let n = &self.nodes[i as usize];
+            let fuerte = matches!(n.kind, KERN | GLUE | MATH | CUR | RULE) && !self.en_borde_derecho(n);
             // Una caja vacía no tiene tamaño propio (la sangría de un párrafo, una figura externalizada): la que la
             // contiene. Las hojas, la línea (hbox) en la que están.
             let caja = match n.kind {
@@ -342,21 +360,71 @@ impl Synctex {
                 c = n.parent;
             });
             if let Some(c) = caja {
-                if !cajas.contains(&c) {
-                    cajas.push(c);
+                match cajas.iter_mut().find(|(x, _)| *x == c) {
+                    Some(e) => e.1 |= fuerte,
+                    None => cajas.push((c, fuerte)),
                 }
             }
         }
         if cajas.is_empty() {
             return None;
         }
-        Some(Forward { line_used: usada as u32, rects: cajas.iter().map(|&c| self.rect_de(&self.nodes[c as usize])).collect() })
+        // Si hay contenido de verdad, las débiles se descartan; si no (una ecuación, una figura), quedan todas, como antes.
+        if cajas.iter().any(|c| c.1) {
+            cajas.retain(|c| c.1);
+            // Y al revés: el último renglón de un párrafo que es una sola palabra no tiene ningún nodo de esta línea (XeTeX no registra las
+            // letras, sólo el pegamento entre palabras) y sí el relleno final, con el número de la línea siguiente. Si el renglón que
+            // sigue a una caja fuerte no tiene más que eso, es la continuación del mismo párrafo («espuria.» en el TP5).
+            let mut extra = Vec::new();
+            for &(c, _) in &cajas {
+                if let Some(s) = self.solo_cierre_debajo(c) {
+                    if !cajas.iter().any(|x| x.0 == s) && !extra.contains(&s) {
+                        extra.push(s);
+                    }
+                }
+            }
+            cajas.extend(extra.into_iter().map(|s| (s, true)));
+        }
+        Some(Forward { line_used: usada as u32, rects: cajas.iter().map(|&(c, _)| self.rect_de(&self.nodes[c as usize])).collect() })
+    }
+
+    /// Un nodo hoja pegado al borde derecho de la caja de línea que lo contiene: el relleno con el que TeX cierra un párrafo.
+    fn en_borde_derecho(&self, n: &Node) -> bool {
+        if n.parent == u32::MAX {
+            return false;
+        }
+        let p = &self.nodes[n.parent as usize];
+        // 1/4 bp de tolerancia (el redondeo de XeTeX deja el relleno 1 sp antes del borde).
+        p.kind == HBOX && p.w > 0 && n.x as i64 >= p.x as i64 + p.w as i64 - (0.25 / self.scale) as i64
+    }
+
+    /// La caja de línea que sigue a `c` en la misma caja vertical, si todo lo que tiene registrado es el cierre del párrafo.
+    fn solo_cierre_debajo(&self, c: u32) -> Option<u32> {
+        let caja = &self.nodes[c as usize];
+        let s = caja.end as usize + 1;
+        let sig = self.nodes.get(s)?;
+        if caja.kind != HBOX || sig.kind != HBOX || sig.parent != caja.parent || sig.page != caja.page || sig.w <= 0 {
+            return None;
+        }
+        let mut hojas = 0;
+        for j in (s + 1)..=(sig.end as usize) {
+            let h = &self.nodes[j];
+            if matches!(h.kind, KERN | GLUE | MATH | CUR | RULE) {
+                if h.parent as usize != s || !self.en_borde_derecho(h) {
+                    return None;
+                }
+                hojas += 1;
+            } else if matches!(h.kind, HBOX | VBOX) {
+                return None;
+            }
+        }
+        (hojas > 0).then_some(s as u32)
     }
 
     /// PDF a código. `(page, x, y)` en bp desde arriba a la izquierda.
     pub fn inverse(&self, page: u32, px: f64, py: f64) -> Option<Inverse> {
         let lista = self.by_page.get(page as usize)?;
-        let (pxs, pys) = ((px / self.scale) as i64, (py / self.scale) as i64);
+        let (pxs, pys) = (((px - self.off_x) / self.scale) as i64, ((py - self.off_y) / self.scale) as i64);
         let mut mejor: Option<(u32, i64, bool)> = None; // índice, métrica, adentro
         for &i in lista {
             let n = &self.nodes[i as usize];
@@ -383,11 +451,13 @@ impl Synctex {
         let caja = &self.nodes[i as usize];
         // Refinar: el hijo cuya x queda más cerca del punto es el que dice la línea de código.
         let mut elegido = (caja.tag, caja.line);
-        let mut mejor_dx = i64::MAX;
+        // El cierre del párrafo (pegado al borde derecho) lleva la línea SIGUIENTE (ver `forward`): un clic al final del último renglón
+        // caía en el `\item` de abajo. Sólo cuenta si la caja no tiene otra cosa.
+        let mut mejor_dx = (true, i64::MAX);
         for j in (i + 1)..=caja.end {
             let c = &self.nodes[j as usize];
             if matches!(c.kind, KERN | GLUE | MATH | HVOID) && c.line > 0 {
-                let dx = (c.x as i64 - pxs).abs();
+                let dx = (self.en_borde_derecho(c), (c.x as i64 - pxs).abs());
                 if dx < mejor_dx {
                     mejor_dx = dx;
                     elegido = (c.tag, c.line);
@@ -507,6 +577,88 @@ mod tests {
         let i = s.inverse(1, bp(13_000_000.0), bp(9_000_000.0) - 200.0).unwrap();
         assert_eq!(i.line, 3);
         assert!(s.inverse(7, 0.0, 0.0).is_none(), "página inexistente");
+    }
+
+    /// Tres renglones como los del TP5 (XeTeX): el ítem h (línea 24) termina en un renglón que TeX cerró al leer la línea 25, y el ítem i
+    /// (línea 25) ocupa dos renglones, el segundo con una sola palabra que no deja ningún nodo de la línea 25.
+    fn muestra_parrafos() -> String {
+        [
+            "SyncTeX Version:1",
+            "Input:1:C:/P/ej2.tex",
+            "Output:xdv",
+            "Magnification:1000",
+            "Unit:1",
+            "X Offset:0",
+            "Y Offset:0",
+            "Content:",
+            "{1",
+            "[1,1:0,0:30000000,50000000,0",
+            // Renglón del ítem h: contenido de la 24 y el cierre (borde derecho, x = 30692631) con el número de la 25.
+            "(1,25:787120,43437292:29905511,538214,179404",
+            "g1,24:4489316,43437292",
+            "g1,24:5829828,43437292",
+            "k1,25:30692631,43437292:2010228",
+            "g1,25:30692631,43437292",
+            ")",
+            // Primer renglón del ítem i: el contenido de la 25 (la caja lleva la 26).
+            "(1,26:787120,44774227:29905511,538214,179404",
+            "k1,25:4532073,44774227:317605",
+            "k1,25:9411440,44774227:276141",
+            "k1,25:30692631,44774227:0",
+            ")",
+            // «espuria.»: sólo el cierre, con el número de la 26.
+            "(1,26:787120,45665517:29905511,471476,139217",
+            "k1,26:30692630,45665517:27606976",
+            "g1,26:30692630,45665517",
+            ")",
+            "]",
+            "}1",
+        ]
+        .join("\n")
+            + "\n"
+    }
+
+    #[test]
+    fn el_cierre_de_un_parrafo_no_cuenta_y_el_renglon_de_una_palabra_si() {
+        let s = Synctex::parse(muestra_parrafos().as_bytes());
+        let y = |sp: i32| (sp - 538214) as f64 / 65781.76;
+        let f = s.forward(1, 25).unwrap();
+        let tops: Vec<f64> = f.rects.iter().map(|r| r.y).collect();
+        assert_eq!(f.rects.len(), 2, "{tops:?}");
+        assert!((tops[0] - y(44774227)).abs() < 0.01, "el primer renglón del ítem i, no el último del h: {tops:?}");
+        assert!((tops[1] - (45665517 - 471476) as f64 / 65781.76).abs() < 0.01, "y el renglón de «espuria.»: {tops:?}");
+        // La 24 sigue en su renglón, y la 26 (sólo cierres) se queda con lo que tiene: no hay contenido para descartar nada.
+        let f = s.forward(1, 24).unwrap();
+        assert_eq!(f.rects.len(), 1);
+        assert!((f.rects[0].y - y(43437292)).abs() < 0.01);
+        assert!(!s.forward(1, 26).unwrap().rects.is_empty());
+    }
+
+    #[test]
+    fn un_clic_al_final_del_ultimo_renglon_no_salta_al_item_de_abajo() {
+        let s = Synctex::parse(muestra_parrafos().as_bytes());
+        let bp = |sp: f64| sp / 65781.76;
+        // Al final del renglón del ítem h, más cerca del cierre (línea 25) que del último pegamento de la 24.
+        let i = s.inverse(1, bp(29_000_000.0), bp(43_300_000.0)).unwrap();
+        assert_eq!(i.line, 24);
+    }
+
+    #[test]
+    fn el_corrimiento_de_xetex_se_suma_en_las_dos_consultas() {
+        // XeTeX (salida xdv) escribe las coordenadas del DVI y un corrimiento de 1 in: las cajas tienen que caer 72 bp más abajo
+        // y a la derecha que con el mismo contenido y corrimiento 0, y el inverse tiene que esperar el punto ahí.
+        let sin = Synctex::parse(muestra().as_bytes());
+        let xe = muestra().replace("Output:pdf", "Output:xdv").replace("X Offset:0", "X Offset:4736287").replace("Y Offset:0", "Y Offset:4736287");
+        let con = Synctex::parse(xe.as_bytes());
+        let (a, b) = (sin.forward(1, 3).unwrap().rects[0], con.forward(1, 3).unwrap().rects[0]);
+        assert!((b.x - a.x - 72.0).abs() < 0.01 && (b.y - a.y - 72.0).abs() < 0.01, "{a:?} {b:?}");
+        assert!((b.w - a.w).abs() < 1e-9 && (b.h - a.h).abs() < 1e-9);
+        let bp = |sp: f64| sp / 65781.76;
+        let i = con.inverse(1, bp(19_000_000.0) + 72.0, bp(10_000_000.0) + 72.0).unwrap();
+        assert_eq!((i.tag, i.line, i.inside), (3, 4, true));
+        // Sin sumarlo, ese mismo punto (sin el corrimiento) caía en la línea de arriba.
+        let i = con.inverse(1, bp(19_000_000.0), bp(10_000_000.0) - 72.0).unwrap();
+        assert!(!i.inside);
     }
 
     #[test]

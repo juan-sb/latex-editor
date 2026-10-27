@@ -61,6 +61,19 @@ export interface TabMeta {
   bom: boolean;
   /** Cambia cuando hay que volver a poner el estado en la vista (por ejemplo, al pasar a editable). */
   epoch: number;
+  /** Una imagen o un PDF: se muestra en un visor, no en el editor (no tiene documento de CodeMirror). */
+  visor?: TipoDeVisor;
+}
+
+export type TipoDeVisor = 'imagen' | 'pdf';
+
+const EXT_IMAGEN = new Set(['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'svg', 'ico', 'avif']);
+
+/** Si el archivo se abre en un visor (imagen o PDF) en lugar del editor de texto. */
+export function tipoDeVisor(rel: string): TipoDeVisor | null {
+  const ext = rel.split('.').pop()?.toLowerCase() ?? '';
+  if (ext === 'pdf') return 'pdf';
+  return EXT_IMAGEN.has(ext) ? 'imagen' : null;
 }
 
 export type BuildStatus = 'idle' | 'running' | 'ok' | 'fail' | 'cancelled';
@@ -562,8 +575,16 @@ export const useApp = create<AppState>()((set, get) => {
     },
 
     async abrirArchivo(rel) {
-      if (getDoc(rel)) {
+      if (getDoc(rel) || get().tabs.some((t) => t.rel === rel)) {
         set({ activeRel: rel });
+        void get().actualizarParteActiva();
+        return;
+      }
+      // Una imagen o un PDF no se leen como texto (daba error): van a una pestaña con un visor.
+      const visor = tipoDeVisor(rel);
+      if (visor) {
+        const tab: TabMeta = { rel, name: nombreDe(rel), dirty: false, readOnly: true, mixed: false, eol: 'lf', bom: false, epoch: 0, visor };
+        set((s) => ({ tabs: [...s.tabs, tab], activeRel: rel }));
         void get().actualizarParteActiva();
         return;
       }
@@ -593,7 +614,7 @@ export const useApp = create<AppState>()((set, get) => {
     },
 
     activar(rel) {
-      if (getDoc(rel)) {
+      if (getDoc(rel) || get().tabs.some((t) => t.rel === rel && t.visor)) {
         set({ activeRel: rel });
         void get().actualizarParteActiva();
       }
@@ -1059,6 +1080,9 @@ export const useApp = create<AppState>()((set, get) => {
       for (const rel of archivos) {
         const e = getDoc(rel);
         if (!e) {
+          // Una imagen o un PDF abiertos en un visor se vuelven a leer (subir el `epoch` hace que el visor recargue).
+          const t = get().tabs.find((x) => x.rel === rel && x.visor);
+          if (t) actualizarTab(rel, { epoch: t.epoch + 1 });
           cambiados.push(rel);
           continue;
         }

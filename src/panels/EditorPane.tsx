@@ -4,8 +4,10 @@ import { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { useEffect, useRef } from 'react';
 import { getDoc, registrarVista } from '../editor/docs';
+import { efectosDeSalto } from '../editor/extensions';
 import { useApp } from '../store/app';
 import { abrirPantallaProyecto } from '../store/proyecto';
+import { VisorArchivo } from './VisorArchivo';
 
 const EOL_NOMBRE = { lf: 'LF', crlf: 'CRLF', cr: 'CR' } as const;
 
@@ -75,6 +77,8 @@ function Editor() {
   const anterior = useRef<string | null>(null);
   const activeRel = useApp((s) => s.activeRel);
   const epoch = useApp((s) => s.tabs.find((t) => t.rel === s.activeRel)?.epoch ?? 0);
+  // Una imagen o un PDF se muestran en `VisorArchivo`: el editor se esconde (sigue armado, para no perder la vista).
+  const enVisor = useApp((s) => !!s.tabs.find((t) => t.rel === s.activeRel)?.visor);
   const irA = useApp((s) => s.irA);
   // Cada pedido de `irA` se atiende una sola vez: sin esto, volver más tarde a esa pestaña lo repetía y movía el cursor.
   const irAAplicado = useRef(0);
@@ -119,11 +123,17 @@ function Editor() {
     // Con `inicio` y `fin` (SyncTeX inverso) se selecciona la palabra; sin ellos, el cursor va al principio de la línea.
     const desde = irA.inicio === undefined ? linea.from : Math.min(linea.from + irA.inicio, linea.to);
     const hasta = irA.fin === undefined ? desde : Math.min(linea.from + irA.fin, linea.to);
-    view.dispatch({ selection: { anchor: desde, head: hasta }, effects: EditorView.scrollIntoView(desde, { y: 'center' }) });
+    // Con una palabra seleccionada por el salto no se resaltan sus repeticiones en el archivo (ver `efectosDeSalto`).
+    const salto = hasta > desde ? efectosDeSalto() : null;
+    view.dispatch({
+      selection: { anchor: desde, head: hasta },
+      effects: salto ? [EditorView.scrollIntoView(desde, { y: 'center' }), salto.effects] : EditorView.scrollIntoView(desde, { y: 'center' }),
+      annotations: salto?.annotations,
+    });
     view.focus();
   }, [irA, activeRel, epoch]);
 
-  return <div className={`editor${activeRel ? '' : ' oculto'}`} ref={ref} />;
+  return <div className={`editor${activeRel && !enVisor ? '' : ' oculto'}`} ref={ref} />;
 }
 
 export function EditorPane() {
@@ -133,6 +143,7 @@ export function EditorPane() {
       <Pestanas />
       <AvisoMezclado />
       <Editor />
+      <VisorArchivo />
       {!hayPestanas && <div className="vacio">Abrí un archivo del árbol para editarlo.</div>}
     </div>
   );
